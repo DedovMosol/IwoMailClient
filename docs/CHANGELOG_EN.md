@@ -5,9 +5,9 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 
 ## v1.6.3b
 ### Delete and move: MoveItems first, Sync only on Status=1 (2026-11-14)
-- No folder Sync before every move to trash. MoveItems runs first. If EAS returns `MOVEITEMS_ALL_FAILED` (stale ServerId on 12.1) — one Sync of that folder and retry, as MS-ASCMD
-- The list hides rows immediately (`pendingRemovalIds`). A server rejection shows them again
-- Tests: `MoveItemsPolicyTest`, `EmailListViewModelTest` (hide before the reply, restore on error)
+- No folder Sync before every move to trash. MoveItems runs first. Folder Sync only on Status=1 (stale ServerId on 12.1). Status=2/7 skip that Sync, per-item retry as before
+- The list hides rows immediately (`pendingRemovalIds`). A rejection or 0 moved shows them again, otherwise they stayed gone forever
+- Tests: `MoveItemsPolicyTest` (codes 1/2/7), `EmailListViewModelTest` (hide, restore on error and on count=0)
 ### Privacy policy: RU and EN (2026-11-14)
 - Two files: `PRIVACY_POLICY_RU.md` and `PRIVACY_POLICY_EN.md`. About opens the URL for the UI language (`PrivacyPolicy.url`)
 - Tests: `PrivacyPolicyTest`

@@ -5,9 +5,9 @@
 
 ## v1.6.3b
 ### Удаление и перенос: MoveItems сразу, Sync только при Status=1 (14.11.2026)
-- Больше нет Sync всей папки перед каждым переносом в корзину. Сначала MoveItems. Если EAS вернул `MOVEITEMS_ALL_FAILED` (битый ServerId на 12.1) — один Sync этой папки и повтор, как MS-ASCMD
-- Список сразу прячет строки (`pendingRemovalIds`). Отказ сервера — строки возвращаются
-- Тесты: `MoveItemsPolicyTest`, `EmailListViewModelTest` (скрытие до ответа и возврат при ошибке)
+- Больше нет Sync всей папки перед каждым переносом в корзину. Сначала MoveItems. Sync папки только при Status=1 (битый ServerId на 12.1). Status=2/7 — без лишнего Sync, поштучный повтор как раньше
+- Список сразу прячет строки (`pendingRemovalIds`). Отказ или 0 перемещённых — строки возвращаются, иначе они пропадали навсегда
+- Тесты: `MoveItemsPolicyTest` (коды 1/2/7), `EmailListViewModelTest` (скрытие, возврат при ошибке и при count=0)
 ### Политика конфиденциальности: RU и EN (14.11.2026)
 - Два файла: `PRIVACY_POLICY_RU.md` и `PRIVACY_POLICY_EN.md`. «О приложении» открывает URL языка интерфейса (`PrivacyPolicy.url`)
 - Тесты: `PrivacyPolicyTest`

@@ -176,8 +176,9 @@ class SearchViewModel(
                     is EasResult.Success -> {
                         sendEvent(if (result.data > 0) SearchEvent.MovedToTrash else SearchEvent.DeletedPermanently)
                         _uiState.update { state ->
+                            val gone = result.data > 0
                             state.copy(
-                                allResults = state.allResults.filter { it.id !in ids },
+                                allResults = if (gone) state.allResults.filter { it.id !in ids } else state.allResults,
                                 selectedIds = emptySet(),
                                 pendingRemovalIds = state.pendingRemovalIds - ids.toSet()
                             )

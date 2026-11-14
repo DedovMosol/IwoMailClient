@@ -247,6 +247,18 @@ class EmailListViewModelTest {
     }
 
     @Test
+    fun `deleteSelectedToTrash shows rows if the server moved nothing`() = runTest(dispatcher) {
+        coEvery { mailRepo.moveToTrash(any()) } returns EasResult.Success(0)
+        val vm = createViewModel()
+        advanceUntilIdle()
+        vm.setSelection(setOf("a"))
+        vm.deleteSelectedToTrash()
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.pendingRemovalIds).isEmpty()
+        assertThat(vm.uiState.value.emails.map { it.id }).contains("a")
+    }
+
+    @Test
     fun `deleteSelectedToTrash shows rows again when the server rejects the move`() = runTest(dispatcher) {
         coEvery { mailRepo.moveToTrash(any()) } returns EasResult.Error("MOVEITEMS_ALL_FAILED:status=2")
         val vm = createViewModel()
