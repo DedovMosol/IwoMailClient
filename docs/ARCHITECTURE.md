@@ -28,7 +28,7 @@
 | Безопасность | `security-crypto` `1.1.0-alpha06` (EncryptedSharedPreferences), `biometric` `1.1.0` |
 | Архитектуры APK | `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64` + универсальный APK |
 | Тесты | Unit-тесты в `app/src/test`: 184 файла `.kt`, 1601 аннотация `@Test` (подсчёт по исходникам); каталога `androidTest` нет |
-| Опубликованный релиз | `update.json` → `1.6.2` (`versionCode` 25); `1.6.3b` — beta-сборка |
+| Опубликованный релиз | GitHub Releases → `1.6.1` (`versionCode` 24); `1.6.3b` — beta-сборка |
 | Модель работы | Offline-first: Room + Flow → UI, фоновая синхронизация обновляет БД |
 
 Основной production-сценарий — on-premise Exchange, особенно Exchange 2007 SP1/SP2. IMAP/POP3 реализованы как beta-клиенты для чтения (список папок и последние письма; IMAP дополнительно создаёт, переименовывает и удаляет папки) и не дают паритета с функциями Exchange.
