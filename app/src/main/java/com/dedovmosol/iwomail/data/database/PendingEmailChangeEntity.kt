@@ -51,6 +51,9 @@ abstract class PendingEmailChangeDao {
     @Query("SELECT * FROM pending_email_changes WHERE emailId = :emailId")
     abstract suspend fun get(emailId: String): PendingEmailChangeEntity?
 
+    @Query("SELECT emailId FROM pending_email_changes WHERE move = 1")
+    abstract suspend fun getPendingMoveEmailIds(): List<String>
+
     @Query("""
         INSERT OR REPLACE INTO pending_email_changes (emailId, accountId, flag, read, move, targetFolderId)
         VALUES (:emailId, :accountId, 1,

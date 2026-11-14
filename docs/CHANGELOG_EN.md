@@ -4,6 +4,8 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Full resync does not wipe an offline move (2026-11-15)
+- After SyncKey=0 (EAS 12.1 Status 3/12) trash/Sent/drafts reconcile no longer deletes a `pending.move` row: the server does not have it in that folder yet. Inbox Add is still `INSERT IGNORE`. Test: `EmailReconcileTest`
 ### README docs badges and quiet sync of user folders (2026-11-15)
 - README: coloured documentation badges, separate Privacy Policy and Политика конфиденциальности, Architecture in detail RU/EN, GitHub download count
 - Single `docs/SECURITY.md`: how to report a vulnerability and the threat model. Root `SECURITY.md` removed (GitHub reads the file from `docs/`)

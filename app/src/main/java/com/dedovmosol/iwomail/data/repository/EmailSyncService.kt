@@ -1732,9 +1732,11 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
     ) {
         val now = System.currentTimeMillis()
         val localDrafts = emailDao.getEmailsByFolderList(folderId)
+        val pendingMove = database.pendingEmailChangeDao().getPendingMoveEmailIds().toSet()
         val orphanDrafts = localDrafts.filter { draft ->
             draft.id !in serverDraftIds &&
-            !draft.serverId.startsWith("local_draft_")
+            !draft.serverId.startsWith("local_draft_") &&
+            draft.id !in pendingMove
         }
         if (orphanDrafts.isEmpty()) return
         if (localDrafts.isNotEmpty() && orphanDrafts.size.toFloat() / localDrafts.size >= 0.3f) {
@@ -1793,7 +1795,11 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         folderId: String
     ) {
         val localSentIds = emailDao.getEmailIdsByFolder(folderId)
-        val orphanIds = localSentIds.filter { it !in serverSentIds }
+        val orphanIds = fullResyncOrphanIds(
+            localSentIds,
+            serverSentIds,
+            database.pendingEmailChangeDao().getPendingMoveEmailIds().toSet()
+        )
         if (orphanIds.isEmpty()) return
         // Safety guard: если orphans > 30% от локальных, сервер мог вернуть
         // неполные данные — НЕ удаляем чтобы не потерять письма.
@@ -1819,7 +1825,11 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         folderId: String
     ) {
         val localEmails = emailDao.getEmailIdsByFolder(folderId)
-        val orphanIds = localEmails.filter { it !in serverIds }
+        val orphanIds = fullResyncOrphanIds(
+            localEmails,
+            serverIds,
+            database.pendingEmailChangeDao().getPendingMoveEmailIds().toSet()
+        )
         if (orphanIds.isEmpty()) return
 
         if (localEmails.isNotEmpty() && orphanIds.size.toFloat() / localEmails.size >= 0.3f) {
