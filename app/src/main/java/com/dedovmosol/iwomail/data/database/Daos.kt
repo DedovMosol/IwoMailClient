@@ -300,13 +300,13 @@ interface EmailDao {
 
     /** Ближайшие напоминания по флагам писем (для будильников): только активные флаги. */
     @Query("""
-        SELECT id, subject, `from`, fromName, flagReminder FROM emails
+        SELECT id, accountId, subject, `from`, fromName, flagReminder FROM emails
         WHERE flagged = 1 AND flagReminder > :now
         ORDER BY flagReminder LIMIT :limit
     """)
     suspend fun getFlagReminders(now: Long, limit: Int): List<FlagReminderRow>
 
-    @Query("SELECT id, subject, `from`, fromName, flagReminder FROM emails WHERE id = :id AND flagged = 1")
+    @Query("SELECT id, accountId, subject, `from`, fromName, flagReminder FROM emails WHERE id = :id AND flagged = 1")
     suspend fun getFlagReminder(id: String): FlagReminderRow?
 
     @Query("UPDATE emails SET body = :body WHERE id = :id")
@@ -971,6 +971,7 @@ abstract class SyncDao {
 /** Напоминание по флагу письма — без тела письма (оно для будильника не нужно). */
 data class FlagReminderRow(
     val id: String,
+    val accountId: Long,
     val subject: String,
     val from: String,
     val fromName: String,

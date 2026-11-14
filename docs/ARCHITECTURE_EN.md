@@ -40,7 +40,7 @@ The main production scenario is on-premise Exchange, especially Exchange 2007 SP
 ```text
 MainActivity (FragmentActivity) / MailApplication
   ├─ app start, Conscrypt, app lock (AppLockManager), notification channels, permissions
-  ├─ handling of mailto/share intents and iwomail://email, iwomail://widget deep links
+  ├─ mailto/share, iwomail://email, iwomail://widget, and reminder taps (calendar/task/flag: mailbox extra + id, navigate after account switch)
   └─ Compose content + AppNavigation; LockScreen on top of navigation while the app is locked
 
 UI layer

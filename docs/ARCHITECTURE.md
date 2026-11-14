@@ -40,7 +40,7 @@
 ```text
 MainActivity (FragmentActivity) / MailApplication
   ├─ старт приложения, Conscrypt, блокировка приложения (AppLockManager), каналы уведомлений, разрешения
-  ├─ обработка mailto/share-интентов и deep link'ов iwomail://email, iwomail://widget
+  ├─ обработка mailto/share-интентов, iwomail://email, iwomail://widget и тапов по напоминаниям (календарь/задача/флаг: extra ящика + id, навигация после смены аккаунта)
   └─ Compose-контент + AppNavigation; LockScreen поверх навигации, пока приложение заблокировано
 
 UI-слой
