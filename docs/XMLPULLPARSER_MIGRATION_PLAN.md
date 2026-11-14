@@ -1,14 +1,28 @@
 # План миграции на XmlPullParser (v1.7.0)
 
-> Обновлено: 11.03.2026
+> Обновлено: 15.11.2026 по коду `eas/` (не по старой смете regex)
 
 ## Текущее состояние
-- **~280 XML-Regex** в 8 EAS/EWS сервисах (считая inline `.toRegex()`, `deps.extractValue()`, `XmlValueExtractor.*`, `EasPatterns.*`; без MIME-паттернов)
-- `EasPatterns.kt` — кэш Regex паттернов (ConcurrentHashMap + `getTagPattern`/`getTagPatternWithNs`)
-- `XmlValueExtractor.kt` — обёртка над Regex с namespace support
-- `deps.extractValue()` — per-service Regex extraction
-- Calendar декомпозирован из монолита в 8 файлов (EasCalendarService → facade + 7 файлов)
-- Последние рефакторинги синхронизации/уведомлений (`PushService`, `SyncWorker`, `NotificationHelper`) не меняли XML parsing surface; scope миграции остаётся прежним
+
+`EasXmlParser` (`android.util.Xml.newPullParser`, DOCTYPE выключен, `FEATURE_PROCESS_NAMESPACES = false`) уже стоит на части EAS/EWS разбора. MIME, HTML и MDN по-прежнему regex, это не XML.
+
+### Сделано
+- Утилита `EasXmlParser.kt` + тесты `EasXmlParserTest`
+- Контакты: `EasContactsService` (GAL/Sync), `EasContactsServiceTest`
+- Заметки: `EasNotesService`, `EasNotesParserTest`
+- Почта XML: `EasEmailService` (Sync/MoveItems), `EasEmailMoveItemsParserTest`. MIME-части писем не трогали
+- Календарь: разбор событий в `CalendarXmlParser`, список категорий в `CalendarCategoryService` (тот же hardened parser)
+- Provision: `EasProvisioning` + `EasProvisioningTest`
+- Поток Sync: `EasSyncStream`
+
+### Ещё regex XML (не закрыто)
+- `EasTasksService` (CRUD/синк задач, FindFolder, тела EWS)
+- `EasDraftsService` (черновики EWS MimeContent, GetItem)
+- `EasAttachmentService` (ItemOperations)
+- `EasClient` (FolderSync, Autodiscover, часть EWS fallback тел)
+- Календарь кроме `CalendarXmlParser`: CRUD, sync loop, вложения, exceptions, даты в `CalendarDateUtils`
+
+`EasPatterns.kt` и `XmlValueExtractor.kt` ещё живы, cleanup после полной миграции.
 
 | Сервис | XML Regex | MIME (не мигрируем) | Сложность |
 |--------|-----------|---------------------|-----------|
@@ -44,7 +58,7 @@
 
 ## Порядок миграции (от простого к сложному)
 
-### Этап 1: EasContactsService (~18 regex)
+### Этап 1: EasContactsService — СДЕЛАНО
 - 4 inline pattern + 12 `deps.extractValue` + 2 `XmlValueExtractor`
 - GAL Search response, Sync Add/Change parsing
 - Проверить: GAL поиск, список контактов, синхронизация контактов
@@ -54,7 +68,7 @@
 - FileReference extraction, content download
 - Проверить: скачивание вложений email/calendar/tasks, отправка MDN
 
-### Этап 3: EasNotesService (~47 regex)
+### Этап 3: EasNotesService — СДЕЛАНО
 - ~15 inline patterns + 22 `deps.extractValue` + 8 `XmlValueExtractor` + 2 `EasPatterns`
 - Sync response парсинг (Add/Change/Delete)
 - EWS CreateItem/UpdateItem/GetItem для заметок
@@ -68,7 +82,7 @@
 - `getTaskBodiesEws` — GetItem для тел задач
 - Проверить: CRUD задач, синхронизация, Exchange 2007 SP1, задачи без дат
 
-### Этап 5: EasEmailService (~15 XML regex + ~12 MIME)
+### Этап 5: EasEmailService XML — СДЕЛАНО (MIME regex не трогали)
 - XML: AIRSYNC_DATA_REGEX, responsePattern, itemPattern, bodyPattern + `deps.extractValue`
 - MIME (НЕ ТРОГАТЬ): MDN_*, MIME_MESSAGE_ID, BOUNDARY, Content-ID/Type, htmlPartPattern, textPartPattern
 - Sync Add/Change/Delete, ItemOperations Data extraction
@@ -88,7 +102,7 @@
 | Файл | XML Regex | Описание |
 |------|-----------|----------|
 | EasCalendarService.kt | 0 | Facade (делегирует) |
-| CalendarXmlParser.kt | ~35 | Парсинг событий, attendees, EWS |
+| CalendarXmlParser.kt | СДЕЛАНО (`EasXmlParser`) | Парсинг событий, attendees, EWS |
 | EasCalendarCrudService.kt | ~11 | CRUD + EWS paths |
 | EasCalendarSyncService.kt | ~10 | Sync loop + SyncKey |
 | CalendarAttachmentService.kt | ~10 | EWS attachment CRUD |
@@ -99,9 +113,9 @@
 - Проверить: CRUD событий, повторяющиеся события, вложения, приглашения, Exchange 2007 SP1
 
 ### Этап 8: EasClient (~20 regex)
-- КРИТИЧЕСКИЙ — FolderSync, Provision, Autodiscover, EWS fallback
-- 14 `EasPatterns` aliases + 2 inline + ~8 `deps.extractValue`
-- `fetchEmailBodyViaEws` (FindItem + GetItem)
+- СДЕЛАНО отдельно: `EasProvisioning` (Provision HTTP 449), `EasSyncStream` (поток Sync)
+- Осталось: FolderSync, Autodiscover, EWS fallback тел (`fetchEmailBodyViaEws`)
+- `EasPatterns` aliases + `deps.extractValue` в фасаде
 - FolderHierarchy парсинг
 - Проверить: авторизация, синхронизация папок, тело письма fallback
 

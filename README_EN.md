@@ -101,7 +101,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 
 | Parameter | Minimum | Recommended |
 |-----------|---------|-------------|
-| Android | 8.0+ (API 26) | — |
+| Android | 8.0+ (API 26) | 13+ (API 33) |
 | RAM | 2 GB | 4+ GB |
 | Storage | 50 MB | 100+ MB |
 | CPU/ABI | armeabi-v7a / x86 | arm64-v8a / x86_64 |

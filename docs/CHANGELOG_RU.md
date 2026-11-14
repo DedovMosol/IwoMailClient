@@ -4,6 +4,9 @@
 Версия: MAJOR.MINOR.PATCH + буква пререлиза (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### README и план XmlPullParser (15.11.2026)
+- Рекомендуемая ОС: Android 13+ (API 33), минимум по-прежнему 8.0 (API 26). В README точки с запятой в прозе заменены на запятые
+- `docs/XMLPULLPARSER_MIGRATION_PLAN.md`: отмечено, что уже на `EasXmlParser` (контакты, заметки, почта XML, CalendarXmlParser, Provision, SyncStream), что ещё regex
 ### Fail-closed и документация безопасности RU/EN (15.11.2026)
 - При деградации Keystore в «Безопасности» переключатель fail-closed (по умолчанию выкл.): не писать пароли ящиков и пароль блокировки в обфускацию. Новый ящик без секрета откатывается (`FAIL_CLOSED`). Toast на языке `AppLanguageCode` (кэш до `AppLockManager.init`). Тесты: `AccountRepositoryFailClosedTest`, `PasswordStorageTest`, `AppLockManagerTest`, `AppLanguageCodeTest`
 - Политика безопасности: `docs/SECURITY_RU.md` и `docs/SECURITY_EN.md`, `docs/SECURITY.md` — указатель для GitHub

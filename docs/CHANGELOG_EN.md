@@ -4,6 +4,9 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### README and XmlPullParser plan (2026-11-15)
+- Recommended OS: Android 13+ (API 33), minimum still 8.0 (API 26)
+- `docs/XMLPULLPARSER_MIGRATION_PLAN.md`: what already uses `EasXmlParser` (contacts, notes, mail XML, CalendarXmlParser, Provision, SyncStream) and what is still regex
 ### Fail-closed and security docs RU/EN (2026-11-15)
 - When Keystore is down, Security shows a fail-closed switch (off by default): do not write mailbox passwords or the app-lock password to obfuscation. A new mailbox without a secret is rolled back (`FAIL_CLOSED`). Toast uses `AppLanguageCode` (cached before `AppLockManager.init`). Tests: `AccountRepositoryFailClosedTest`, `PasswordStorageTest`, `AppLockManagerTest`, `AppLanguageCodeTest`
 - Security policy: `docs/SECURITY_EN.md` and `docs/SECURITY_RU.md`, `docs/SECURITY.md` is the GitHub index
