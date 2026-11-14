@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -48,6 +49,8 @@ data class EmailListUiState(
     val folder: FolderEntity? = null,
     val folders: List<FolderEntity> = emptyList(),
     val emails: List<EmailEntity> = emptyList(),
+    /** Входящие/отправленные для цепочки: письма парной папки (Inbox↔Sent), не текущий список. */
+    val peerEmails: List<EmailEntity> = emptyList(),
     val mailFilter: MailFilter = MailFilter.ALL,
     val dateFilter: EmailDateFilter = EmailDateFilter.ALL,
     val showFilters: Boolean = false,
@@ -90,6 +93,7 @@ sealed interface EmailListEvent {
  *
  * Протокол EAS/EWS и совместимость с Exchange 2007 SP1/SP2 не затрагиваются — это слой представления.
  */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class EmailListViewModel(
     private val folderId: String,
     private val mailRepo: MailRepository,
@@ -147,16 +151,22 @@ class EmailListViewModel(
                     val foldersFlow = if (id > 0L) mailRepo.getFolders(id) else flowOf(emptyList())
 
                     combine(emailsFlow, foldersFlow) { emails, folders -> emails to folders }
-                        .collect { (emails, folders) ->
+                        .flatMapLatest { (emails, folders) ->
+                            val folder = if (isFavorites || isTodayAll) null else folders.find { it.id == folderId }
+                            val peerId = peerMailboxId(folder, folders)
+                            if (peerId == null) flowOf(Triple(emails, folders, emptyList()))
+                            else mailRepo.getEmails(peerId).map { peer -> Triple(emails, folders, peer) }
+                        }
+                        .collect { (emails, folders, peer) ->
                             val folder = if (isFavorites || isTodayAll) null else folders.find { it.id == folderId }
                             _uiState.update { s ->
                                 val existingIds = emails.mapTo(HashSet(emails.size)) { it.id }
-                                // Сбрасываем из выделения письма, исчезнувшие из списка (после sync/move).
                                 val cleanedSelection =
                                     if (s.selectedIds.isEmpty() || s.selectedIds.all { it in existingIds }) s.selectedIds
                                     else s.selectedIds.intersect(existingIds)
                                 s.copy(
                                     emails = emails,
+                                    peerEmails = peer,
                                     folders = folders,
                                     folder = folder,
                                     selectedIds = cleanedSelection
@@ -481,6 +491,16 @@ class EmailListViewModel(
         onProgress: (deleted: Int, total: Int) -> Unit
     ): EasResult<Int> =
         withContext(ioDispatcher) { mailRepo.deleteEmailsPermanentlyWithProgress(emailIds, onProgress) }
+
+    private fun peerMailboxId(folder: FolderEntity?, folders: List<FolderEntity>): String? {
+        val type = folder?.type ?: return null
+        val peerType = when (type) {
+            FolderType.INBOX -> FolderType.SENT_ITEMS
+            FolderType.SENT_ITEMS -> FolderType.INBOX
+            else -> return null
+        }
+        return folders.find { it.type == peerType }?.id
+    }
 
     private fun sendEvent(event: EmailListEvent) {
         viewModelScope.launch { _events.send(event) }

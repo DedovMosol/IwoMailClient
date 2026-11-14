@@ -858,6 +858,7 @@ class EasClient(
                 <t:BodyType>HTML</t:BodyType>
                 <t:AdditionalProperties>
                     <t:FieldURI FieldURI="message:InternetMessageId"/>
+                    <t:FieldURI FieldURI="message:InReplyTo"/>
                 </t:AdditionalProperties>
             </m:ItemShape>
             <m:ItemIds>
@@ -891,10 +892,15 @@ class EasClient(
                         ?.trim()
                         ?.takeIf { it.isNotBlank() }
                         ?.let(::unescapeXml)
+                    val ewsInReplyTo = XmlUtils.extractTagValue(getItemResponse, "t:InReplyTo")
+                        ?.trim()
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let(::unescapeXml)
                     return@withContext EasResult.Success(
                         EmailBodyResult(
                             body = body,
-                            originalMessageId = ewsMessageId
+                            originalMessageId = ewsMessageId,
+                            inReplyTo = ewsInReplyTo
                         )
                     )
                 }
@@ -2870,6 +2876,7 @@ data class EmailBodyResult(
     // Отписка от рассылки: значение List-Unsubscribe и поддержка one-click ([ListUnsubscribe]). "" — заголовки
     // получены, отписки нет; null — заголовки не запрашивались или не пришли (спросить позже)
     val listUnsubscribe: String? = null,
-    val listUnsubscribeOneClick: Boolean = false
+    val listUnsubscribeOneClick: Boolean = false,
+    val inReplyTo: String? = null
 )
 

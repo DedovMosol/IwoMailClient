@@ -305,6 +305,9 @@ class EmailOperationsService(
                     resolvedMessageId
                         ?.takeIf { it.isNotBlank() && email.internetMessageId != it }
                         ?.let { emailDao.updateInternetMessageId(emailId, it) }
+                    result.data.inReplyTo
+                        ?.takeIf { it.isNotBlank() && email.inReplyTo != it }
+                        ?.let { emailDao.updateInReplyTo(emailId, it) }
 
                     android.util.Log.d("BDY", "loadEmailBody: SUCCESS, bodyLength=${bodyContent.length}")
                     EasResult.Success(bodyContent)
@@ -338,6 +341,9 @@ class EmailOperationsService(
                                     ewsResult.data.originalMessageId
                                         ?.takeIf { it.isNotBlank() && email.internetMessageId != it }
                                         ?.let { emailDao.updateInternetMessageId(emailId, it) }
+                                    ewsResult.data.inReplyTo
+                                        ?.takeIf { it.isNotBlank() && email.inReplyTo != it }
+                                        ?.let { emailDao.updateInReplyTo(emailId, it) }
                                     return EasResult.Success(bodyContent)
                                 }
                             }

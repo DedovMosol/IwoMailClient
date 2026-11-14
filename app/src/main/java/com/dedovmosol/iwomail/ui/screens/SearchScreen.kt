@@ -45,6 +45,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
+import com.dedovmosol.iwomail.ui.screens.emaillist.MailRow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.NotificationStrings
@@ -103,6 +106,21 @@ fun SearchScreen(
                 email.dateReceived >= cutoff
             } ?: true
         }
+    }
+    val listSettings = remember { RepositoryProvider.getSettingsRepository(context) }
+    val conversationView by remember { listSettings.conversationView }
+        .collectAsStateWithLifecycle(initialValue = listSettings.getConversationViewSync())
+    val searchThreads by androidx.compose.runtime.produceState<List<com.dedovmosol.iwomail.domain.EmailThread>?>(
+        null, filteredResults, conversationView
+    ) {
+        value = if (!conversationView) null else withContext(Dispatchers.Default) {
+            com.dedovmosol.iwomail.domain.EmailThreads.group(filteredResults)
+        }
+    }
+    var expandedSearchThreads by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    val searchRows = remember(filteredResults, conversationView, searchThreads, expandedSearchThreads) {
+        if (!conversationView) MailRow.flat(filteredResults)
+        else searchThreads?.let { MailRow.threaded(it, expandedSearchThreads.toSet()) }
     }
 
     // Дебаунс поиска: состояние и корутина живут в ViewModel, здесь — только UI-триггер
@@ -338,20 +356,32 @@ fun SearchScreen(
                                     )
                                 }
 
-                                items(filteredResults, key = { it.id }) { email ->
+                                items(searchRows ?: MailRow.flat(filteredResults), key = { it.key }) { row ->
+                                    val email = row.email
                                     SearchResultItem(
                                         email = email,
                                         query = query,
-                                        isSelected = email.id in selectedIds,
+                                        isSelected = if (row is MailRow.Header) selectedIds.containsAll(row.thread.ids) else email.id in selectedIds,
                                         onClick = {
                                             if (isSelectionMode) {
-                                                viewModel.toggleSelection(email.id)
+                                                if (row is MailRow.Header) {
+                                                    viewModel.setSelection(MailRow.toggleThread(selectedIds, row.thread.ids))
+                                                } else {
+                                                    viewModel.toggleSelection(email.id)
+                                                }
+                                            } else if (row is MailRow.Header) {
+                                                expandedSearchThreads =
+                                                    if (row.thread.key in expandedSearchThreads) expandedSearchThreads - row.thread.key
+                                                    else expandedSearchThreads + row.thread.key
                                             } else {
                                                 onEmailClick(email.id)
                                             }
                                         },
-                                        onLongClick = { viewModel.addToSelection(email.id) },
-                                        modifier = Modifier
+                                        onLongClick = {
+                                            if (row is MailRow.Header) viewModel.setSelection(selectedIds + row.thread.ids)
+                                            else viewModel.addToSelection(email.id)
+                                        },
+                                        modifier = if (row is MailRow.Child) Modifier.padding(start = 24.dp) else Modifier
                                     )
                                 }
                             }

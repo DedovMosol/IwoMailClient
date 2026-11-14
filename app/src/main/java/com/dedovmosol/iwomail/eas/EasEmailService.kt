@@ -283,6 +283,7 @@ class EasEmailService internal constructor(
         return withTimeoutOrNull(45_000L) {
             var mdnRequestedBy: String? = null
             var originalMessageId: String? = null
+            var inReplyTo: String? = null
             var listUnsubscribe: Pair<String, Boolean>? = null
             var bodyContent = ""
             // HTML целиком: не обрезано сервером (TruncationSize запроса или политика) и не текстовая замена
@@ -333,6 +334,7 @@ class EasEmailService internal constructor(
                     if (mimeHeaders.isNotEmpty()) {
                         mdnRequestedBy = parseMdnHeader(mimeHeaders)
                         originalMessageId = parseOriginalMessageIdHeader(mimeHeaders)
+                        inReplyTo = parseInReplyToHeader(mimeHeaders)
                     }
                     // Заголовки получены: без List-Unsubscribe — "" (проверено, повторно не спрашивать)
                     listUnsubscribe = ListUnsubscribe.fromHeaders(mimeHeaders) ?: ("" to false)
@@ -346,7 +348,8 @@ class EasEmailService internal constructor(
                     originalMessageId = originalMessageId,
                     complete = complete,
                     listUnsubscribe = listUnsubscribe?.first,
-                    listUnsubscribeOneClick = listUnsubscribe?.second == true
+                    listUnsubscribeOneClick = listUnsubscribe?.second == true,
+                    inReplyTo = inReplyTo
                 )
             )
         } ?: EasResult.Error("Timeout loading email body")
@@ -552,6 +555,16 @@ class EasEmailService internal constructor(
         } else {
             "<$rawMessageId>"
         }
+    }
+
+    /** RFC 5322 In-Reply-To; если пусто — первый id из References. */
+    private fun parseInReplyToHeader(mimeHeaders: String): String? {
+        val raw = mimeHeaderValue(mimeHeaders, "In-Reply-To")
+            ?: mimeHeaderValue(mimeHeaders, "References")?.let { refs ->
+                Regex("<[^>]+>").find(refs)?.value
+            }
+        val id = raw?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        return if (id.startsWith("<") && id.endsWith(">")) id else "<$id>"
     }
 
     private fun extractTopLevelMimeHeaders(mimeData: String): String {
