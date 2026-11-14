@@ -4,11 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -47,7 +45,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
-import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
@@ -103,8 +100,9 @@ internal fun SettingsPageScaffold(
 }
 
 /**
- * Тот же app bar, но Column+скролл: нужен экрану «О приложении»,
- * где подвал (пасхалка) прижат вниз через [Modifier.weight].
+ * Тот же app bar, колонка на весь экран со скроллом.
+ * [Modifier.weight] в контенте работает: подвал «О приложении» (пасхалка)
+ * прижат вниз, пока карточек мало, и уезжает в скролл, когда их больше.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -116,19 +114,16 @@ internal fun SettingsScrollScaffold(
     Scaffold(
         topBar = { SettingsTopBar(title, onBackClick) }
     ) { padding ->
-        BoxWithConstraints(
+        val scrollState = rememberScrollState()
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            val minH = maxHeight
-            val scrollState = rememberScrollState()
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .defaultMinSize(minHeight = minH)
-                    .verticalScroll(scrollState)
-                    .padding(vertical = 12.dp),
+                    .fillMaxSize()
+                    .verticalScroll(scrollState),
                 content = content
             )
             ScrollColumnScrollbar(scrollState)
@@ -276,7 +271,7 @@ internal fun SettingsNavRow(
         },
         trailingContent = when {
             trailing != null -> trailing
-            trailingIcon != null -> {
+            trailingIcon != null && enabled -> {
                 { Icon(trailingIcon, contentDescription = null, tint = textColor) }
             }
             else -> null

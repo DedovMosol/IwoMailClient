@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.ui.screens
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -68,5 +69,43 @@ class SettingsHubUiTest {
         composeTestRule.onNodeWithText("Delete").assertIsDisplayed()
         composeTestRule.onNodeWithText("Swipe right").performClick()
         assertThat(clicks).isEqualTo(1)
+    }
+
+    @Test
+    fun `disabled nav row does not fire click`() {
+        var clicks = 0
+        composeTestRule.setContent {
+            CompositionLocalProvider(LocalLanguage provides AppLanguage.ENGLISH) {
+                ExchangeMailTheme(darkTheme = false, dynamicColor = false) {
+                    SettingsNavRow(
+                        title = "Color theme",
+                        subtitle = "Daily themes active",
+                        enabled = false,
+                        onClick = { clicks++ }
+                    )
+                }
+            }
+        }
+        composeTestRule.onNodeWithText("Color theme").performClick()
+        assertThat(clicks).isEqualTo(0)
+    }
+
+    @Test
+    fun `scroll scaffold keeps a weighted footer on screen`() {
+        composeTestRule.setContent {
+            CompositionLocalProvider(LocalLanguage provides AppLanguage.ENGLISH) {
+                ExchangeMailTheme(darkTheme = false, dynamicColor = false) {
+                    SettingsScrollScaffold(title = "About", onBackClick = {}) {
+                        androidx.compose.material3.Text("top")
+                        androidx.compose.foundation.layout.Spacer(
+                            Modifier.weight(1f)
+                        )
+                        androidx.compose.material3.Text("footer")
+                    }
+                }
+            }
+        }
+        composeTestRule.onNodeWithText("top").assertIsDisplayed()
+        composeTestRule.onNodeWithText("footer").assertIsDisplayed()
     }
 }
