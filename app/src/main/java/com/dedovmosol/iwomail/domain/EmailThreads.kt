@@ -108,21 +108,50 @@ object EmailThreads {
                 conversationBySubject.merge(subject, conversation) { old, new -> if (old == new) old else AMBIGUOUS }
             }
         }
-        val uniqueRoot = HashMap<String, Int>()
-        emails.forEachIndexed { index, email ->
-            if (conversationKey(email) != null || graph[index] != null) return@forEachIndexed
-            if (isReply(email.subject)) return@forEachIndexed
-            val subject = subjects[index] ?: return@forEachIndexed
-            uniqueRoot.merge(subject, index) { _, _ -> -1 }
-        }
+        // Корни без ConversationId: по всем папкам и по каждой папке отдельно.
+        // Один корень в Inbox+Sent — ответ из другой папки к нему. Два корня (Входящие и Отправленные
+        // с одной темой) — не склеивать всё; ответ только к корню своей папки.
+        val taken = { i: Int -> conversationKey(emails[i]) != null || graph[i] != null }
+        val byAccount = uniqueOriginal(emails, taken) { "${it.accountId}\t${normalizeSubject(it.subject)}" }
+        val byFolder = uniqueOriginal(emails, taken) { "${it.accountId}\t${it.folderId}\t${normalizeSubject(it.subject)}" }
         return emails.mapIndexed { index, email ->
             conversationKey(email) ?: graph[index] ?: subjects[index]?.let { subject ->
                 conversationBySubject[subject]
                     ?.takeIf { it != AMBIGUOUS && (isReply(email.subject) || it in conversationsWithReply) }
-                    ?: uniqueRoot[subject]?.takeIf { it >= 0 }?.let { root ->
-                        if (index == root || isReply(email.subject)) subjects[root] else null
-                    }
+                    ?: subjectFallbackKey(email, index, byAccount, byFolder)
             }
+        }
+    }
+
+    /** Индекс единственного письма без Re: с этим ключом; несколько — −1. */
+    private fun uniqueOriginal(
+        emails: List<EmailEntity>,
+        taken: (Int) -> Boolean,
+        key: (EmailEntity) -> String
+    ): Map<String, Int> {
+        val map = HashMap<String, Int>()
+        emails.forEachIndexed { index, email ->
+            if (taken(index) || isReply(email.subject) || normalizeSubject(email.subject).isEmpty()) return@forEachIndexed
+            map.merge(key(email), index) { _, _ -> -1 }
+        }
+        return map
+    }
+
+    private fun subjectFallbackKey(
+        email: EmailEntity,
+        index: Int,
+        byAccount: Map<String, Int>,
+        byFolder: Map<String, Int>
+    ): String? {
+        val norm = normalizeSubject(email.subject).takeIf { it.isNotEmpty() } ?: return null
+        val global = byAccount["${email.accountId}\t$norm"] ?: -1
+        val local = byFolder["${email.accountId}\t${email.folderId}\t$norm"] ?: -1
+        val root = if (global >= 0) global else local
+        if (root < 0 || (index != root && !isReply(email.subject))) return null
+        return if (global >= 0) {
+            "$BY_SUBJECT${email.accountId}:$norm"
+        } else {
+            "$BY_SUBJECT${email.accountId}:${email.folderId}:$norm"
         }
     }
 
