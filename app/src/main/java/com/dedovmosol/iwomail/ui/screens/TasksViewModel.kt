@@ -126,6 +126,7 @@ class TasksViewModel(
                             selectedActiveIds = emptySet(),
                             selectedDeletedIds = emptySet(),
                             isInitialLoadDone = false,
+                            isSyncing = false,
                             tasks = emptyList(),
                             deletedTasks = emptyList()
                         )
@@ -158,7 +159,8 @@ class TasksViewModel(
         delay(500)
         val s = _uiState.value
         if (s.accountId == id && !s.isInitialLoadDone && s.tasks.isEmpty() && !s.isSyncing) {
-            _uiState.update { it.copy(isInitialLoadDone = true) }
+            // isSyncing в том же update, иначе кадр «load done + пустой список» съест id из уведомления.
+            _uiState.update { it.copy(isInitialLoadDone = true, isSyncing = true) }
             runSync(id, announce = false)
         } else {
             _uiState.update { if (it.accountId == id) it.copy(isInitialLoadDone = true) else it }

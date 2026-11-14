@@ -249,14 +249,19 @@ fun CalendarScreen(
         }
     }
     var selectedEventId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
-    LaunchedEffect(initialEventId, accountId, events) {
-        val id = initialEventId ?: return@LaunchedEffect
-        if (accountId <= 0) return@LaunchedEffect
-        if (events.any { it.id == id }) {
-            selectedEventId = id
-            onInitialEventConsumed()
-        } else if (events.isNotEmpty()) {
-            onInitialEventConsumed()
+    LaunchedEffect(initialEventId, accountId, events, isSyncing, syncedForAccountId) {
+        when (com.dedovmosol.iwomail.ui.navigation.notificationItemAction(
+            itemId = initialEventId,
+            accountReady = accountId > 0,
+            found = initialEventId != null && events.any { it.id == initialEventId },
+            loadSettled = syncedForAccountId == accountId && !isSyncing
+        )) {
+            com.dedovmosol.iwomail.ui.navigation.NotificationItemAction.OPEN_AND_CONSUME -> {
+                selectedEventId = initialEventId
+                onInitialEventConsumed()
+            }
+            com.dedovmosol.iwomail.ui.navigation.NotificationItemAction.CONSUME -> onInitialEventConsumed()
+            com.dedovmosol.iwomail.ui.navigation.NotificationItemAction.WAIT -> Unit
         }
     }
     var viewMode by rememberSaveable { mutableStateOf(CalendarViewMode.AGENDA) }

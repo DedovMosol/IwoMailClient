@@ -52,6 +52,8 @@ class MainActivity : FragmentActivity() {
         const val EXTRA_OPEN_UPDATES = "open_updates"
         const val EXTRA_OPEN_CALENDAR = "open_calendar"
         const val EXTRA_CALENDAR_EVENT_ID = "calendar_event_id"
+        const val EXTRA_OPEN_TASKS = "open_tasks"
+        const val EXTRA_TASK_ID = "open_task_id"
         
         // App Shortcuts actions
         const val ACTION_SHORTCUT_COMPOSE = "com.dedovmosol.iwomail.SHORTCUT_COMPOSE"
@@ -96,6 +98,7 @@ class MainActivity : FragmentActivity() {
     private var shortcutCalendar = mutableStateOf(false)
     private var openCalendarEventId = mutableStateOf<String?>(null)
     private var shortcutTasks = mutableStateOf(false)
+    private var openTaskId = mutableStateOf<String?>(null)
     private var shortcutNotes = mutableStateOf(false)
     
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -301,6 +304,8 @@ class MainActivity : FragmentActivity() {
                                 openCalendarEventId = openCalendarEventId.value,
                                 onCalendarEventHandled = { openCalendarEventId.value = null },
                                 shortcutTasks = shortcutTasks.value,
+                                openTaskId = openTaskId.value,
+                                onTaskHandled = { openTaskId.value = null },
                                 shortcutNotes = shortcutNotes.value,
                                 onShortcutHandled = {
                                     shortcutCompose.value = false
@@ -432,6 +437,14 @@ class MainActivity : FragmentActivity() {
             intent.getStringExtra(EXTRA_CALENDAR_EVENT_ID)?.let { openCalendarEventId.value = it }
             intent.removeExtra(EXTRA_OPEN_CALENDAR)
             intent.removeExtra(EXTRA_CALENDAR_EVENT_ID)
+            return
+        }
+
+        if (intent.getBooleanExtra(EXTRA_OPEN_TASKS, false)) {
+            shortcutTasks.value = true
+            intent.getStringExtra(EXTRA_TASK_ID)?.let { openTaskId.value = it }
+            intent.removeExtra(EXTRA_OPEN_TASKS)
+            intent.removeExtra(EXTRA_TASK_ID)
             return
         }
         

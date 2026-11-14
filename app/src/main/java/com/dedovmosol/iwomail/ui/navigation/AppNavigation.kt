@@ -370,6 +370,8 @@ fun AppNavigation(
     openCalendarEventId: String? = null,
     onCalendarEventHandled: () -> Unit = {},
     shortcutTasks: Boolean = false,
+    openTaskId: String? = null,
+    onTaskHandled: () -> Unit = {},
     shortcutNotes: Boolean = false,
     onShortcutHandled: () -> Unit = {},
     openUpdates: Boolean = false,
@@ -1253,7 +1255,9 @@ fun AppNavigation(
                     navController.navigate(Screen.Compose.createRoute(toEmail = email))
                 },
                 initialDateFilter = initialDateFilter,
-                initialEventId = openCalendarEventId,
+                initialEventId = visibleNotificationItemId(
+                    openCalendarEventId, accountSwitchCompleted, switchToAccountId, lastSwitchedAccountId
+                ),
                 onInitialEventConsumed = onCalendarEventHandled
             )
         }
@@ -1280,7 +1284,11 @@ fun AppNavigation(
             }
             TasksScreen(
                 onBackClick = { navController.popBackStack() },
-                initialFilter = initialFilter
+                initialFilter = initialFilter,
+                initialTaskId = visibleNotificationItemId(
+                    openTaskId, accountSwitchCompleted, switchToAccountId, lastSwitchedAccountId
+                ),
+                onInitialTaskConsumed = onTaskHandled
             )
         }
         
