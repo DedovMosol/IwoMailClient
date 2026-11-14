@@ -124,8 +124,8 @@ class EmailListViewModel(
 
     /** Авто-синхронизация черновиков выполняется один раз на открытие папки (на каждый аккаунт). */
     private var draftsSynced = false
-    /** Тихий инкремент Inbox/Sent при входе, не чаще чем раз в 30 с на экземпляр VM. */
-    private var lastOpenedFolderSyncElapsed = 0L
+    /** Тихий инкремент при входе: время последнего синка по folderId (Inbox, Sent, пользовательские). */
+    private val lastQuietSyncMs = HashMap<String, Long>()
 
     init {
         observeAccountAndEmails()
@@ -144,7 +144,7 @@ class EmailListViewModel(
                 .distinctUntilChanged()
                 .collectLatest { id ->
                     draftsSynced = false
-                    lastOpenedFolderSyncElapsed = 0L
+                    lastQuietSyncMs.clear()
                     _uiState.update {
                         it.copy(
                             accountId = id,
@@ -196,20 +196,23 @@ class EmailListViewModel(
     }
 
     /**
-     * Тихий инкрементальный Sync при входе: черновики — один раз (как раньше), Inbox и Sent — не чаще 30 с.
-     * Не полный resync. Шлюз папки сериализует с Push. Избранное/«Сегодня» не синкаем.
+     * Тихий инкрементальный Sync при входе в папку: черновики — один раз, Inbox/Sent и пользовательские
+     * (EAS type 1 и 12) — не чаще 30 с **на эту папку**. Не полный resync. Шлюз сериализует с Push.
      */
     private fun maybeAutoSyncOpenedFolder(folder: FolderEntity?) {
         if (folder == null || folder.accountId <= 0L) return
-        when (folder.type) {
-            FolderType.DRAFTS -> {
+        when {
+            folder.type == FolderType.DRAFTS -> {
                 if (draftsSynced) return
                 draftsSynced = true
             }
-            FolderType.INBOX, FolderType.SENT_ITEMS -> {
+            folder.type == FolderType.INBOX ||
+                folder.type == FolderType.SENT_ITEMS ||
+                folder.type in FolderType.SYNC_USER_TYPES -> {
                 val now = System.currentTimeMillis()
-                if (now - lastOpenedFolderSyncElapsed < 30_000L) return
-                lastOpenedFolderSyncElapsed = now
+                val last = lastQuietSyncMs[folder.id] ?: 0L
+                if (now - last < 30_000L) return
+                lastQuietSyncMs[folder.id] = now
             }
             else -> return
         }

@@ -90,6 +90,23 @@ class EmailListViewModelTest {
     }
 
     @Test
+    fun `user folder auto-syncs incrementally without the pull spinner`() = runTest(dispatcher) {
+        every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(listOf(folderMock("proj", FolderType.USER_CREATED)))
+        val vm = createViewModel(folderId = "proj")
+        advanceUntilIdle()
+        coVerify { mailRepo.syncEmails(ACCOUNT_ID, "proj", false) }
+        assertThat(vm.uiState.value.isRefreshing).isFalse()
+    }
+
+    @Test
+    fun `deleted items folder does not auto-sync`() = runTest(dispatcher) {
+        every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(listOf(folderMock("del", FolderType.DELETED_ITEMS)))
+        createViewModel(folderId = "del")
+        advanceUntilIdle()
+        coVerify(exactly = 0) { mailRepo.syncEmails(any(), any(), any()) }
+    }
+
+    @Test
     fun `favorites does not auto-sync a folder`() = runTest(dispatcher) {
         createViewModel(folderId = "favorites")
         advanceUntilIdle()
