@@ -4,9 +4,23 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -73,7 +87,7 @@ internal fun SettingsPageScaffold(
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(vertical = 8.dp),
+                contentPadding = PaddingValues(vertical = 12.dp),
                 content = content
             )
             LazyColumnScrollbar(
@@ -84,21 +98,68 @@ internal fun SettingsPageScaffold(
     }
 }
 
-/** Строка корня настроек: только переход, без свитчей (Material Settings). */
+/** Группа строк на корне настроек: карточка, не одна простыня. */
+@Composable
+internal fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(content = content)
+    }
+}
+
+@Composable
+private fun SettingsLeadingIcon(icon: ImageVector, title: String) {
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            icon,
+            contentDescription = title,
+            modifier = Modifier.size(24.dp),
+            tint = MaterialTheme.colorScheme.onPrimaryContainer
+        )
+    }
+}
+
+/** Строка корня настроек: крупнее заголовок, иконка в круге, высота под палец. */
 @Composable
 internal fun SettingsHubRow(
     title: String,
     subtitle: String?,
     icon: ImageVector,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    showDivider: Boolean = false
 ) {
-    ListItem(
-        headlineContent = { Text(title) },
-        supportingContent = if (subtitle.isNullOrBlank()) null else ({ Text(subtitle) }),
-        leadingContent = { Icon(icon, contentDescription = null) },
-        trailingContent = { Icon(AppIcons.ChevronRight, contentDescription = null) },
-        modifier = Modifier.clickable(onClickLabel = title, onClick = onClick)
-    )
+    Column {
+        ListItem(
+            headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium) },
+            supportingContent = if (subtitle.isNullOrBlank()) null else ({
+                Text(subtitle, style = MaterialTheme.typography.bodyMedium)
+            }),
+            leadingContent = { SettingsLeadingIcon(icon, title) },
+            trailingContent = { Icon(AppIcons.ChevronRight, contentDescription = null) },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            modifier = Modifier
+                .heightIn(min = 72.dp)
+                .clickable(onClickLabel = title, onClick = onClick)
+        )
+        if (showDivider) {
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 80.dp, end = 16.dp),
+                color = MaterialTheme.colorScheme.outlineVariant
+            )
+        }
+    }
 }
 
 /** Переключатель на всю строку (M3 Settings); свитч справа без своего onClick — иначе двойное срабатывание. */
@@ -112,17 +173,31 @@ internal fun SettingsSwitchRow(
     onChange: (Boolean) -> Unit
 ) {
     ListItem(
-        headlineContent = { Text(title) },
-        supportingContent = if (description.isNullOrBlank()) null else ({ Text(description) }),
-        leadingContent = icon,
+        headlineContent = { Text(title, style = MaterialTheme.typography.titleSmall) },
+        supportingContent = if (description.isNullOrBlank()) null else ({
+            Text(description, style = MaterialTheme.typography.bodyMedium)
+        }),
+        leadingContent = icon?.let {
+            {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.secondaryContainer),
+                    contentAlignment = Alignment.Center
+                ) { it() }
+            }
+        },
         trailingContent = {
             Switch(checked = checked, enabled = enabled, onCheckedChange = null)
         },
-        modifier = Modifier.toggleable(
-            value = checked,
-            enabled = enabled,
-            role = Role.Switch,
-            onValueChange = onChange
-        )
+        modifier = Modifier
+            .heightIn(min = 64.dp)
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Switch,
+                onValueChange = onChange
+            )
     )
 }

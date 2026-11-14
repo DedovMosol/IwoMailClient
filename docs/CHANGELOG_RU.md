@@ -4,6 +4,8 @@
 Версия: MAJOR.MINOR.PATCH + буква пререлиза (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Корень настроек: карточки, крупные строки, иконки в круге (15.11.2026)
+- Хаб настроек: группы в `surfaceContainerLow`, строки от 72 dp, `titleMedium`, иконка 24 dp в круге 48 dp. У каждого пункта подпись. Свитчи в разделах — круг 40 dp. Тот же `SettingsHubRow` / `SettingsSwitchRow`
 ### Full resync не стирает офлайн-перенос (15.11.2026)
 - После SyncKey=0 (EAS 12.1 Status 3/12) reconcile корзины/Sent/черновиков больше не удаляет письмо с `pending.move`. Inbox Add с новым ServerId не создаёт дубль во Входящих: строка в корзине получает новый id, уже существующий inbox-дубль с этим id снимается (иначе MoveItems Status=1 и ghost-delete). Тесты: `EmailReconcileTest`
 ### Документация README и тихий синк пользовательских папок (15.11.2026)
