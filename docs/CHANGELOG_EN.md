@@ -4,6 +4,9 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### README docs badges and quiet sync of user folders (2026-11-15)
+- README: documentation as badge buttons, two separate Privacy Policy and Политика конфиденциальности links
+- Quiet incremental Sync on open also for user folders (EAS type 1 and 12), 30 s throttle per folderId, not one timer for Inbox+Sent. Deleted Items is not auto-synced. Tests: `EmailListViewModelTest`
 ### Inbox open and offline moves (2026-11-14)
 - Opening Inbox or Sent runs a quiet incremental Sync of that folder, at most every 30 s, not `SyncKey=0`, with no pull-to-refresh spinner (or pull-to-refresh would be blocked). Drafts still once. If the message is already in the target folder locally, the move queue is cleared instead of looping on ALREADY_IN_FOLDER
 - Offline: the message is already in the target folder locally, queued as `pending_email_changes.move` (DB v54), sent with the same MoveItems. SrcFldId is the original folder, not trash (or 14.x would send trash→trash)

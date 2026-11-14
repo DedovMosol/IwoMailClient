@@ -203,12 +203,21 @@ On Windows:
 
 ## 📚 Documentation
 
-- [Changelog RU](docs/CHANGELOG_RU.md)
-- [Changelog EN](docs/CHANGELOG_EN.md)
-- [Project Architecture (EN)](docs/ARCHITECTURE_EN.md) · [Архитектура проекта (RU)](docs/ARCHITECTURE.md)
-- [Security model](docs/SECURITY.md) · [Reporting a vulnerability](SECURITY.md)
-- [Privacy Policy](docs/PRIVACY_POLICY_EN.md) ([Русский](docs/PRIVACY_POLICY_RU.md))
-- [XmlPullParser migration plan](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
+<p align="center">
+  <a href="docs/CHANGELOG_EN.md"><img alt="Changelog" src="https://img.shields.io/badge/Changelog-EN-7DC42A"></a>
+  <a href="docs/CHANGELOG_RU.md"><img alt="История изменений" src="https://img.shields.io/badge/Changelog-RU-7DC42A"></a>
+  <a href="docs/ARCHITECTURE_EN.md"><img alt="Architecture" src="https://img.shields.io/badge/Architecture-EN-7DC42A"></a>
+  <a href="docs/ARCHITECTURE.md"><img alt="Архитектура" src="https://img.shields.io/badge/Architecture-RU-7DC42A"></a>
+</p>
+<p align="center">
+  <a href="docs/SECURITY.md"><img alt="Security model" src="https://img.shields.io/badge/Security-model-23272E"></a>
+  <a href="SECURITY.md"><img alt="Report a vulnerability" src="https://img.shields.io/badge/Report-vulnerability-23272E"></a>
+  <a href="docs/XMLPULLPARSER_MIGRATION_PLAN.md"><img alt="XML parser plan" src="https://img.shields.io/badge/XML-parser_plan-23272E"></a>
+</p>
+<p align="center">
+  <a href="docs/PRIVACY_POLICY_EN.md"><img alt="Privacy Policy" src="https://img.shields.io/badge/Privacy_Policy-EN-7DC42A"></a>
+  <a href="docs/PRIVACY_POLICY_RU.md"><img alt="Политика конфиденциальности" src="https://img.shields.io/badge/Политика_конфиденциальности-RU-7DC42A"></a>
+</p>
 
 ## ♻️ Important: package rename
 
