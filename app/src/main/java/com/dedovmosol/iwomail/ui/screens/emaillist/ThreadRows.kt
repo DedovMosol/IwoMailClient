@@ -38,7 +38,8 @@ sealed interface MailRow {
         /** Без цепочек — по строке на письмо. */
         fun flat(emails: List<EmailEntity>): List<MailRow> = emails.map(::Single)
 
-        /** Цепочки: одно письмо — обычной строкой; раскрытая цепочка — строка цепочки и все её письма. */
+        /** Цепочки: одно письмо — обычной строкой; раскрытая — шапка (свернуть) и все письма, новые сверху.
+         * Latest нельзя выкинуть из детей: шапка не открывает письмо, без latest его не прочитать. */
         fun threaded(threads: List<EmailThread>, expanded: Set<String>): List<MailRow> = buildList {
             for (thread in threads) {
                 if (!thread.isThread) {
@@ -47,7 +48,9 @@ sealed interface MailRow {
                 }
                 val open = thread.key in expanded
                 add(Header(thread, open))
-                if (open) thread.emails.forEach { add(Child(it)) }
+                if (open) {
+                    thread.emails.sortedByDescending { it.dateReceived }.forEach { add(Child(it)) }
+                }
             }
         }
 

@@ -61,8 +61,30 @@ class MailRowTest {
         val rows = MailRow.threaded(threads, expanded = setOf(budget.key))
 
         assertThat(rows.map { it::class.simpleName }).containsExactly("Header", "Child", "Child", "Child", "Single").inOrder()
+        // Все письма, включая latest: шапка не открывает письмо
         assertThat(rows.drop(1).take(3).map { it.key }).containsExactly("4", "2", "1").inOrder()
         assertThat((rows[0] as MailRow.Header).expanded).isTrue()
+    }
+
+    @Test
+    fun `expanded children are newest first even if the folder listed oldest first`() {
+        val oldestFirst = EmailThreads.group(listOf(emails[3], emails[2], emails[0], emails[1]))
+        val budgetOldest = oldestFirst.first { it.isThread }
+        val rows = MailRow.threaded(oldestFirst, expanded = setOf(budgetOldest.key))
+
+        assertThat(rows.filterIsInstance<MailRow.Child>().map { it.key }).containsExactly("4", "2", "1").inOrder()
+    }
+
+    @Test
+    fun `expanded children are newest first even if the folder listed oldest first`() {
+        val oldest = email("old", "x", "C9")
+        val newest = email("new", "RE: x", "C9")
+        val thread = EmailThreads.group(listOf(oldest, newest)).single()
+
+        val rows = MailRow.threaded(listOf(thread), expanded = setOf(thread.key))
+
+        assertThat(rows.drop(1).map { it.key }).containsExactly("new", "old").inOrder()
+        assertThat((rows[0] as MailRow.Header).email.id).isEqualTo("new")
     }
 
     @Test

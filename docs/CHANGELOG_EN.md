@@ -4,6 +4,11 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Conversations: expand without a duplicate latest (2026-11-14)
+- **Before**: the header was a full preview of the newest message, then every message again, including that latest
+- **Why not drop latest from the children**: the header does not open a message — without a latest row it could not be read
+- **Now**: collapsed — header is the latest summary. Expanded — a slim “Collapse conversation” bar plus every message, newest first (`dateReceived`, not folder order)
+- **Tests**: `MailRowTest` — children include latest; date order even if the folder listed oldest first
 ### Permission prompts match the rest of the UI (2026-11-14)
 - **Before**: a custom `Dialog`+`Card` with a gradient strip, first-line indent and justified copy; the battery icon was used for both background work and exact alarms
 - **Now**: `ScaledAlertDialog`, same as language/settings. Background work uses the battery icon, exact alarms use the clock. No first-line indent; body text is full width (not a narrow centered column). The once-per-install queue and the system notification prompt are unchanged: the Android 13+ system sheet cannot be restyled

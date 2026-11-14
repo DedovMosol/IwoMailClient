@@ -1290,6 +1290,10 @@ private fun EmailListItem(
         ),
         color = backgroundColor
     ) {
+        if (thread != null && expanded) {
+            // Не дублировать latest: шапка только сворачивает, письма — строки Child, включая самое новое
+            ExpandedThreadBar(count = thread.emails.size, unread = thread.unreadCount > 0)
+        } else {
         Row(
             modifier = Modifier.padding(start = if (nested) 16.dp + NESTED_INDENT else 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.Top
@@ -1538,22 +1542,57 @@ private fun EmailListItem(
                 }
             }
         }
+        }
     }
-    HorizontalDivider(modifier = Modifier.padding(start = if (nested) 68.dp + NESTED_INDENT else 68.dp))
+    HorizontalDivider(
+        modifier = Modifier.padding(
+            start = when {
+                thread != null && expanded -> 16.dp
+                nested -> 68.dp + NESTED_INDENT
+                else -> 68.dp
+            }
+        )
+    )
 }
 
 /** Отступ писем раскрытой цепочки. */
 private val NESTED_INDENT = 24.dp
 
+/** Раскрытая цепочка: шапка без превью latest — иначе то же письмо дважды. Нажатие — на Surface снаружи. */
+@Composable
+private fun ExpandedThreadBar(count: Int, unread: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ThreadCountBadge(count = count, unread = unread, startPadding = 0.dp)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = Strings.collapseThread,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Icon(
+            imageVector = AppIcons.ExpandLess,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(24.dp)
+        )
+    }
+}
+
 /** Число писем цепочки; есть непрочитанные — цветом темы. */
 @Composable
-private fun ThreadCountBadge(count: Int, unread: Boolean) {
+private fun ThreadCountBadge(count: Int, unread: Boolean, startPadding: androidx.compose.ui.unit.Dp = 6.dp) {
     val description = "$count ${Strings.pluralEmails(count)}"
     Surface(
         shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
         color = if (unread) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier
-            .padding(start = 6.dp)
+            .padding(start = startPadding)
             .semantics { contentDescription = description }
     ) {
         Text(
