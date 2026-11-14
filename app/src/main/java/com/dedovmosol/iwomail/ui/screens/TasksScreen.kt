@@ -32,9 +32,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
+import com.dedovmosol.iwomail.ui.utils.rememberAppHaptics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -78,7 +77,7 @@ fun TasksScreen(
 ) {
     val context = LocalContext.current
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
-    val haptic = LocalHapticFeedback.current
+    val haptic = rememberAppHaptics()
 
     val viewModel: TasksViewModel = viewModel(
         factory = TasksViewModel.provideFactory(context.applicationContext as android.app.Application, initialFilter)
@@ -690,14 +689,14 @@ fun TasksScreen(
                                 isSelectionMode = isSelectionMode,
                                 onClick = {
                                     if (isSelectionMode) {
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        haptic.tick()
                                         viewModel.toggleDeletedSelection(task.id)
                                     } else {
                                         selectedTaskId = task.id
                                     }
                                 },
                                 onLongClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    haptic.confirm()
                                     viewModel.addDeletedSelection(task.id)
                                 }
                             )
@@ -709,14 +708,14 @@ fun TasksScreen(
                                 isSelectionMode = isSelectionMode,
                                 onClick = {
                                     if (isSelectionMode) {
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        haptic.tick()
                                         viewModel.toggleActiveSelection(task.id)
                                     } else {
                                         selectedTaskId = task.id
                                     }
                                 },
                                 onLongClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    haptic.confirm()
                                     viewModel.addActiveSelection(task.id)
                                 },
                                 onToggleComplete = { viewModel.toggleComplete(task) }

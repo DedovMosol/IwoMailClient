@@ -30,9 +30,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
+import com.dedovmosol.iwomail.ui.utils.rememberAppHaptics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -114,7 +113,7 @@ fun EmailListScreen(
     val context = LocalContext.current
     val currentLanguage = LocalLanguage.current
     val isRussian = currentLanguage == AppLanguage.RUSSIAN
-    val hapticScreen = LocalHapticFeedback.current
+    val hapticScreen = rememberAppHaptics()
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
 
     val viewModel: EmailListViewModel = viewModel(
@@ -606,7 +605,7 @@ fun EmailListScreen(
                 isSent = isSentFolder,
                 onEmailClick = { email ->
                     if (isSelectionMode) {
-                        hapticScreen.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        hapticScreen.tick()
                         viewModel.toggleSelection(email.id)
                     } else {
                         // Для черновиков открываем ComposeScreen, для остальных - EmailDetailScreen
@@ -1152,7 +1151,7 @@ private fun EmailListContent(
         onSelectionChange = onDragSelect,
         expand = { key -> threadSelection[key] ?: listOf(key) }
     )
-    val haptic = LocalHapticFeedback.current
+    val haptic = rememberAppHaptics()
     val currentSelectedIds by rememberUpdatedState(selectedIds)
     val currentSelectionMode by rememberUpdatedState(isSelectionMode)
     val stableOnDragSelect by rememberUpdatedState(onDragSelect)
@@ -1199,7 +1198,7 @@ private fun EmailListContent(
                         {
                             val thread = latestHeader.thread
                             if (currentSelectionMode) {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                haptic.tick()
                                 stableOnDragSelect(MailRow.toggleThread(currentSelectedIds, thread.ids))
                             } else {
                                 expandedThreads = if (thread.key in expandedThreads) expandedThreads - thread.key else expandedThreads + thread.key
@@ -1263,10 +1262,10 @@ private fun EmailListItem(
     onStarClick: () -> Unit,
     onFlagChosen: (MailFlag) -> Unit
 ) {
-    val haptic = LocalHapticFeedback.current
+    val haptic = rememberAppHaptics()
     val longClickHandler = remember(onLongClick) {
         {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            haptic.confirm()
             onLongClick()
         }
     }
@@ -1513,11 +1512,11 @@ private fun EmailListItem(
                         .combinedClickable(
                             role = androidx.compose.ui.semantics.Role.Button,
                             onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                haptic.tick()
                                 onStarClick()
                             },
                             onLongClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                haptic.confirm()
                                 flagMenuOpen = true
                             },
                             onLongClickLabel = Strings.flagRemind

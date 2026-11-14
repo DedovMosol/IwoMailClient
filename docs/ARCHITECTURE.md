@@ -156,7 +156,7 @@ com.dedovmosol.iwomail/
 │   ├── components/ — HtmlBodyView, RichTextEditor, SendController, FlagMenu, EmailPrinter,
 │   │                 WebViewRenderer (+ RendererRecovery), TouchDirectionLock, баннеры, диалоги, DeletionProgressBar
 │   ├── theme/ — Theme, AppIcons, CustomTextToolbar
-│   └── utils/ — анимации, цвета аватаров, форматирование дат, ContextExtensions, LargeStateSaver
+│   └── utils/ — анимации, цвета аватаров, форматирование дат, ContextExtensions, LargeStateSaver, AppHaptics
 │
 ├── domain/ — AttachmentLoader, DraftSaver, EditorInlineBudget, EmailThreads, FlagPresets, MailAlerts, MailPreferences,
 │             OutgoingMail, ReadReceipts, RepositoryDraftStore, SendFailures, SentFolder, Unsubscribe

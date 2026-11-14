@@ -4,6 +4,11 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Selection haptics (2026-11-14)
+- **Before**: dragging a list and toggling items in selection used Compose `HapticFeedbackType.TextHandleMove` (text-cursor feedback). On many OEMs that is silent. Auto-scroll during a drag never vibrated
+- **Now**: a short tick via `Vibrator` + `VibrationEffect` (`EFFECT_TICK` / `EFFECT_CLICK` on API 29+, a short one-shot on 26–28). Long-press is a slightly stronger pulse. No vibrator or system haptic feedback off — silence, no exception. The same tick when the row changes during auto-scroll. One instance per process: list rows do not call `getSystemService` on every composition
+- **Where**: list drag-select, toggling selection, star, email swipe
+- **Tests**: `AppHapticsTest` — effect by API, no vibrator / system haptic off does not play, OEM failure is swallowed, `from` caches the instance
 ### Tasks and notes: offline edits and trash (2026-11-13)
 - **Before**: editing a task (done, subject, dates) or note and moving it to trash without a connection showed an error and saved nothing; the request also waited for a timeout
 - **Now**: the edit is saved on the device and queued (`pending_pim_changes`, DB v51, migration 50→51); a toast says "Saved on the device. It will be sent to the server when the connection is back" and the dialog closes. Without a network the server is not called at all. `PendingMailChangesWorker` (network constraint, exponential backoff) sends it the same way as online: EAS on Exchange 2010+, EWS on Exchange 2007 (the task is found by its subject before the edit)
