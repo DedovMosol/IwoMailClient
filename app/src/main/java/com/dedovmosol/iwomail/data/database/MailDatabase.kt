@@ -415,7 +415,12 @@ class Converters {
 enum class AccountType(val displayName: String) {
     EXCHANGE("Exchange"),
     IMAP("IMAP"),
-    POP3("POP3")
+    POP3("POP3");
+
+    companion object {
+        fun fromStored(name: String): AccountType =
+            entries.find { it.name == name } ?: EXCHANGE
+    }
 }
 
 /**

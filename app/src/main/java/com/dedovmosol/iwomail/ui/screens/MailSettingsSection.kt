@@ -1,6 +1,5 @@
 package com.dedovmosol.iwomail.ui.screens
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -89,24 +88,24 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository, showHeader: B
             )
         }
 
-        ListItem(
-            headlineContent = { Text(Strings.undoSendSetting) },
-            supportingContent = { Text(Strings.undoSendDesc(undoSeconds)) },
-            leadingContent = { Icon(AppIcons.Send, null) },
-            modifier = Modifier.clickable { choice = "undo" }
+        SettingsNavRow(
+            title = Strings.undoSendSetting,
+            subtitle = Strings.undoSendDesc(undoSeconds),
+            icon = AppIcons.Send,
+            onClick = { choice = "undo" }
         )
 
-        ListItem(
-            headlineContent = { Text(Strings.swipeStart) },
-            supportingContent = { Text(Strings.swipeActionName(swipes.first)) },
-            leadingContent = { Icon(AppIcons.ChevronRight, null) },
-            modifier = Modifier.clickable { choice = "start" }
+        SettingsNavRow(
+            title = Strings.swipeStart,
+            subtitle = Strings.swipeActionName(swipes.first),
+            icon = AppIcons.ChevronRight,
+            onClick = { choice = "start" }
         )
-        ListItem(
-            headlineContent = { Text(Strings.swipeEnd) },
-            supportingContent = { Text(Strings.swipeActionName(swipes.second)) },
-            leadingContent = { Icon(AppIcons.ChevronLeft, null) },
-            modifier = Modifier.clickable { choice = "end" }
+        SettingsNavRow(
+            title = Strings.swipeEnd,
+            subtitle = Strings.swipeActionName(swipes.second),
+            icon = AppIcons.ChevronLeft,
+            onClick = { choice = "end" }
         )
     }
 

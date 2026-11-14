@@ -90,10 +90,7 @@ internal fun SettingsPageScaffold(
                 contentPadding = PaddingValues(vertical = 12.dp),
                 content = content
             )
-            LazyColumnScrollbar(
-                listState = listState,
-                alwaysVisible = true
-            )
+            LazyColumnScrollbar(listState = listState)
         }
     }
 }
@@ -124,7 +121,7 @@ private fun SettingsLeadingIcon(icon: ImageVector, title: String) {
     ) {
         Icon(
             icon,
-            contentDescription = title,
+            contentDescription = null,
             modifier = Modifier.size(24.dp),
             tint = MaterialTheme.colorScheme.onPrimaryContainer
         )
@@ -151,7 +148,7 @@ internal fun SettingsHubRow(
             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
             modifier = Modifier
                 .heightIn(min = 72.dp)
-                .clickable(onClickLabel = title, onClick = onClick)
+                .clickable(role = Role.Button, onClickLabel = title, onClick = onClick)
         )
         if (showDivider) {
             HorizontalDivider(
@@ -199,5 +196,28 @@ internal fun SettingsSwitchRow(
                 role = Role.Switch,
                 onValueChange = onChange
             )
+    )
+}
+
+/** Строка, которая открывает диалог или другой экран: заголовок, подпись, шеврон. */
+@Composable
+internal fun SettingsNavRow(
+    title: String,
+    subtitle: String? = null,
+    icon: ImageVector? = null,
+    onClick: () -> Unit
+) {
+    ListItem(
+        headlineContent = { Text(title, style = MaterialTheme.typography.titleSmall) },
+        supportingContent = if (subtitle.isNullOrBlank()) null else ({
+            Text(subtitle, style = MaterialTheme.typography.bodyMedium)
+        }),
+        leadingContent = icon?.let { vector ->
+            { Icon(vector, contentDescription = null) }
+        },
+        trailingContent = { Icon(AppIcons.ChevronRight, contentDescription = null) },
+        modifier = Modifier
+            .heightIn(min = 64.dp)
+            .clickable(role = Role.Button, onClickLabel = title, onClick = onClick)
     )
 }

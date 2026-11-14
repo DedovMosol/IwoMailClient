@@ -1,0 +1,912 @@
+package com.dedovmosol.iwomail.ui.screens
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Text
+import com.dedovmosol.iwomail.ui.theme.AppIcons
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import com.dedovmosol.iwomail.data.repository.SettingsRepository
+import com.dedovmosol.iwomail.ui.NotificationStrings
+import com.dedovmosol.iwomail.ui.Strings
+import com.dedovmosol.iwomail.ui.components.RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS
+import com.dedovmosol.iwomail.util.HtmlRegex
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
+
+
+/**
+ * Получить текст интервала синхронизации контактов
+ */
+fun getContactsSyncIntervalText(days: Int, isRu: Boolean): String {
+    return when (days) {
+        0 -> NotificationStrings.getNever(isRu)
+        1 -> NotificationStrings.getDaily(isRu)
+        7 -> NotificationStrings.getWeekly(isRu)
+        14 -> NotificationStrings.getEveryTwoWeeks(isRu)
+        30 -> NotificationStrings.getMonthly(isRu)
+        else -> NotificationStrings.getEveryNDays(days, isRu)
+    }
+}
+
+private val SIGNATURE_BLOCK_END = Regex("</(?:p|div|li|tr)>", RegexOption.IGNORE_CASE)
+private val SIGNATURE_TD_END = Regex("</td>", RegexOption.IGNORE_CASE)
+private val SIGNATURE_SPACES = Regex("[ \\t]+")
+private val SIGNATURE_NEWLINES = Regex("\\n{2,}")
+
+private fun stripHtmlForPreview(html: String): String {
+    if (html.isBlank()) return ""
+    return html
+        .replace(HtmlRegex.BR, "\n")
+        .replace(SIGNATURE_BLOCK_END, "\n")
+        .replace(SIGNATURE_TD_END, "\t")
+        .replace(HtmlRegex.STYLE, "")
+        .replace(HtmlRegex.SCRIPT, "")
+        .replace(HtmlRegex.COMMENT, "")
+        .replace(HtmlRegex.TAG, "")
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace(SIGNATURE_SPACES, " ")
+        .replace(SIGNATURE_NEWLINES, "\n")
+        .trim()
+}
+
+/**
+ * Диалог настройки синхронизации контактов
+ */
+@Composable
+fun ContactsSyncDialog(
+    isRu: Boolean,
+    currentDays: Int,
+    onDaysChange: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val options = listOf(
+        0 to (NotificationStrings.getNever(isRu)),
+        1 to (NotificationStrings.getDaily(isRu)),
+        7 to (NotificationStrings.getWeekly(isRu)),
+        14 to (NotificationStrings.getEveryTwoWeeks(isRu)),
+        30 to (NotificationStrings.getMonthly(isRu))
+    )
+
+    com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(Strings.contactsSync) },
+        text = {
+            Column {
+                Text(
+                    Strings.contactsSyncDesc,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                options.forEach { (days, label) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onDaysChange(days)
+                                onDismiss()
+                            }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = currentDays == days,
+                            onClick = null
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(label)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onDismiss,
+                text = Strings.cancel
+            )
+        }
+    )
+}
+
+/**
+ * Диалог настройки автоматической очистки папок
+ */
+@Composable
+fun AutoCleanupDialog(
+    isRu: Boolean,
+    trashDays: Int,
+    draftsDays: Int,
+    spamDays: Int,
+    downloadsDays: Int,
+    rollbackDays: Int,
+    onTrashDaysChange: (Int) -> Unit,
+    onDraftsDaysChange: (Int) -> Unit,
+    onSpamDaysChange: (Int) -> Unit,
+    onDownloadsDaysChange: (Int) -> Unit,
+    onRollbackDaysChange: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedFolder by rememberSaveable { mutableStateOf<String?>(null) }
+
+    com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(Strings.autoCleanup) },
+        text = {
+            Column {
+                AutoCleanupFolderItem(
+                    icon = AppIcons.Delete,
+                    title = Strings.autoCleanupTrash,
+                    currentDays = trashDays,
+                    isRu = isRu,
+                    isExpanded = selectedFolder == "trash",
+                    onExpandClick = { selectedFolder = if (selectedFolder == "trash") null else "trash" },
+                    onDaysChange = onTrashDaysChange
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                AutoCleanupFolderItem(
+                    icon = AppIcons.Drafts,
+                    title = Strings.autoCleanupDrafts,
+                    currentDays = draftsDays,
+                    isRu = isRu,
+                    isExpanded = selectedFolder == "drafts",
+                    onExpandClick = { selectedFolder = if (selectedFolder == "drafts") null else "drafts" },
+                    onDaysChange = onDraftsDaysChange
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                AutoCleanupFolderItem(
+                    icon = AppIcons.Report,
+                    title = Strings.autoCleanupSpam,
+                    currentDays = spamDays,
+                    isRu = isRu,
+                    isExpanded = selectedFolder == "spam",
+                    onExpandClick = { selectedFolder = if (selectedFolder == "spam") null else "spam" },
+                    onDaysChange = onSpamDaysChange
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = Strings.autoCleanupAppFiles,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+
+                AutoCleanupFolderItem(
+                    icon = AppIcons.Download,
+                    title = Strings.autoCleanupDownloads,
+                    currentDays = downloadsDays,
+                    isRu = isRu,
+                    isExpanded = selectedFolder == "downloads",
+                    onExpandClick = { selectedFolder = if (selectedFolder == "downloads") null else "downloads" },
+                    onDaysChange = onDownloadsDaysChange
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                AutoCleanupFolderItem(
+                    icon = AppIcons.Restore,
+                    title = Strings.autoCleanupRollback,
+                    currentDays = rollbackDays,
+                    isRu = isRu,
+                    isExpanded = selectedFolder == "rollback",
+                    onExpandClick = { selectedFolder = if (selectedFolder == "rollback") null else "rollback" },
+                    onDaysChange = onRollbackDaysChange
+                )
+            }
+        },
+        confirmButton = {
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onDismiss,
+                text = Strings.close
+            )
+        }
+    )
+}
+
+@Composable
+private fun AutoCleanupFolderItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    currentDays: Int,
+    isRu: Boolean,
+    isExpanded: Boolean,
+    onExpandClick: () -> Unit,
+    onDaysChange: (Int) -> Unit
+) {
+    val currentOption = SettingsRepository.AutoCleanupDays.fromDays(currentDays)
+
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onExpandClick() }
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    text = currentOption.getDisplayName(isRu),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                if (isExpanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        if (isExpanded) {
+            Column(modifier = Modifier.padding(start = 36.dp)) {
+                SettingsRepository.AutoCleanupDays.entries.forEach { option ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onDaysChange(option.days) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = currentDays == option.days,
+                            onClick = null
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = option.getDisplayName(isRu),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+/**
+ * Диалог управления подписями аккаунта
+ */
+@Composable
+fun SignaturesManagementDialog(
+    isRu: Boolean,
+    accountId: Long,
+    signatures: List<com.dedovmosol.iwomail.data.database.SignatureEntity>,
+    onSignaturesChanged: (List<com.dedovmosol.iwomail.data.database.SignatureEntity>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
+    val database = remember { com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context) }
+
+    var showAddDialog by rememberSaveable { mutableStateOf(false) }
+    var editingSignatureId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val editingSignature = editingSignatureId?.let { id -> signatures.find { it.id == id } }
+    var signatureToDeleteId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val signatureToDelete = signatureToDeleteId?.let { id -> signatures.find { it.id == id } }
+
+    // Диалог добавления/редактирования подписи
+    if (showAddDialog || editingSignature != null) {
+        // Первая подпись всегда default
+        val isFirstSignature = signatures.isEmpty() && editingSignature == null
+        // Если редактируем единственную подпись — она тоже всегда default
+        val isOnlySignature = signatures.size == 1 && editingSignature != null
+        val forceDefault = isFirstSignature || isOnlySignature
+
+        SignatureEditDialog(
+            isRu = isRu,
+            signature = editingSignature,
+            forceDefault = forceDefault,
+            currentIsDefault = editingSignature?.isDefault ?: false,
+            onSave = { name, text, isDefault, isHtml ->
+                scope.launch(Dispatchers.IO) {
+                    // Если ставим новый default — сбрасываем старый
+                    val actualIsDefault = if (forceDefault) true else isDefault
+                    if (actualIsDefault) {
+                        database.signatureDao().clearDefaultForAccount(accountId)
+                    }
+
+                    val currentEditing = editingSignature
+                    if (currentEditing != null) {
+                        // Редактирование — update
+                        val updated = currentEditing.copy(
+                            name = name,
+                            text = text,
+                            isDefault = actualIsDefault,
+                            isHtml = isHtml
+                        )
+                        database.signatureDao().update(updated)
+                    } else {
+                        // Создание новой
+                        val newSignature = com.dedovmosol.iwomail.data.database.SignatureEntity(
+                            accountId = accountId,
+                            name = name,
+                            text = text,
+                            isDefault = actualIsDefault,
+                            sortOrder = signatures.size,
+                            isHtml = isHtml
+                        )
+                        database.signatureDao().insert(newSignature)
+                    }
+                    val updatedSignatures = database.signatureDao().getSignaturesByAccountList(accountId)
+                    withContext(Dispatchers.Main) {
+                        onSignaturesChanged(updatedSignatures)
+                    }
+                }
+                showAddDialog = false
+                editingSignatureId = null
+            },
+            onDismiss = {
+                showAddDialog = false
+                editingSignatureId = null
+            }
+        )
+    }
+
+    // Диалог подтверждения удаления
+    signatureToDelete?.let { signature ->
+        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
+            onDismissRequest = { signatureToDeleteId = null },
+            icon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text(Strings.deleteSignatureTitle) },
+            text = { Text(signature.name) },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
+                    onClick = {
+                        scope.launch {
+                            val wasDefault = signature.isDefault
+                            database.signatureDao().delete(signature.id)
+
+                            // Если удалили default подпись — назначить следующую по createdAt
+                            if (wasDefault) {
+                                val remaining = database.signatureDao().getSignaturesByAccountList(accountId)
+                                if (remaining.isNotEmpty()) {
+                                    // Сортируем по createdAt и берём первую
+                                    val nextDefault = remaining.minByOrNull { it.createdAt }
+                                    nextDefault?.let {
+                                        database.signatureDao().setDefault(it.id, accountId)
+                                    }
+                                }
+                            }
+
+                            onSignaturesChanged(database.signatureDao().getSignaturesByAccountList(accountId))
+                        }
+                        signatureToDeleteId = null
+                    },
+                    text = Strings.delete
+                )
+            },
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { signatureToDeleteId = null },
+                    text = Strings.cancel
+                )
+            }
+        )
+    }
+
+    com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(Strings.signaturesTitle) },
+        text = {
+            Column {
+                if (signatures.isEmpty()) {
+                    Text(
+                        Strings.noSignaturesHint,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                } else {
+                    signatures.forEach { signature ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { editingSignatureId = signature.id }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        signature.name,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = if (signature.isDefault) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                    if (signature.isDefault) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            Strings.defaultLabel,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                                val preview = if (signature.isHtml) {
+                                    stripHtmlForPreview(signature.text)
+                                } else {
+                                    signature.text
+                                }
+                                val oneLinePreview = preview.replace("\n", " ").trim()
+                                val truncatedPreview = if (oneLinePreview.length > 40) {
+                                    oneLinePreview.take(40) + "..."
+                                } else {
+                                    oneLinePreview
+                                }
+                                Text(
+                                    truncatedPreview,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                            IconButton(onClick = { signatureToDeleteId = signature.id }) {
+                                Icon(
+                                    AppIcons.Delete,
+                                    null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                    }
+                }
+
+                // Кнопка добавления (максимум 5 подписей)
+                if (signatures.size < 5) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { showAddDialog = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(AppIcons.Add, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(Strings.addSignatureAction)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onDismiss,
+                text = Strings.close
+            )
+        }
+    )
+}
+
+/**
+ * Диалог редактирования подписи
+ */
+@Composable
+private fun SignatureEditDialog(
+    isRu: Boolean,
+    signature: com.dedovmosol.iwomail.data.database.SignatureEntity?,
+    forceDefault: Boolean = false,
+    currentIsDefault: Boolean = false,
+    onSave: (name: String, text: String, isDefault: Boolean, isHtml: Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var name by rememberSaveable { mutableStateOf(signature?.name ?: "") }
+    var text by rememberSaveable { mutableStateOf(signature?.text ?: "") }
+    var isDefault by rememberSaveable { mutableStateOf(if (forceDefault) true else (signature?.isDefault ?: false)) }
+    var isHtml by rememberSaveable { mutableStateOf(signature?.isHtml ?: false) }
+    val richTextController = com.dedovmosol.iwomail.ui.components.rememberRichTextEditorController()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
+    var isSaving by remember { mutableStateOf(false) }
+
+    fun saveSignature() {
+        if (isSaving) return
+        isSaving = true
+        if (isHtml) {
+            scope.launch {
+                var flushId: Long? = null
+                val flushedHtml = withTimeoutOrNull(RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS) {
+                    suspendCancellableCoroutine<String?> { continuation ->
+                        flushId = richTextController.flushHtml { html ->
+                            if (continuation.isActive) continuation.resume(html)
+                        }
+                        if (flushId == null && continuation.isActive) {
+                            continuation.resume(null)
+                        }
+                        continuation.invokeOnCancellation {
+                            flushId?.let { richTextController.cancelPendingFlush(it) }
+                        }
+                    }
+                }
+                if (flushedHtml == null) {
+                    flushId?.let { richTextController.cancelPendingFlush(it) }
+                }
+                onSave(name, flushedHtml ?: text, isDefault, true)
+            }
+        } else {
+            onSave(name, text, isDefault, false)
+        }
+    }
+
+    // Функция конвертации plain text → HTML
+    fun plainToHtml(plain: String): String {
+        return plain
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br>")
+    }
+
+    // Функция конвертации HTML → plain text (простая)
+    fun htmlToPlain(html: String): String {
+        return html
+            .replace(HtmlRegex.BR, "\n")
+            .replace(HtmlRegex.TAG, "")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&nbsp;", " ")
+    }
+
+    com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (signature != null) Strings.editTitle else Strings.newSignatureTitle) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text(Strings.nameLabel) },
+                    placeholder = { Text(Strings.namePlaceholder) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Переключатель HTML форматирования
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            // Конвертируем текст при переключении режима
+                            text = if (isHtml) {
+                                // HTML → plain text
+                                htmlToPlain(text)
+                            } else {
+                                // plain text → HTML
+                                plainToHtml(text)
+                            }
+                            isHtml = !isHtml
+                        },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = isHtml,
+                        onCheckedChange = { newValue ->
+                            // Конвертируем текст при переключении режима
+                            text = if (isHtml && !newValue) {
+                                // HTML → plain text
+                                htmlToPlain(text)
+                            } else if (!isHtml && newValue) {
+                                // plain text → HTML
+                                plainToHtml(text)
+                            } else {
+                                text
+                            }
+                            isHtml = newValue
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (isRu) "HTML форматирование" else "HTML formatting")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (isHtml) {
+                    // HTML редактор
+                    val isDarkTheme = !MaterialTheme.colorScheme.background.luminance().let { it > 0.5f }
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 120.dp, max = 200.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Column {
+                            com.dedovmosol.iwomail.ui.components.RichTextToolbar(
+                                controller = richTextController,
+                                onInsertImage = { }, // Изображения в подписи не поддерживаем
+                                modifier = Modifier.fillMaxWidth(),
+                                showInsertImage = false
+                            )
+                            HorizontalDivider()
+                            com.dedovmosol.iwomail.ui.components.RichTextEditor(
+                                initialHtml = text,
+                                onHtmlChanged = { text = it },
+                                controller = richTextController,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 80.dp),
+                                placeholder = if (isRu) "Текст подписи" else "Signature text",
+                                minHeight = 80,
+                                isDarkTheme = isDarkTheme
+                            )
+                        }
+                    }
+                } else {
+                    // Plain text редактор
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        label = { Text(Strings.signatureTextLabel) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 100.dp),
+                        maxLines = 6
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Галочка "По умолчанию" — нельзя снять если это единственная/первая подпись или уже default
+                val canToggleDefault = !forceDefault && !currentIsDefault
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (canToggleDefault) Modifier.clickable { isDefault = !isDefault } else Modifier),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = isDefault,
+                        onCheckedChange = if (canToggleDefault) { { isDefault = it } } else null,
+                        enabled = canToggleDefault
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        Strings.defaultCheckbox,
+                        color = if (canToggleDefault) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = { saveSignature() },
+                text = Strings.save,
+                enabled = !isSaving && name.isNotBlank() && text.isNotBlank()
+            )
+        },
+        dismissButton = {
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onDismiss,
+                text = Strings.cancel
+            )
+        }
+    )
+}
+
+// ─── Блокировка приложения: диалог пароля (установка / смена / отключение) ───
+
+/** Какой режим диалога пароля блокировки открыт. */
+internal enum class LockDialogType { SetPassword, ChangePassword, Disable }
+
+/**
+ * Единый диалог пароля блокировки приложения (цель релиза «пароль + дактилоскопия»).
+ *
+ * Режимы (комбинируются флагами, без дублирования трёх экранов — DRY):
+ *  - [requireCurrentPassword] = текущий пароль обязателен и проверяется ДО коммита;
+ *  - [requireNewPassword] = новый пароль + подтверждение, длина ≥
+ *    [com.dedovmosol.iwomail.data.security.AppLockManager.MIN_PASSWORD_LENGTH].
+ *
+ * Производительность: все тяжёлые операции (проверка текущего пароля и коммит
+ * нового — 600k итераций PBKDF2, ~0.5–1 с) выполняются на [Dispatchers.IO],
+ * а не на главном потоке (защита от джанка). Запись в Compose-state из
+ * колбэка на IO безопасна (снапшот-система потокобезопасна).
+ */
+@Composable
+internal fun LockPasswordDialog(
+    title: String,
+    requireCurrentPassword: Boolean,
+    requireNewPassword: Boolean,
+    hint: String? = null,
+    onCancel: () -> Unit,
+    onSubmit: (currentPassword: String, newPassword: String) -> Unit
+) {
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
+    // Строки — захватываем из композабельного контекста в замыкания:
+    // @Composable-геттеры нельзя вызывать из несоставного submit().
+    val tooShortMsg = Strings.appLockTooShort
+    val mismatchMsg = Strings.appLockMismatch
+    val wrongPasswordMsg = Strings.appLockWrongPassword
+    // БЕЗОПАСНОСТЬ: пароли хранятся только в памяти композабля (remember), а НЕ в
+    // rememberSaveable — сериализация секрета в instance-state недопустима. При
+    // смерти процесса/конфигурации диалог закроется и пользователь введёт заново —
+    // это правильный безопасный компромисс.
+    var currentPassword by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var isChecking by remember { mutableStateOf(false) }
+
+    fun submit() {
+        if (isChecking) return
+        error = null
+
+        // Валидация нового пароля — дешёвые проверки до тяжёлого хеширования.
+        if (requireNewPassword) {
+            if (newPassword.length < com.dedovmosol.iwomail.data.security.AppLockManager.MIN_PASSWORD_LENGTH) {
+                error = tooShortMsg
+                return
+            }
+            if (newPassword != confirmPassword) {
+                error = mismatchMsg
+                return
+            }
+        }
+
+        isChecking = true
+        scope.launch {
+            // Текущий пароль: тяжёлая проверка PBKDF2 строго на IO-диспатчере.
+            if (requireCurrentPassword) {
+                val valid = withContext(Dispatchers.IO) {
+                    com.dedovmosol.iwomail.data.security.AppLockManager.checkPassword(currentPassword)
+                }
+                if (!valid) {
+                    isChecking = false
+                    error = wrongPasswordMsg
+                    return@launch
+                }
+            }
+            // Коммит (установка/смена/удаление пароля — тоже PBKDF2) на IO.
+            withContext(Dispatchers.IO) {
+                onSubmit(currentPassword, newPassword)
+            }
+            isChecking = false
+        }
+    }
+
+    com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
+        onDismissRequest = onCancel,
+        icon = { Icon(AppIcons.Lock, null) },
+        title = { Text(title) },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (hint != null) {
+                    Text(hint, style = MaterialTheme.typography.bodyMedium)
+                }
+                if (requireCurrentPassword) {
+                    OutlinedTextField(
+                        value = currentPassword,
+                        onValueChange = {
+                            currentPassword = it
+                            if (error != null) error = null
+                        },
+                        label = { Text(Strings.appLockCurrentPassword) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (requireNewPassword) {
+                    OutlinedTextField(
+                        value = newPassword,
+                        onValueChange = {
+                            newPassword = it
+                            if (error != null) error = null
+                        },
+                        label = { Text(Strings.appLockNewPassword) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = confirmPassword,
+                        onValueChange = {
+                            confirmPassword = it
+                            if (error != null) error = null
+                        },
+                        label = { Text(Strings.appLockRepeatPassword) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (error != null) {
+                    Text(
+                        text = error!!,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = { submit() },
+                text = Strings.save,
+                enabled = !isChecking &&
+                    (!requireCurrentPassword || currentPassword.isNotEmpty()) &&
+                    (!requireNewPassword || (newPassword.isNotEmpty() && confirmPassword.isNotEmpty()))
+            )
+        },
+        dismissButton = {
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onCancel,
+                text = Strings.cancel
+            )
+        }
+    )
+}
