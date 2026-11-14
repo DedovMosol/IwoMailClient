@@ -4,14 +4,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
@@ -43,6 +47,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
+import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
+import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 
@@ -92,6 +98,40 @@ internal fun SettingsPageScaffold(
                 content = content
             )
             LazyColumnScrollbar(listState = listState)
+        }
+    }
+}
+
+/**
+ * Тот же app bar, но Column+скролл: нужен экрану «О приложении»,
+ * где подвал (пасхалка) прижат вниз через [Modifier.weight].
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun SettingsScrollScaffold(
+    title: String,
+    onBackClick: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Scaffold(
+        topBar = { SettingsTopBar(title, onBackClick) }
+    ) { padding ->
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            val minH = maxHeight
+            val scrollState = rememberScrollState()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = minH)
+                    .verticalScroll(scrollState)
+                    .padding(vertical = 12.dp),
+                content = content
+            )
+            ScrollColumnScrollbar(scrollState)
         }
     }
 }
@@ -200,25 +240,56 @@ internal fun SettingsSwitchRow(
     )
 }
 
-/** Строка, которая открывает диалог или другой экран: заголовок, подпись, шеврон. */
+/** Строка списка настроек: переход, внешняя ссылка или действие справа. */
 @Composable
 internal fun SettingsNavRow(
     title: String,
     subtitle: String? = null,
     icon: ImageVector? = null,
-    onClick: () -> Unit
+    leading: @Composable (() -> Unit)? = null,
+    trailing: @Composable (() -> Unit)? = null,
+    trailingIcon: ImageVector? = AppIcons.ChevronRight,
+    enabled: Boolean = true,
+    onClick: (() -> Unit)? = null
 ) {
+    val textColor = if (enabled) {
+        MaterialTheme.colorScheme.onSurface
+    } else {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    }
+    val subColor = if (enabled) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+    }
     ListItem(
-        headlineContent = { Text(title, style = MaterialTheme.typography.titleSmall) },
+        headlineContent = { Text(title, style = MaterialTheme.typography.titleSmall, color = textColor) },
         supportingContent = if (subtitle.isNullOrBlank()) null else ({
-            Text(subtitle, style = MaterialTheme.typography.bodyMedium)
+            Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = subColor)
         }),
-        leadingContent = icon?.let { vector ->
-            { SettingsLeadingIcon(vector, boxSize = 40.dp) }
+        leadingContent = when {
+            icon != null -> {
+                { SettingsLeadingIcon(icon, boxSize = 40.dp) }
+            }
+            leading != null -> leading
+            else -> null
         },
-        trailingContent = { Icon(AppIcons.ChevronRight, contentDescription = null) },
+        trailingContent = when {
+            trailing != null -> trailing
+            trailingIcon != null -> {
+                { Icon(trailingIcon, contentDescription = null, tint = textColor) }
+            }
+            else -> null
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier
             .heightIn(min = 64.dp)
-            .clickable(role = Role.Button, onClickLabel = title, onClick = onClick)
+            .then(
+                if (onClick != null && enabled) {
+                    Modifier.clickable(role = Role.Button, onClickLabel = title, onClick = onClick)
+                } else {
+                    Modifier
+                }
+            )
     )
 }
