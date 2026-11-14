@@ -4,6 +4,11 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Onboarding: page enter matches Mail & notifications (2026-11-14)
+- **Before**: the pager precomposed the next slide (`beyondBoundsPageCount = 1`). Enter (`fade`/`scale`/`slide`) started on first composition and finished off-screen — Organizer, Settings, and the language/theme slides after the first opened with no appearance
+- **Why not hide the neighbor until currentPage**: the swipe preview would be blank
+- **Now**: enter when the slide is current or the gesture target (`targetPage`). Prefetch without a gesture stays hidden. Animations off — shown immediately, neighbor included. A slide already shown is not hidden: going back does not flash
+- **Tests**: `OnboardingPageEnterTest` — idle/prefetch/gesture target, animations off, already shown
 ### Selection haptics (2026-11-14)
 - **Before**: dragging a list and toggling items in selection used Compose `HapticFeedbackType.TextHandleMove` (text-cursor feedback). On many OEMs that is silent. Auto-scroll during a drag never vibrated
 - **Now**: a short tick via `Vibrator` + `VibrationEffect` (`EFFECT_TICK` / `EFFECT_CLICK` on API 29+, a short one-shot on 26–28). Long-press is a slightly stronger pulse. No vibrator or system haptic feedback off — silence, no exception. The same tick when the row changes during auto-scroll. One instance per process: list rows do not call `getSystemService` on every composition
