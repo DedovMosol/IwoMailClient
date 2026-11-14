@@ -210,8 +210,8 @@ On Windows:
   <a href="docs/ARCHITECTURE.md"><img alt="Архитектура проекта подробно" src="https://img.shields.io/badge/Архитектура_проекта-подробно-E36209"></a>
 </p>
 <p align="center">
-  <a href="docs/SECURITY.md"><img alt="Security model" src="https://img.shields.io/badge/Security-6F42C1"></a>
-  <a href="docs/SECURITY.md#reporting-a-vulnerability"><img alt="Report a vulnerability" src="https://img.shields.io/badge/Report_a_vulnerability-D73A49"></a>
+  <a href="docs/SECURITY_EN.md"><img alt="Security EN" src="https://img.shields.io/badge/Security-EN-6F42C1"></a>
+  <a href="docs/SECURITY_RU.md"><img alt="Безопасность RU" src="https://img.shields.io/badge/Безопасность-RU-6F42C1"></a>
   <a href="docs/XMLPULLPARSER_MIGRATION_PLAN.md"><img alt="XML parser plan" src="https://img.shields.io/badge/XML_parser-plan-6A737D"></a>
 </p>
 <p align="center">

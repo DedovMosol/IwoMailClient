@@ -28,11 +28,13 @@ object AppLanguageCode {
     }
 
     fun persist(context: Context, code: String) {
-        set(code)
+        val normalized = if (code == "en") "en" else "ru"
+        if (this.code == normalized) return
+        this.code = normalized
         context.applicationContext
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY, this.code)
+            .putString(KEY, normalized)
             .commit()
     }
 }

@@ -72,6 +72,7 @@ Domain (domain/)
   ├─ Room: аккаунты, папки, письма, вложения, контакты, группы, подписи, заметки, календарь, задачи, цвета категорий, очередь правок писем
   ├─ DataStore: настройки UI, контрольные точки синхронизации и уведомлений, настройки обновлений
   ├─ data/security: PasswordStorage, EncryptedStoreProvider, AppLockManager, SecurityTelemetry
+  ├─ AppLanguageCode: синхронный кэш языка UI для Toast вне Compose
   ├─ HttpClientProvider: общий OkHttp, TLS, mTLS, закрепление сертификатов, Rfc6125HostnameVerifier
   ├─ FileProvider + интеграция с MediaStore/Downloads
   └─ Glance-виджет + динамические ярлыки Android и deep link'и
@@ -176,7 +177,7 @@ com.dedovmosol.iwomail/
 │   │   ├── LockScreen.kt — разблокировка паролем/отпечатком
 │   │   ├── EmailListScreen.kt / EmailDetailScreen.kt / ComposeScreen.kt / ComposeUtils.kt
 │   │   ├── ContactsScreen.kt / CalendarScreen.kt / NotesScreen.kt / TasksScreen.kt
-│   │   ├── SettingsScreen.kt (корень настроек) / SettingsScaffold.kt
+│   │   ├── SettingsScreen.kt (корень) / SettingsScaffold.kt / SettingsCopy.kt / SettingsDialogs.kt
 │   │   ├── SettingsAccountsScreen.kt / SettingsMailScreen.kt (почта + уведомления) / SettingsSecurityScreen.kt
 │   │   ├── MailSettingsSection.kt / MailAlertsSettingsSection.kt
 │   │   ├── AccountSettingsScreen.kt / PersonalizationScreen.kt / SyncCleanupScreen.kt
@@ -505,9 +506,9 @@ HTML тел писем очищается перед загрузкой в `WebV
 
 ### Хранение паролей
 
-Пароли хранит `data/security/PasswordStorage` через `EncryptedSharedPreferences` (ключи AES256-SIV, значения AES256-GCM, мастер-ключ в Android Keystore), которое создаёт `EncryptedStoreProvider`. Если Keystore недоступен или повреждён, провайдер переключается на `ObfuscatedSharedPreferences`: значения XOR-ятся с ключом, выведенным PBKDF2-HMAC-SHA256 (10 000 итераций, статическая соль) из `ANDROID_ID`. Это обфускация, а не шифрование. Переключение фиксирует `SecurityTelemetry` и один раз показывает пользователю тост. Режим fail-closed (`SecurityTelemetry.setFailClosedMode`, отказ сохранять пароли в запасное хранилище) есть в коде, но переключателя в настройках нет, поэтому он выключен. Массивы символов паролей обнуляются (`fill('\u0000')`) после использования в `HttpClientProvider`.
+Пароли хранит `data/security/PasswordStorage` через `EncryptedSharedPreferences` (ключи AES256-SIV, значения AES256-GCM, мастер-ключ в Android Keystore), которое создаёт `EncryptedStoreProvider`. Если Keystore недоступен или повреждён, провайдер переключается на `ObfuscatedSharedPreferences`: значения XOR-ятся с ключом, выведенным PBKDF2-HMAC-SHA256 (10 000 итераций, статическая соль) из `ANDROID_ID`. Это обфускация, а не шифрование. `SecurityTelemetry` пишет журнал деградации (это не текущий бэкенд). Живой бэкенд — `PasswordStorage.isUsingInsecureStorage()` и `AppLockManager.isUsingInsecureStorage()`. Один Toast на языке `AppLanguageCode` (кэш читается в `Application` до `AppLockManager.init`). Если шифрование упало, в «Безопасности» есть переключатель fail-closed (по умолчанию выкл.): не писать новые пароли ящиков и пароль блокировки в обфускацию. Новый ящик при отказе записи откатывается (`FAIL_CLOSED`). Массивы символов паролей обнуляются (`fill('\u0000')`) после использования в `HttpClientProvider`.
 
-Пароль блокировки приложения (`AppLockManager`) хранится только как хеш PBKDF2-HMAC-SHA256 (600 000 итераций, случайная соль 16 байт, формат `v1:iterations:b64salt:b64hash`, сравнение за постоянное время). Разблокировка отпечатком использует `BiometricPrompt` (`BIOMETRIC_WEAK`), поэтому `MainActivity` наследует `FragmentActivity`.
+Пароль блокировки приложения (`AppLockManager`) хранится только как хеш PBKDF2-HMAC-SHA256 (600 000 итераций, случайная соль 16 байт, формат `v1:iterations:b64salt:b64hash`, сравнение за постоянное время) в том же `EncryptedStoreProvider`. `setPassword` уважает fail-closed. Разблокировка отпечатком использует `BiometricPrompt` (`BIOMETRIC_WEAK`), поэтому `MainActivity` наследует `FragmentActivity`. Настройки: корень `SettingsScreen` (карточки `SettingsGroup` / `SettingsHubRow`), разделы почты, уведомлений, персонализации, безопасности, «О приложении» (`SettingsScrollScaffold` с `footer` для пасхалки, не `Modifier.weight` внутри `verticalScroll`).
 
 ---
 
@@ -687,7 +688,8 @@ Unit-тесты запускаются командой `./gradlew testDebugUnit
 | `docs/CHANGELOG_RU.md` | История изменений на русском |
 | `docs/CHANGELOG_EN.md` | История изменений на английском |
 | `docs/PRIVACY_POLICY_RU.md` / `PRIVACY_POLICY_EN.md` | Политика конфиденциальности, в приложении по языку UI |
-| `docs/SECURITY.md` | Политика сообщения об уязвимостях и модель угроз |
+| `docs/SECURITY.md` | Указатель: куда писать о уязвимости (GitHub читает этот файл) |
+| `docs/SECURITY_RU.md` / `SECURITY_EN.md` | Полная политика и модель угроз |
 | `docs/XMLPULLPARSER_MIGRATION_PLAN.md` | План миграции разбора XML на XmlPullParser |
 
 ---

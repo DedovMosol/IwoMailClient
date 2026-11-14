@@ -210,8 +210,8 @@ Background
   <a href="docs/ARCHITECTURE_EN.md"><img alt="Architecture project EN detailed" src="https://img.shields.io/badge/Architecture-EN_detailed-FB8C00"></a>
 </p>
 <p align="center">
-  <a href="docs/SECURITY.md"><img alt="Модель безопасности" src="https://img.shields.io/badge/Security-6F42C1"></a>
-  <a href="docs/SECURITY.md#reporting-a-vulnerability"><img alt="Сообщить об уязвимости" src="https://img.shields.io/badge/Report_a_vulnerability-D73A49"></a>
+  <a href="docs/SECURITY_RU.md"><img alt="Безопасность RU" src="https://img.shields.io/badge/Безопасность-RU-6F42C1"></a>
+  <a href="docs/SECURITY_EN.md"><img alt="Security EN" src="https://img.shields.io/badge/Security-EN-6F42C1"></a>
   <a href="docs/XMLPULLPARSER_MIGRATION_PLAN.md"><img alt="XML parser plan" src="https://img.shields.io/badge/XML_parser-plan-6A737D"></a>
 </p>
 <p align="center">

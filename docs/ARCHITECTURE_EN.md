@@ -72,6 +72,7 @@ Persistence / system layer
   ├─ Room: accounts, folders, emails, attachments, contacts, groups, signatures, notes, calendar, tasks, category colors, email change queue
   ├─ DataStore: UI settings, sync checkpoints, notification checkpoints, update settings
   ├─ data/security: PasswordStorage, EncryptedStoreProvider, AppLockManager, SecurityTelemetry
+  ├─ AppLanguageCode: synchronous UI language cache (startup toasts, before DataStore collect)
   ├─ HttpClientProvider: shared OkHttp, TLS, mTLS, certificate pinning, Rfc6125HostnameVerifier
   ├─ FileProvider + MediaStore/Downloads integration
   └─ Glance widget + dynamic Android shortcuts and deep links
@@ -176,7 +177,7 @@ com.dedovmosol.iwomail/
 │   │   ├── LockScreen.kt — unlock with password/fingerprint
 │   │   ├── EmailListScreen.kt / EmailDetailScreen.kt / ComposeScreen.kt / ComposeUtils.kt
 │   │   ├── ContactsScreen.kt / CalendarScreen.kt / NotesScreen.kt / TasksScreen.kt
-│   │   ├── SettingsScreen.kt (settings root) / SettingsScaffold.kt
+│   │   ├── SettingsScreen.kt (root) / SettingsScaffold.kt / SettingsCopy.kt / SettingsDialogs.kt
 │   │   ├── SettingsAccountsScreen.kt / SettingsMailScreen.kt (mail + notifications) / SettingsSecurityScreen.kt
 │   │   ├── MailSettingsSection.kt / MailAlertsSettingsSection.kt
 │   │   ├── AccountSettingsScreen.kt / PersonalizationScreen.kt / SyncCleanupScreen.kt
@@ -504,9 +505,9 @@ The `Subject` header is encoded as an RFC 2047 encoded-word and, when long, is f
 
 ### Password storage
 
-Passwords are persisted by `data/security/PasswordStorage` through `EncryptedSharedPreferences` (keys AES256-SIV, values AES256-GCM, master key in Android Keystore), created by `EncryptedStoreProvider`. When Keystore is unavailable or corrupted, the provider falls back to `ObfuscatedSharedPreferences`: values are XOR-ed with a key derived by PBKDF2-HMAC-SHA256 (10 000 iterations, static salt) from `ANDROID_ID`. This is obfuscation, not encryption. The fallback is recorded by `SecurityTelemetry` and shown to the user once as a toast. A fail-closed mode (`SecurityTelemetry.setFailClosedMode`, which refuses to save passwords to the fallback) exists in the code but has no settings switch, so it is off. Password char arrays are zeroed (`fill('\u0000')`) after use in `HttpClientProvider`.
+Passwords are persisted by `data/security/PasswordStorage` through `EncryptedSharedPreferences` (keys AES256-SIV, values AES256-GCM, master key in Android Keystore), created by `EncryptedStoreProvider`. When Keystore is unavailable or corrupted, the provider falls back to `ObfuscatedSharedPreferences`: values are XOR-ed with a key derived by PBKDF2-HMAC-SHA256 (10 000 iterations, static salt) from `ANDROID_ID`. This is obfuscation, not encryption. `SecurityTelemetry` logs the fallback (that flag is a journal, not the live backend). The live backend is `PasswordStorage.isUsingInsecureStorage()` and `AppLockManager.isUsingInsecureStorage()`. A one-time toast uses `AppLanguageCode` (loaded in `Application` before `AppLockManager.init`). When encryption is down, Security settings show a fail-closed switch (off by default): do not write new mailbox passwords or the app-lock password to obfuscation. A new mailbox that cannot store its password is rolled back (`FAIL_CLOSED`). Password char arrays are zeroed (`fill('\u0000')`) after use in `HttpClientProvider`.
 
-The app-lock password (`AppLockManager`) is stored only as a PBKDF2-HMAC-SHA256 hash (600 000 iterations, 16-byte random salt, format `v1:iterations:b64salt:b64hash`, constant-time comparison). Fingerprint unlock uses `BiometricPrompt` (`BIOMETRIC_WEAK`), which is why `MainActivity` extends `FragmentActivity`.
+The app-lock password (`AppLockManager`) is stored only as a PBKDF2-HMAC-SHA256 hash (600 000 iterations, 16-byte random salt, format `v1:iterations:b64salt:b64hash`, constant-time comparison) in the same `EncryptedStoreProvider`. `setPassword` honours fail-closed. Fingerprint unlock uses `BiometricPrompt` (`BIOMETRIC_WEAK`), which is why `MainActivity` extends `FragmentActivity`. Settings: hub `SettingsScreen` (`SettingsGroup` / `SettingsHubRow` cards), mail, notifications, personalization, security, About (`SettingsScrollScaffold` with a `footer` slot for the easter egg, not `Modifier.weight` inside `verticalScroll`).
 
 ---
 
@@ -686,7 +687,8 @@ Unit tests are run with `./gradlew testDebugUnitTest` (the same command runs in 
 | `docs/CHANGELOG_RU.md` | Changelog in Russian |
 | `docs/CHANGELOG_EN.md` | Changelog in English |
 | `docs/PRIVACY_POLICY_EN.md` / `PRIVACY_POLICY_RU.md` | Privacy policy, app opens the UI language |
-| `docs/SECURITY.md` | Vulnerability disclosure and threat model |
+| `docs/SECURITY.md` | Index: how to report (GitHub reads this file) |
+| `docs/SECURITY_EN.md` / `SECURITY_RU.md` | Full policy and threat model |
 | `docs/XMLPULLPARSER_MIGRATION_PLAN.md` | Plan for migrating XML parsing to XmlPullParser |
 
 ---

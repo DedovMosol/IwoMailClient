@@ -33,5 +33,9 @@ class AppLanguageCodeTest {
         assertThat(AppLanguageCode.isRussian()).isTrue()
         AppLanguageCode.load(context)
         assertThat(AppLanguageCode.isRussian()).isFalse()
+        AppLanguageCode.persist(context, "en")
+        AppLanguageCode.set("ru")
+        AppLanguageCode.load(context)
+        assertThat(AppLanguageCode.isRussian()).isFalse()
     }
 }

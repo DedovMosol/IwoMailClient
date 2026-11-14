@@ -4,6 +4,9 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Fail-closed and security docs RU/EN (2026-11-15)
+- When Keystore is down, Security shows a fail-closed switch (off by default): do not write mailbox passwords or the app-lock password to obfuscation. A new mailbox without a secret is rolled back (`FAIL_CLOSED`). Toast uses `AppLanguageCode` (cached before `AppLockManager.init`). Tests: `AccountRepositoryFailClosedTest`, `PasswordStorageTest`, `AppLockManagerTest`, `AppLanguageCodeTest`
+- Security policy: `docs/SECURITY_EN.md` and `docs/SECURITY_RU.md`, `docs/SECURITY.md` is the GitHub index
 ### Settings hub: cards, taller rows, icons in circles (2026-11-15)
 - Settings root: groups on `surfaceContainerLow`, rows from 72 dp, `titleMedium`, 24 dp icon in a 48 dp circle. Every hub row has supporting text. Section switches use a 40 dp circle. Same `SettingsHubRow` / `SettingsSwitchRow`
 ### Full resync does not wipe an offline move (2026-11-15)

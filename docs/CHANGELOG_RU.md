@@ -4,6 +4,9 @@
 Версия: MAJOR.MINOR.PATCH + буква пререлиза (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Fail-closed и документация безопасности RU/EN (15.11.2026)
+- При деградации Keystore в «Безопасности» переключатель fail-closed (по умолчанию выкл.): не писать пароли ящиков и пароль блокировки в обфускацию. Новый ящик без секрета откатывается (`FAIL_CLOSED`). Toast на языке `AppLanguageCode` (кэш до `AppLockManager.init`). Тесты: `AccountRepositoryFailClosedTest`, `PasswordStorageTest`, `AppLockManagerTest`, `AppLanguageCodeTest`
+- Политика безопасности: `docs/SECURITY_RU.md` и `docs/SECURITY_EN.md`, `docs/SECURITY.md` — указатель для GitHub
 ### Корень настроек: карточки, крупные строки, иконки в круге (15.11.2026)
 - Хаб настроек: группы в `surfaceContainerLow`, строки от 72 dp, `titleMedium`, иконка 24 dp в круге 48 dp. У каждого пункта подпись. Свитчи в разделах — круг 40 dp. Тот же `SettingsHubRow` / `SettingsSwitchRow`
 ### Full resync не стирает офлайн-перенос (15.11.2026)
