@@ -11,6 +11,7 @@ import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.onSuccessResult
 import com.dedovmosol.iwomail.util.stripHtml
 import com.dedovmosol.iwomail.widget.updateMailWidget
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import java.util.Locale
@@ -829,6 +830,11 @@ class EmailOperationsService(
 
         val items = triples.map { it.second to it.third }
         if (items.first().second == targetFolder.serverId) {
+            val alreadyThere = resolvedEmailIds.all { emailDao.getEmail(it)?.folderId == targetFolderId }
+            if (alreadyThere) {
+                resolvedEmailIds.forEach { pendingChanges.clearMove(it) }
+                return EasResult.Success(resolvedEmailIds.size)
+            }
             return EasResult.Error("ALREADY_IN_FOLDER")
         }
 
@@ -852,7 +858,16 @@ class EmailOperationsService(
             return EasResult.Success(resolvedEmailIds.size)
         }
 
-        var result = client.moveItems(items, targetFolder.serverId)
+        var result: EasResult<Map<String, String>>
+        try {
+            result = client.moveItems(items, targetFolder.serverId)
+        } catch (e: CancellationException) {
+            com.dedovmosol.iwomail.sync.PendingMailChangesWorker.enqueue(context)
+            throw e
+        } catch (e: Exception) {
+            com.dedovmosol.iwomail.sync.PendingMailChangesWorker.enqueue(context)
+            return EasResult.Success(resolvedEmailIds.size)
+        }
 
         // КРИТИЧНО: Если все MoveItems отклонены (status=1 — устаревшие serverId),
         // пересинхронизируем исходную папку и повторяем с актуальными serverId.

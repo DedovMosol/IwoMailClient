@@ -82,6 +82,21 @@ class EmailListViewModelTest {
     }
 
     @Test
+    fun `opening inbox syncs incrementally without the pull-to-refresh spinner`() = runTest(dispatcher) {
+        val vm = createViewModel()
+        advanceUntilIdle()
+        coVerify { mailRepo.syncEmails(ACCOUNT_ID, INBOX_ID, false) }
+        assertThat(vm.uiState.value.isRefreshing).isFalse()
+    }
+
+    @Test
+    fun `favorites does not auto-sync a folder`() = runTest(dispatcher) {
+        createViewModel(folderId = "favorites")
+        advanceUntilIdle()
+        coVerify(exactly = 0) { mailRepo.syncEmails(any(), any(), any()) }
+    }
+
+    @Test
     fun `initial filter opens the filter panel and sets state`() = runTest(dispatcher) {
         val vm = createViewModel(initialFilter = MailFilter.UNREAD, initialDateFilter = EmailDateFilter.TODAY)
         val s = vm.uiState.value
@@ -115,13 +130,6 @@ class EmailListViewModelTest {
         createViewModel(folderId = DRAFTS_ID)
         advanceUntilIdle()
         coVerify(exactly = 1) { mailRepo.syncEmails(ACCOUNT_ID, DRAFTS_ID, false) }
-    }
-
-    @Test
-    fun `inbox folder does not auto-sync`() = runTest(dispatcher) {
-        createViewModel()
-        advanceUntilIdle()
-        coVerify(exactly = 0) { mailRepo.syncEmails(any(), any(), any()) }
     }
 
     // ===================== sync / refresh =====================
