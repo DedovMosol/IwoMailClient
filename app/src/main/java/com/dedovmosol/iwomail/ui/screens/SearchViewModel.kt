@@ -42,7 +42,8 @@ data class SearchUiState(
     val isSearching: Boolean = false,
     val selectedIds: Set<String> = emptySet(),
     /** Папки «Отправленные» и «Черновики»: в поиске строка показывает Кому, не From. */
-    val recipientFolderIds: Set<String> = emptySet()
+    val recipientFolderIds: Set<String> = emptySet(),
+    val pendingRemovalIds: Set<String> = emptySet()
 )
 
 /**
@@ -167,6 +168,7 @@ class SearchViewModel(
     fun deleteSelected() {
         val ids = _uiState.value.selectedIds.toList()
         if (ids.isEmpty()) return
+        _uiState.update { it.copy(pendingRemovalIds = it.pendingRemovalIds + ids) }
         viewModelScope.launch {
             try {
                 sendEvent(SearchEvent.PlayDeleteSound)
@@ -176,20 +178,26 @@ class SearchViewModel(
                         _uiState.update { state ->
                             state.copy(
                                 allResults = state.allResults.filter { it.id !in ids },
-                                selectedIds = emptySet()
+                                selectedIds = emptySet(),
+                                pendingRemovalIds = state.pendingRemovalIds - ids.toSet()
                             )
                         }
                     }
                     is EasResult.Error -> {
                         sendEvent(SearchEvent.ShowError(result.message))
-                        _uiState.update { it.copy(selectedIds = emptySet()) }
+                        _uiState.update {
+                            it.copy(selectedIds = emptySet(), pendingRemovalIds = it.pendingRemovalIds - ids.toSet())
+                        }
                     }
                 }
             } catch (e: CancellationException) {
+                _uiState.update { it.copy(pendingRemovalIds = it.pendingRemovalIds - ids.toSet()) }
                 throw e
             } catch (e: Exception) {
                 sendEvent(SearchEvent.ShowError(e.message ?: "Unknown error"))
-                _uiState.update { it.copy(selectedIds = emptySet()) }
+                _uiState.update {
+                    it.copy(selectedIds = emptySet(), pendingRemovalIds = it.pendingRemovalIds - ids.toSet())
+                }
             }
         }
     }

@@ -132,7 +132,10 @@ fun EmailListScreen(
     val isTodayAll = viewModel.isTodayAll
     val folder = uiState.folder
     val folders = uiState.folders
-    val displayEmails = uiState.emails
+    val displayEmails = remember(uiState.emails, uiState.pendingRemovalIds) {
+        val pending = uiState.pendingRemovalIds
+        if (pending.isEmpty()) uiState.emails else uiState.emails.filter { it.id !in pending }
+    }
     val mailFilter = uiState.mailFilter
     val dateFilter = uiState.dateFilter
     val showFilters = uiState.showFilters

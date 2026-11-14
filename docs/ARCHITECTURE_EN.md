@@ -282,7 +282,7 @@ MIME body extraction (`MimeHtmlProcessor.extractHtmlFromMime`) splits the messag
 1. `FolderSyncService` syncs folders and serializes folder operations per account (a `Mutex` per account).
 2. `EmailSyncService` syncs system and user folders with full and incremental strategies.
 3. `MailRepository` exposes the UI-facing methods and delegates the heavy logic to the services.
-4. `EmailOperationsService` handles move, delete, permanent delete, mark read, flag and read-receipt flows (Exchange sends the read receipt itself when the message is marked read; declining uses EWS `SuppressReadReceipt` before marking read).
+4. `EmailOperationsService` handles move, delete, permanent delete, mark read, flag and read-receipt flows (Exchange sends the read receipt itself when the message is marked read, declining uses EWS `SuppressReadReceipt` before marking read). A move (including to trash) is EAS MoveItems first, a folder Sync only on `MOVEITEMS_ALL_FAILED` / Status=1 (EAS 12.1, Exchange 2007 SP1).
 5. `OutboxWorker` retries offline outgoing messages when the network returns. Each queued message carries a stable `ClientId`/`Message-ID` reused across retries: on EAS 14+ the server discards a retry with the same `ClientId` after a lost response ([MS-ASCMD] `SendMail`); on Exchange 2007 (EAS 12.1, raw-MIME `SendMail` without `ClientId`) the stable Message-ID is only a best-effort identity.
 
 #### One EAS Sync request per folder (`FolderSyncGate`)

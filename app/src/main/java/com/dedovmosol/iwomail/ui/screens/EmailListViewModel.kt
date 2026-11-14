@@ -56,7 +56,9 @@ data class EmailListUiState(
     val showFilters: Boolean = false,
     val selectedIds: Set<String> = emptySet(),
     val isRefreshing: Boolean = false,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    /** Письма, которые уже убираем с экрана, пока MoveItems ещё идёт. */
+    val pendingRemovalIds: Set<String> = emptySet()
 ) {
     val isSelectionMode: Boolean get() = selectedIds.isNotEmpty()
 }
@@ -141,7 +143,13 @@ class EmailListViewModel(
                 .collectLatest { id ->
                     draftsSynced = false
                     _uiState.update {
-                        it.copy(accountId = id, selectedIds = emptySet(), folder = null, folders = emptyList())
+                        it.copy(
+                            accountId = id,
+                            selectedIds = emptySet(),
+                            pendingRemovalIds = emptySet(),
+                            folder = null,
+                            folders = emptyList()
+                        )
                     }
 
                     val emailsFlow = when {
@@ -166,12 +174,16 @@ class EmailListViewModel(
                                 val cleanedSelection =
                                     if (s.selectedIds.isEmpty() || s.selectedIds.all { it in existingIds }) s.selectedIds
                                     else s.selectedIds.intersect(existingIds)
+                                val stillPending =
+                                    if (s.pendingRemovalIds.isEmpty()) s.pendingRemovalIds
+                                    else s.pendingRemovalIds.filterTo(HashSet()) { it in existingIds }
                                 s.copy(
                                     emails = emails,
                                     peerEmails = peer,
                                     folders = folders,
                                     folder = folder,
-                                    selectedIds = cleanedSelection
+                                    selectedIds = cleanedSelection,
+                                    pendingRemovalIds = stillPending
                                 )
                             }
                             maybeAutoSyncDrafts(folder)
@@ -266,6 +278,16 @@ class EmailListViewModel(
         _uiState.update { it.copy(selectedIds = emptySet()) }
     }
 
+    private fun hideOutgoing(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        _uiState.update { it.copy(pendingRemovalIds = it.pendingRemovalIds + ids) }
+    }
+
+    private fun unhideOutgoing(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        _uiState.update { it.copy(pendingRemovalIds = it.pendingRemovalIds - ids.toSet()) }
+    }
+
     /** Выделить все [filteredIds] или снять выделение, если уже выбраны ровно они. */
     fun selectAll(filteredIds: List<String>) {
         _uiState.update {
@@ -280,16 +302,22 @@ class EmailListViewModel(
     fun deleteSelectedToTrash() {
         val ids = _uiState.value.selectedIds.toList()
         if (ids.isEmpty()) return
+        hideOutgoing(ids)
         viewModelScope.launch {
             try {
                 val result = withContext(ioDispatcher) { mailRepo.moveToTrash(ids) }
                 when (result) {
                     is EasResult.Success -> sendEvent(EmailListEvent.MovedToTrash(result.data))
-                    is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+                    is EasResult.Error -> {
+                        unhideOutgoing(ids)
+                        sendEvent(EmailListEvent.Error(result.message))
+                    }
                 }
             } catch (e: CancellationException) {
+                unhideOutgoing(ids)
                 throw e
             } catch (e: Exception) {
+                unhideOutgoing(ids)
                 sendEvent(EmailListEvent.Error(e.message ?: "Unknown error"))
             } finally {
                 clearSelection()
@@ -400,11 +428,16 @@ class EmailListViewModel(
             try {
                 when (action) {
                     com.dedovmosol.iwomail.domain.SwipeAction.NONE -> Unit
-                    com.dedovmosol.iwomail.domain.SwipeAction.DELETE ->
+                    com.dedovmosol.iwomail.domain.SwipeAction.DELETE -> {
+                        hideOutgoing(listOf(id))
                         when (val result = withContext(ioDispatcher) { mailRepo.moveToTrash(listOf(id)) }) {
                             is EasResult.Success -> sendEvent(EmailListEvent.MovedToTrash(result.data))
-                            is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+                            is EasResult.Error -> {
+                                unhideOutgoing(listOf(id))
+                                sendEvent(EmailListEvent.Error(result.message))
+                            }
                         }
+                    }
                     com.dedovmosol.iwomail.domain.SwipeAction.READ ->
                         when (val result = withContext(ioDispatcher) { mailRepo.markAsRead(id, !email.read) }) {
                             is EasResult.Success -> {}
@@ -417,8 +450,10 @@ class EmailListViewModel(
                         }
                 }
             } catch (e: CancellationException) {
+                unhideOutgoing(listOf(id))
                 throw e
             } catch (e: Exception) {
+                unhideOutgoing(listOf(id))
                 sendEvent(EmailListEvent.Error(e.message ?: "Unknown error"))
             }
         }
@@ -427,16 +462,22 @@ class EmailListViewModel(
     fun moveSelectedTo(targetFolderId: String) {
         val ids = _uiState.value.selectedIds.toList()
         if (ids.isEmpty()) return
+        hideOutgoing(ids)
         viewModelScope.launch {
             try {
                 val result = withContext(ioDispatcher) { mailRepo.moveEmails(ids, targetFolderId) }
                 when (result) {
                     is EasResult.Success -> sendEvent(EmailListEvent.Moved(result.data))
-                    is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+                    is EasResult.Error -> {
+                        unhideOutgoing(ids)
+                        sendEvent(EmailListEvent.Error(result.message))
+                    }
                 }
             } catch (e: CancellationException) {
+                unhideOutgoing(ids)
                 throw e
             } catch (e: Exception) {
+                unhideOutgoing(ids)
                 sendEvent(EmailListEvent.Error(e.message ?: "Unknown error"))
             } finally {
                 clearSelection()
