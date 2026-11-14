@@ -846,7 +846,7 @@ class EmailOperationsService(
         //   status=1 (Invalid source) = письмо не существует на сервере → ghost, удаляем локально.
         //   status=2,4,5,7 = письмо СУЩЕСТВУЕТ, но move невозможен → НЕ удаляем.
         var ghostDeletedCount = 0
-        if (result is EasResult.Error && moveItemsNeedsSrcSync(result.message)) {
+        if (result is EasResult.Error && moveItemsAllFailed(result.message)) {
             val allResults = mutableMapOf<String, String>() // srcServerId → dstServerId
             val ghostEmailIds = mutableListOf<String>()     // emailIds для локальной очистки (только status=1)
             val ghostFolderIds = mutableSetOf<String>()     // folderIds для обновления счётчиков

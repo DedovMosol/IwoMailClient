@@ -307,7 +307,11 @@ class EmailListViewModel(
             try {
                 val result = withContext(ioDispatcher) { mailRepo.moveToTrash(ids) }
                 when (result) {
-                    is EasResult.Success -> sendEvent(EmailListEvent.MovedToTrash(result.data))
+                    is EasResult.Success -> {
+                        sendEvent(EmailListEvent.MovedToTrash(result.data))
+                        // 0 или часть: иначе pending прячет письма навсегда, Room их не убрал.
+                        if (result.data < ids.size) unhideOutgoing(ids)
+                    }
                     is EasResult.Error -> {
                         unhideOutgoing(ids)
                         sendEvent(EmailListEvent.Error(result.message))
@@ -431,7 +435,10 @@ class EmailListViewModel(
                     com.dedovmosol.iwomail.domain.SwipeAction.DELETE -> {
                         hideOutgoing(listOf(id))
                         when (val result = withContext(ioDispatcher) { mailRepo.moveToTrash(listOf(id)) }) {
-                            is EasResult.Success -> sendEvent(EmailListEvent.MovedToTrash(result.data))
+                            is EasResult.Success -> {
+                                sendEvent(EmailListEvent.MovedToTrash(result.data))
+                                if (result.data < 1) unhideOutgoing(listOf(id))
+                            }
                             is EasResult.Error -> {
                                 unhideOutgoing(listOf(id))
                                 sendEvent(EmailListEvent.Error(result.message))
@@ -467,7 +474,10 @@ class EmailListViewModel(
             try {
                 val result = withContext(ioDispatcher) { mailRepo.moveEmails(ids, targetFolderId) }
                 when (result) {
-                    is EasResult.Success -> sendEvent(EmailListEvent.Moved(result.data))
+                    is EasResult.Success -> {
+                        sendEvent(EmailListEvent.Moved(result.data))
+                        if (result.data < ids.size) unhideOutgoing(ids)
+                    }
                     is EasResult.Error -> {
                         unhideOutgoing(ids)
                         sendEvent(EmailListEvent.Error(result.message))
