@@ -72,52 +72,58 @@ fun SettingsScreen(
         }
     ) {
         item {
-            SettingsHubRow(
-                title = Strings.accounts,
-                subtitle = accountsSubtitle,
-                icon = AppIcons.Person,
-                onClick = onNavigateToAccounts
-            )
+            SettingsGroup {
+                SettingsHubRow(
+                    title = Strings.accounts,
+                    subtitle = accountsSubtitle,
+                    icon = AppIcons.Person,
+                    onClick = onNavigateToAccounts
+                )
+            }
         }
         item {
-            SettingsHubRow(
-                title = Strings.mailSection,
-                subtitle = null,
-                icon = AppIcons.Email,
-                onClick = onNavigateToMail
-            )
+            SettingsGroup {
+                SettingsHubRow(
+                    title = Strings.mailSection,
+                    subtitle = Strings.settingsHubMailDesc,
+                    icon = AppIcons.Email,
+                    onClick = onNavigateToMail,
+                    showDivider = true
+                )
+                SettingsHubRow(
+                    title = Strings.mailAlertsSection,
+                    subtitle = Strings.settingsHubAlertsDesc,
+                    icon = AppIcons.Notifications,
+                    onClick = onNavigateToNotifications
+                )
+            }
         }
         item {
-            SettingsHubRow(
-                title = Strings.mailAlertsSection,
-                subtitle = null,
-                icon = AppIcons.Notifications,
-                onClick = onNavigateToNotifications
-            )
+            SettingsGroup {
+                SettingsHubRow(
+                    title = Strings.appearance,
+                    subtitle = Strings.settingsHubAppearanceDesc,
+                    icon = AppIcons.Palette,
+                    onClick = onNavigateToPersonalization,
+                    showDivider = true
+                )
+                SettingsHubRow(
+                    title = Strings.appLockSection,
+                    subtitle = Strings.appLockTitle,
+                    icon = AppIcons.Lock,
+                    onClick = onNavigateToSecurity
+                )
+            }
         }
         item {
-            SettingsHubRow(
-                title = Strings.appearance,
-                subtitle = null,
-                icon = AppIcons.Palette,
-                onClick = onNavigateToPersonalization
-            )
-        }
-        item {
-            SettingsHubRow(
-                title = Strings.appLockSection,
-                subtitle = Strings.appLockTitle,
-                icon = AppIcons.Lock,
-                onClick = onNavigateToSecurity
-            )
-        }
-        item {
-            SettingsHubRow(
-                title = Strings.aboutApp,
-                subtitle = null,
-                icon = AppIcons.Info,
-                onClick = onNavigateToAbout
-            )
+            SettingsGroup {
+                SettingsHubRow(
+                    title = Strings.aboutApp,
+                    subtitle = Strings.settingsHubAboutDesc,
+                    icon = AppIcons.Info,
+                    onClick = onNavigateToAbout
+                )
+            }
         }
     }
 }

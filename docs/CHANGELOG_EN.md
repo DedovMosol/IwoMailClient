@@ -4,6 +4,8 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Settings hub: cards, taller rows, icons in circles (2026-11-15)
+- Settings root: groups on `surfaceContainerLow`, rows from 72 dp, `titleMedium`, 24 dp icon in a 48 dp circle. Every hub row has supporting text. Section switches use a 40 dp circle. Same `SettingsHubRow` / `SettingsSwitchRow`
 ### Full resync does not wipe an offline move (2026-11-15)
 - After SyncKey=0 (EAS 12.1 Status 3/12) trash/Sent/drafts reconcile no longer deletes a `pending.move` row. An Inbox Add with a new ServerId does not duplicate the message: the trash row is retargeted and an existing inbox row with that id is removed (otherwise MoveItems Status=1 and ghost-delete). Tests: `EmailReconcileTest`
 ### README docs badges and quiet sync of user folders (2026-11-15)
