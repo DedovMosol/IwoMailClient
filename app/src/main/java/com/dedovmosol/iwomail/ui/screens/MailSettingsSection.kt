@@ -99,13 +99,13 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository, showHeader: B
         ListItem(
             headlineContent = { Text(Strings.swipeStart) },
             supportingContent = { Text(Strings.swipeActionName(swipes.first)) },
-            leadingContent = { Icon(AppIcons.SwapHoriz, null) },
+            leadingContent = { Icon(AppIcons.ChevronRight, null) },
             modifier = Modifier.clickable { choice = "start" }
         )
         ListItem(
             headlineContent = { Text(Strings.swipeEnd) },
             supportingContent = { Text(Strings.swipeActionName(swipes.second)) },
-            leadingContent = { Icon(AppIcons.SwapHoriz, null) },
+            leadingContent = { Icon(AppIcons.ChevronLeft, null) },
             modifier = Modifier.clickable { choice = "end" }
         )
     }

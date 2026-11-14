@@ -69,7 +69,9 @@ class TaskReminderReceiver : BroadcastReceiver() {
         // Intent для открытия приложения при клике
         val contentIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra("open_tasks", true)
+            putExtra(MainActivity.EXTRA_OPEN_TASKS, true)
+            putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, task.accountId)
+            putExtra(MainActivity.EXTRA_TASK_ID, task.id)
         }
         val safeHash = safeHashForId(task.id)
         val contentPendingIntent = PendingIntent.getActivity(

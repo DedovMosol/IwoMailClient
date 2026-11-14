@@ -74,7 +74,9 @@ enum class TaskFilter {
 @Composable
 fun TasksScreen(
     onBackClick: () -> Unit,
-    initialFilter: TaskFilter = TaskFilter.ALL
+    initialFilter: TaskFilter = TaskFilter.ALL,
+    initialTaskId: String? = null,
+    onInitialTaskConsumed: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
@@ -114,6 +116,23 @@ fun TasksScreen(
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
     var selectedTaskId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(initialTaskId, accountId, allTasks, deletedTasks, isSyncing, dataLoaded) {
+        val found = initialTaskId != null &&
+            (allTasks.any { it.id == initialTaskId } || deletedTasks.any { it.id == initialTaskId })
+        when (com.dedovmosol.iwomail.ui.navigation.notificationItemAction(
+            itemId = initialTaskId,
+            accountReady = accountId > 0,
+            found = found,
+            loadSettled = dataLoaded && !isSyncing
+        )) {
+            com.dedovmosol.iwomail.ui.navigation.NotificationItemAction.OPEN_AND_CONSUME -> {
+                selectedTaskId = initialTaskId
+                onInitialTaskConsumed()
+            }
+            com.dedovmosol.iwomail.ui.navigation.NotificationItemAction.CONSUME -> onInitialTaskConsumed()
+            com.dedovmosol.iwomail.ui.navigation.NotificationItemAction.WAIT -> Unit
+        }
+    }
     val selectedTask = remember(selectedTaskId, allTasks, deletedTasks) {
         selectedTaskId?.let { id -> allTasks.find { it.id == id } ?: deletedTasks.find { it.id == id } }
     }
