@@ -1,10 +1,10 @@
 package com.dedovmosol.iwomail.ui.screens
 
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.LocalLanguage
@@ -91,21 +91,24 @@ class SettingsHubUiTest {
     }
 
     @Test
-    fun `scroll scaffold keeps a weighted footer on screen`() {
+    fun `scroll scaffold pins footer to the bottom of the viewport`() {
         composeTestRule.setContent {
             CompositionLocalProvider(LocalLanguage provides AppLanguage.ENGLISH) {
                 ExchangeMailTheme(darkTheme = false, dynamicColor = false) {
-                    SettingsScrollScaffold(title = "About", onBackClick = {}) {
+                    SettingsScrollScaffold(
+                        title = "About",
+                        onBackClick = {},
+                        footer = { androidx.compose.material3.Text("footer") }
+                    ) {
                         androidx.compose.material3.Text("top")
-                        androidx.compose.foundation.layout.Spacer(
-                            Modifier.weight(1f)
-                        )
-                        androidx.compose.material3.Text("footer")
                     }
                 }
             }
         }
         composeTestRule.onNodeWithText("top").assertIsDisplayed()
         composeTestRule.onNodeWithText("footer").assertIsDisplayed()
+        val footerBottom = composeTestRule.onNodeWithText("footer").fetchSemanticsNode().boundsInRoot.bottom
+        val rootBottom = composeTestRule.onRoot().fetchSemanticsNode().boundsInRoot.bottom
+        assertThat(rootBottom - footerBottom).isAtMost(48f)
     }
 }

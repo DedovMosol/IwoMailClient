@@ -39,7 +39,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -100,21 +106,24 @@ internal fun SettingsPageScaffold(
 }
 
 /**
- * Тот же app bar, колонка на весь экран со скроллом.
- * [Modifier.weight] в контенте работает: подвал «О приложении» (пасхалка)
- * прижат вниз, пока карточек мало, и уезжает в скролл, когда их больше.
+ * Тот же app bar и скролл, что у разделов настроек.
+ * [footer] рисуется внизу экрана (пасхалка в «О приложении»): weight внутри
+ * verticalScroll не заполняет высоту, у скролла maxHeight = Infinity.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SettingsScrollScaffold(
     title: String,
     onBackClick: () -> Unit,
+    footer: @Composable () -> Unit = {},
     content: @Composable ColumnScope.() -> Unit
 ) {
     Scaffold(
         topBar = { SettingsTopBar(title, onBackClick) }
     ) { padding ->
         val scrollState = rememberScrollState()
+        val density = LocalDensity.current
+        var footerPx by remember { mutableIntStateOf(0) }
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -123,9 +132,19 @@ internal fun SettingsScrollScaffold(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(scrollState),
-                content = content
-            )
+                    .verticalScroll(scrollState)
+                    .padding(bottom = with(density) { footerPx.toDp() })
+            ) {
+                content()
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .onSizeChanged { footerPx = it.height }
+            ) {
+                footer()
+            }
             ScrollColumnScrollbar(scrollState)
         }
     }

@@ -6,7 +6,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -56,7 +55,48 @@ fun AboutScreen(
     var protocolTapCount by rememberSaveable { mutableIntStateOf(0) }
     var base64Revealed by rememberSaveable { mutableStateOf(persistedHintRevealed) }
 
-    SettingsScrollScaffold(title = Strings.aboutApp, onBackClick = onBackClick) {
+    SettingsScrollScaffold(
+        title = Strings.aboutApp,
+        onBackClick = onBackClick,
+        footer = {
+            if (easterFound || base64Revealed) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    val guitarRotation = com.dedovmosol.iwomail.ui.utils.rememberWobble(
+                        enabled = easterFound, amplitude = 8f, durationMs = 600
+                    )
+                    if (easterFound) {
+                        Text(
+                            text = "🎸",
+                            fontSize = 36.sp,
+                            modifier = Modifier
+                                .rotate(guitarRotation)
+                                .clickable { showEasterEgg = true }
+                        )
+                    } else {
+                        val base64Text = "SSB3YW50IG91dCwgdG8gbGl2ZSBteSBsaWZlIGFuZCB0byBiZSBmcmVl"
+                        Text(
+                            text = base64Text,
+                            fontSize = 8.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.combinedClickable(
+                                onClick = {},
+                                onLongClick = {
+                                    clipboardManager.setText(AnnotatedString(base64Text))
+                                    SafeToast.short(context, if (isRu) "Скопировано" else "Copied")
+                                }
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    ) {
         SettingsGroup {
             SettingsNavRow(
                 title = if (isRu) "Обзор" else "Overview",
@@ -104,43 +144,6 @@ fun AboutScreen(
                 trailingIcon = AppIcons.OpenInNew,
                 onClick = { uriHandler.openUri(com.dedovmosol.iwomail.ui.PrivacyPolicy.url(isRu)) }
             )
-        }
-
-        Spacer(modifier = Modifier.weight(1f))
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            val guitarRotation = com.dedovmosol.iwomail.ui.utils.rememberWobble(
-                enabled = easterFound, amplitude = 8f, durationMs = 600
-            )
-            if (easterFound) {
-                Text(
-                    text = "🎸",
-                    fontSize = 36.sp,
-                    modifier = Modifier
-                        .rotate(guitarRotation)
-                        .clickable { showEasterEgg = true }
-                )
-            } else if (base64Revealed) {
-                val base64Text = "SSB3YW50IG91dCwgdG8gbGl2ZSBteSBsaWZlIGFuZCB0byBiZSBmcmVl"
-                Text(
-                    text = base64Text,
-                    fontSize = 8.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.combinedClickable(
-                        onClick = {},
-                        onLongClick = {
-                            clipboardManager.setText(AnnotatedString(base64Text))
-                            SafeToast.short(context, if (isRu) "Скопировано" else "Copied")
-                        }
-                    )
-                )
-            }
         }
     }
 
