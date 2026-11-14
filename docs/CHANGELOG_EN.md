@@ -6,12 +6,12 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 ## v1.6.3b
 ### Permission prompts match the rest of the UI (2026-11-14)
 - **Before**: a custom `Dialog`+`Card` with a gradient strip, first-line indent and justified copy; the battery icon was used for both background work and exact alarms
-- **Now**: `ScaledAlertDialog`, same as language/settings. Background work uses the battery icon, exact alarms use the clock. No first-line indent. The once-per-install queue and the system notification prompt are unchanged: the Android 13+ system sheet cannot be restyled
+- **Now**: `ScaledAlertDialog`, same as language/settings. Background work uses the battery icon, exact alarms use the clock. No first-line indent; body text is full width (not a narrow centered column). The once-per-install queue and the system notification prompt are unchanged: the Android 13+ system sheet cannot be restyled
 - **Tests**: `AppPermissionDialogTest` — different prompts get different icons
 ### Onboarding: page enter matches Mail & notifications (2026-11-14)
 - **Before**: the pager precomposed the next slide (`beyondBoundsPageCount = 1`). Enter (`fade`/`scale`/`slide`) started on first composition and finished off-screen — Organizer, Settings, and the language/theme slides after the first opened with no appearance
-- **Why not hide the neighbor until currentPage**: the swipe preview would be blank
-- **Now**: enter when the slide is current or the gesture target (`targetPage`). Prefetch without a gesture stays hidden. Animations off — shown immediately, neighbor included. A slide already shown is not hidden: going back does not flash
+- **Why not hide the neighbor until currentPage or wait 100 ms**: the swipe preview would be blank
+- **Now**: enter when the slide is current or the gesture target (`targetPage`). Prefetch without a gesture stays hidden. No 100 ms pause: the neighbor is not a blank frame at the start of the swipe. Animations off — shown immediately, neighbor included. A slide already shown is not hidden: going back does not flash
 - **Tests**: `OnboardingPageEnterTest` — idle/prefetch/gesture target, animations off, already shown
 ### Selection haptics (2026-11-14)
 - **Before**: dragging a list and toggling items in selection used Compose `HapticFeedbackType.TextHandleMove` (text-cursor feedback). On many OEMs that is silent. Auto-scroll during a drag never vibrated
