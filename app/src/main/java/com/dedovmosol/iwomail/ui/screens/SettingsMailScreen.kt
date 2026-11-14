@@ -15,7 +15,7 @@ internal fun SettingsMailScreen(onBackClick: () -> Unit) {
     SettingsPageScaffold(title = Strings.mailSection, onBackClick = onBackClick) {
         item {
             SettingsGroup {
-                MailSettingsSection(settingsRepo, showHeader = false)
+                MailSettingsSection(settingsRepo)
             }
         }
     }
@@ -30,7 +30,7 @@ internal fun SettingsNotificationsScreen(onBackClick: () -> Unit) {
     SettingsPageScaffold(title = Strings.mailAlertsSection, onBackClick = onBackClick) {
         item {
             SettingsGroup {
-                MailAlertsSettingsSection(settingsRepo, accounts, showHeader = false)
+                MailAlertsSettingsSection(settingsRepo, accounts)
             }
         }
     }

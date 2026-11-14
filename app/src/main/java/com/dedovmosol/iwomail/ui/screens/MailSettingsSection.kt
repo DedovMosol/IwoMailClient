@@ -31,7 +31,7 @@ import kotlinx.coroutines.launch
 
 /** Настройки почты: картинки из интернета, фото из адресной книги, цепочки, отмена отправки, свайпы в списке писем. */
 @Composable
-internal fun MailSettingsSection(settingsRepo: SettingsRepository, showHeader: Boolean = true) {
+internal fun MailSettingsSection(settingsRepo: SettingsRepository) {
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val images by settingsRepo.remoteImagesPrefs.collectAsStateWithLifecycle(initialValue = null)
     val undoSeconds by settingsRepo.undoSendSeconds.collectAsStateWithLifecycle(initialValue = UndoSend.DEFAULT_SECONDS)
@@ -44,15 +44,6 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository, showHeader: B
     var choice by rememberSaveable { mutableStateOf<String?>(null) }
 
     Column {
-        if (showHeader) {
-            Text(
-                text = Strings.mailSection,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(16.dp)
-            )
-        }
-
         SettingsSwitchRow(
             title = Strings.remoteImagesSetting,
             description = Strings.remoteImagesSettingDesc,
@@ -98,13 +89,11 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository, showHeader: B
         SettingsNavRow(
             title = Strings.swipeStart,
             subtitle = Strings.swipeActionName(swipes.first),
-            icon = AppIcons.ChevronRight,
             onClick = { choice = "start" }
         )
         SettingsNavRow(
             title = Strings.swipeEnd,
             subtitle = Strings.swipeActionName(swipes.second),
-            icon = AppIcons.ChevronLeft,
             onClick = { choice = "end" }
         )
     }

@@ -23,11 +23,12 @@ fun SettingsScreen(
     val context = LocalContext.current
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val accounts by accountRepo.accounts.collectAsStateWithLifecycle(initialValue = emptyList())
-    val emails = accounts.map { it.email }
+    val accountCount = accounts.size
     val accountsSubtitle = settingsAccountsSubtitle(
-        emails = emails,
+        count = accountCount,
+        firstEmail = accounts.firstOrNull()?.email.orEmpty(),
         emptyLabel = Strings.addAccount,
-        countLabel = Strings.accountsCount(emails.size)
+        manyLabel = if (accountCount > 1) Strings.accountsCount(accountCount) else ""
     )
 
     SettingsPageScaffold(

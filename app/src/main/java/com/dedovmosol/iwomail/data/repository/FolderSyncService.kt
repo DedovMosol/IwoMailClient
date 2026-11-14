@@ -61,7 +61,7 @@ class FolderSyncService(
         val account = accountRepo.getAccount(accountId)
             ?: return EasResult.Error("Аккаунт не найден")
 
-        return when (AccountType.valueOf(account.accountType)) {
+        return when (AccountType.fromStored(account.accountType)) {
             AccountType.EXCHANGE -> syncFoldersEas(accountId, account)
             AccountType.IMAP -> syncFoldersImap(accountId)
             AccountType.POP3 -> syncFoldersPop3(accountId)
@@ -76,7 +76,7 @@ class FolderSyncService(
             val account = accountRepo.getAccount(accountId)
                 ?: return EasResult.Error("Аккаунт не найден")
 
-            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+            if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
                 return EasResult.Error("Создание папок поддерживается только для Exchange")
             }
 
@@ -119,7 +119,7 @@ class FolderSyncService(
             val account = accountRepo.getAccount(accountId)
                 ?: return EasResult.Error("Аккаунт не найден")
 
-            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+            if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
                 return EasResult.Error("Удаление папок поддерживается только для Exchange")
             }
 
@@ -153,7 +153,7 @@ class FolderSyncService(
             val account = accountRepo.getAccount(accountId)
                 ?: return EasResult.Error("Аккаунт не найден")
 
-            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+            if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
                 return EasResult.Error("Переименование папок поддерживается только для Exchange")
             }
 

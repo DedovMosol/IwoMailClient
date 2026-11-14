@@ -219,11 +219,11 @@ class EmailSyncService(
             ?: return EasResult.Error("Аккаунт не найден")
 
         val folder = folderDao.getFolder(folderId)
-        if (folder?.type == FolderType.DRAFTS && AccountType.valueOf(account.accountType) == AccountType.EXCHANGE) {
+        if (folder?.type == FolderType.DRAFTS && AccountType.fromStored(account.accountType) == AccountType.EXCHANGE) {
             return syncDraftsFull(accountId, folderId, skipRecentEditCheck)
         }
 
-        return when (AccountType.valueOf(account.accountType)) {
+        return when (AccountType.fromStored(account.accountType)) {
             // SYNC-2: сброс SyncKey для forceFullSync перенесён ВНУТРЬ syncEmailsEas (в секцию
             // activeSyncs), чтобы устранить гонку обнуления ключа между конкурентными синками.
             AccountType.EXCHANGE -> syncEmailsEas(accountId, folderId, forceFullSync = forceFullSync)

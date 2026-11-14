@@ -737,7 +737,7 @@ class TaskRepository internal constructor(
                 val account = accountRepo.getAccount(accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
                 
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
                     return@withContext EasResult.Error(RepositoryErrors.TASKS_EXCHANGE_ONLY)
                 }
                 
