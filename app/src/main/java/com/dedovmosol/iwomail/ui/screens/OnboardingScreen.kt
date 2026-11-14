@@ -150,6 +150,11 @@ fun OnboardingScreen(
                     .weight(1f)
                     .fillMaxWidth()
             ) { page ->
+                val armed = OnboardingPageEnter.isArmed(
+                    page = page,
+                    currentPage = pagerState.currentPage,
+                    targetPage = pagerState.targetPage
+                )
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -169,7 +174,8 @@ fun OnboardingScreen(
                                         settingsRepo.setLanguage(lang)
                                     }
                                 },
-                                colorTheme = colorTheme
+                                colorTheme = colorTheme,
+                                armed = armed
                             )
                             1 -> AnimationsSelectionPage(
                                 animationsEnabled = selectedAnimations,
@@ -181,7 +187,8 @@ fun OnboardingScreen(
                                 },
                                 colorTheme = colorTheme,
                                 isRussian = isRussian,
-                                rotation = sharedAnimRotation
+                                rotation = sharedAnimRotation,
+                                armed = armed
                             )
                             2 -> ThemeSelectionPage(
                                 selectedTheme = selectedTheme,
@@ -208,7 +215,8 @@ fun OnboardingScreen(
                                 },
                                 isRussian = isRussian,
                                 animationsEnabled = selectedAnimations,
-                                pulse = sharedPulse
+                                pulse = sharedPulse,
+                                armed = armed
                             )
                             3 -> DraftModeSelectionPage(
                                 selectedDraftMode = selectedDraftMode,
@@ -219,7 +227,9 @@ fun OnboardingScreen(
                                     }
                                 },
                                 colorTheme = colorTheme,
-                                isRussian = isRussian
+                                isRussian = isRussian,
+                                armed = armed,
+                                animationsEnabled = selectedAnimations
                             )
                             else -> {
                                 val pageData = pages[page - 4]
@@ -229,7 +239,8 @@ fun OnboardingScreen(
                                     animationsEnabled = selectedAnimations,
                                     pulse = sharedPulse,
                                     shake = sharedShake,
-                                    rotation = sharedFeatureRotation
+                                    rotation = sharedFeatureRotation,
+                                    armed = armed
                                 )
                             }
                         }
@@ -240,7 +251,8 @@ fun OnboardingScreen(
                             animationsEnabled = selectedAnimations,
                             pulse = sharedPulse,
                             shake = sharedShake,
-                            rotation = sharedFeatureRotation
+                            rotation = sharedFeatureRotation,
+                            armed = armed
                         )
                     }
                 }
@@ -336,15 +348,11 @@ fun OnboardingScreen(
 private fun LanguageSelectionPage(
     selectedLanguage: String,
     onLanguageSelected: (String) -> Unit,
-    colorTheme: AppColorTheme
+    colorTheme: AppColorTheme,
+    armed: Boolean
 ) {
     val isRussian = selectedLanguage == AppLanguage.RUSSIAN.code
-    
-    // Для первого слайда анимация всегда включена по умолчанию
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        visible = true
-    }
+    val visible = rememberOnboardingVisible(armed = armed, animationsEnabled = true)
     
     // Адаптивные размеры для маленьких экранов
     val configuration = LocalConfiguration.current
@@ -492,12 +500,10 @@ private fun AnimationsSelectionPage(
     onAnimationsChanged: (Boolean) -> Unit,
     colorTheme: AppColorTheme,
     isRussian: Boolean,
-    rotation: Float
+    rotation: Float,
+    armed: Boolean
 ) {
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        visible = true
-    }
+    val visible = rememberOnboardingVisible(armed = armed, animationsEnabled = animationsEnabled)
     
     val configuration = LocalConfiguration.current
     val isCompactHeight = configuration.screenHeightDp < 500 ||
@@ -636,12 +642,10 @@ private fun ThemeSelectionPage(
     onScrollbarColorSelected: (String) -> Unit = {},
     isRussian: Boolean,
     animationsEnabled: Boolean,
-    pulse: Float
+    pulse: Float,
+    armed: Boolean
 ) {
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        visible = true
-    }
+    val visible = rememberOnboardingVisible(armed = armed, animationsEnabled = animationsEnabled)
     
     val configuration = LocalConfiguration.current
     val isCompactHeight = configuration.screenHeightDp < 500 ||
@@ -907,12 +911,11 @@ private fun DraftModeSelectionPage(
     selectedDraftMode: String,
     onDraftModeSelected: (String) -> Unit,
     colorTheme: AppColorTheme,
-    isRussian: Boolean
+    isRussian: Boolean,
+    armed: Boolean,
+    animationsEnabled: Boolean
 ) {
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        visible = true
-    }
+    val visible = rememberOnboardingVisible(armed = armed, animationsEnabled = animationsEnabled)
     
     val configuration = LocalConfiguration.current
     val isCompactHeight = configuration.screenHeightDp < 500 ||
@@ -1093,14 +1096,10 @@ private fun FeaturePage(
     animationsEnabled: Boolean,
     pulse: Float,
     shake: Float,
-    rotation: Float
+    rotation: Float,
+    armed: Boolean
 ) {
-    var visible by remember(page.type) { mutableStateOf(false) }
-    LaunchedEffect(page.type) {
-        visible = false
-        kotlinx.coroutines.delay(100)
-        visible = true
-    }
+    val visible = rememberOnboardingVisible(armed = armed, animationsEnabled = animationsEnabled)
     
     val configuration = LocalConfiguration.current
     val isCompactHeight = configuration.screenHeightDp < 500 ||

@@ -137,7 +137,7 @@ com.dedovmosol.iwomail/
 │   ├── Localization.kt
 │   ├── navigation/AppNavigation.kt
 │   ├── screens/
-│   │   ├── SetupScreen.kt / VerificationScreen.kt / OnboardingScreen.kt / AddAnotherAccountScreen.kt
+│   │   ├── SetupScreen.kt / VerificationScreen.kt / OnboardingScreen.kt / OnboardingPageEnter.kt / AddAnotherAccountScreen.kt
 │   │   ├── LockScreen.kt — разблокировка паролем/отпечатком
 │   │   ├── EmailListScreen.kt / EmailDetailScreen.kt / ComposeScreen.kt / ComposeUtils.kt
 │   │   ├── ContactsScreen.kt / CalendarScreen.kt / NotesScreen.kt / TasksScreen.kt
