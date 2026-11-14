@@ -806,20 +806,10 @@ class EmailOperationsService(
         val targetFolder = folderDao.getFolder(targetFolderId)
             ?: return EasResult.Error("Target folder not found")
 
-        // MS-ASCMD §2.2.3.166.8: На EAS 12.1 (Exchange 2007 SP1) ServerIds НЕ стабильны
-        // после SyncKey=0 reset. Pre-sync исходной папки гарантирует свежие serverIds.
         val sourceFolderId = firstEmail.folderId
-        try {
-            emailSyncService.syncEmails(firstEmail.accountId, sourceFolderId, forceFullSync = false)
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            android.util.Log.w("EmailOps", "moveEmails: pre-sync failed, proceeding with current data: ${e.message}")
-        }
-
-        // После pre-sync emailIds могут указывать на мигрированные записи (serverIdMigrations).
-        // Перечитываем — если запись мигрирована, ищем по содержимому.
+        // MoveItems сразу. Sync папки — только если сервер вернул Status=1 (устаревший ServerId на EAS 12.1).
         val resolvedEmailIds = resolveEmailIds(allEmails, sourceFolderId)
-        if (resolvedEmailIds.isEmpty()) return EasResult.Error("Emails not found after sync")
+        if (resolvedEmailIds.isEmpty()) return EasResult.Error("Emails not found")
 
         val triples = buildMoveItems(resolvedEmailIds)
         if (triples.isEmpty()) return EasResult.Success(0)
@@ -836,7 +826,7 @@ class EmailOperationsService(
         // пересинхронизируем исходную папку и повторяем с актуальными serverId.
         // MS-ASCMD §2.2.3.177.10 Status=1: "Issue a Sync command for the SrcFldId
         // and reissue the MoveItems command request".
-        if (result is EasResult.Error && result.message.contains("MOVEITEMS_ALL_FAILED")) {
+        if (result is EasResult.Error && moveItemsNeedsSrcSync(result.message)) {
             try {
                 emailSyncService.syncEmails(firstEmail.accountId, sourceFolderId, forceFullSync = false)
 
@@ -856,7 +846,7 @@ class EmailOperationsService(
         //   status=1 (Invalid source) = письмо не существует на сервере → ghost, удаляем локально.
         //   status=2,4,5,7 = письмо СУЩЕСТВУЕТ, но move невозможен → НЕ удаляем.
         var ghostDeletedCount = 0
-        if (result is EasResult.Error && result.message.contains("MOVEITEMS_ALL_FAILED")) {
+        if (result is EasResult.Error && moveItemsNeedsSrcSync(result.message)) {
             val allResults = mutableMapOf<String, String>() // srcServerId → dstServerId
             val ghostEmailIds = mutableListOf<String>()     // emailIds для локальной очистки (только status=1)
             val ghostFolderIds = mutableSetOf<String>()     // folderIds для обновления счётчиков

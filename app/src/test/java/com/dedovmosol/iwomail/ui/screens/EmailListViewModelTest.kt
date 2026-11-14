@@ -236,6 +236,28 @@ class EmailListViewModelTest {
     }
 
     @Test
+    fun `deleteSelectedToTrash hides rows before the server answers`() = runTest(dispatcher) {
+        coEvery { mailRepo.moveToTrash(any()) } returns EasResult.Success(1)
+        val vm = createViewModel()
+        advanceUntilIdle()
+        vm.setSelection(setOf("a"))
+        vm.deleteSelectedToTrash()
+        assertThat(vm.uiState.value.pendingRemovalIds).containsExactly("a")
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun `deleteSelectedToTrash shows rows again when the server rejects the move`() = runTest(dispatcher) {
+        coEvery { mailRepo.moveToTrash(any()) } returns EasResult.Error("MOVEITEMS_ALL_FAILED:status=2")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        vm.setSelection(setOf("a"))
+        vm.deleteSelectedToTrash()
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.pendingRemovalIds).isEmpty()
+    }
+
+    @Test
     fun `deleteSelectedToTrash is a no-op when nothing selected`() = runTest(dispatcher) {
         val vm = createViewModel()
         advanceUntilIdle()

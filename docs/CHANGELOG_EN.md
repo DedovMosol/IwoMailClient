@@ -4,6 +4,10 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Delete and move: MoveItems first, Sync only on Status=1 (2026-11-14)
+- No folder Sync before every move to trash. MoveItems runs first. If EAS returns `MOVEITEMS_ALL_FAILED` (stale ServerId on 12.1) — one Sync of that folder and retry, as MS-ASCMD
+- The list hides rows immediately (`pendingRemovalIds`). A server rejection shows them again
+- Tests: `MoveItemsPolicyTest`, `EmailListViewModelTest` (hide before the reply, restore on error)
 ### Privacy policy: RU and EN (2026-11-14)
 - Two files: `PRIVACY_POLICY_RU.md` and `PRIVACY_POLICY_EN.md`. About opens the URL for the UI language (`PrivacyPolicy.url`)
 - Tests: `PrivacyPolicyTest`

@@ -101,9 +101,10 @@ fun SearchScreen(
         }
     }
 
-    val filteredResults = remember(uiState.allResults, dateFilter) {
+    val filteredResults = remember(uiState.allResults, dateFilter, uiState.pendingRemovalIds) {
+        val pending = uiState.pendingRemovalIds
         uiState.allResults.filter { email ->
-            dateFilter.days?.let { days ->
+            email.id !in pending && dateFilter.days?.let { days ->
                 val cutoff = System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
                 email.dateReceived >= cutoff
             } ?: true
