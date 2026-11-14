@@ -538,100 +538,64 @@ fun PersonalizationScreen(
         title = Strings.interfacePersonalization,
         onBackClick = onBackClick
     ) {
-            // Выбор языка
-            item {
-                ListItem(
-                    headlineContent = { Text(Strings.language) },
-                    supportingContent = { Text(currentLanguage.displayName) },
-                    leadingContent = { Icon(AppIcons.Language, null) },
-                    modifier = Modifier.clickable { showLanguageDialog = true }
+        item {
+            SettingsGroup {
+                SettingsNavRow(
+                    title = Strings.language,
+                    subtitle = currentLanguage.displayName,
+                    icon = AppIcons.Language,
+                    onClick = { showLanguageDialog = true }
+                )
+                SettingsNavRow(
+                    title = Strings.fontSize,
+                    subtitle = fontSize.getDisplayName(isRu),
+                    icon = AppIcons.TextFields,
+                    onClick = { showFontSizeDialog = true }
                 )
             }
-            
-            // Выбор размера шрифта
-            item {
-                ListItem(
-                    headlineContent = { Text(Strings.fontSize) },
-                    supportingContent = { Text(fontSize.getDisplayName(isRu)) },
-                    leadingContent = { Icon(AppIcons.TextFields, null) },
-                    modifier = Modifier.clickable { showFontSizeDialog = true }
-                )
-            }
-
-            item {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            }
-            
-            // Выбор цветовой темы (неактивно если включены темы по дням)
-            item {
-                val currentTheme = AppColorTheme.fromCode(colorThemeCode)
-                val isEnabled = !dailyThemesEnabled
-                ListItem(
-                    headlineContent = { 
-                        Text(
-                            Strings.colorTheme,
-                            color = if (isEnabled) MaterialTheme.colorScheme.onSurface 
-                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                        ) 
-                    },
-                    supportingContent = { 
-                        Text(
-                            if (dailyThemesEnabled) Strings.dailyThemesActive else getThemeDisplayName(currentTheme),
-                            color = if (isEnabled) MaterialTheme.colorScheme.onSurfaceVariant 
-                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                        ) 
-                    },
-                    leadingContent = { 
+        }
+        item {
+            val currentTheme = AppColorTheme.fromCode(colorThemeCode)
+            val themeEnabled = !dailyThemesEnabled
+            val currentSbColor = com.dedovmosol.iwomail.ui.components.ScrollbarColor.fromCode(scrollbarColorCode)
+            SettingsGroup {
+                SettingsNavRow(
+                    title = Strings.colorTheme,
+                    subtitle = if (dailyThemesEnabled) Strings.dailyThemesActive else getThemeDisplayName(currentTheme),
+                    leading = {
                         Box(
                             modifier = Modifier
-                                .size(24.dp)
+                                .size(40.dp)
                                 .clip(CircleShape)
                                 .background(
-                                    if (isEnabled) currentTheme.gradientStart 
+                                    if (themeEnabled) currentTheme.gradientStart
                                     else currentTheme.gradientStart.copy(alpha = 0.38f)
                                 )
                         )
                     },
-                    modifier = if (isEnabled) Modifier.clickable { showColorThemeDialog = true } else Modifier
+                    enabled = themeEnabled,
+                    onClick = { showColorThemeDialog = true }
                 )
-            }
-            
-            // Режим темы: системный / светлая / тёмная
-            item {
-                ListItem(
-                    headlineContent = { Text(Strings.themeMode) },
-                    supportingContent = { Text(themeMode.getDisplayName(isRu)) },
-                    leadingContent = {
-                        Icon(
-                            themeModeIcon(themeMode),
-                            null
-                        )
-                    },
-                    modifier = Modifier.clickable { showThemeModeDialog = true }
+                SettingsNavRow(
+                    title = Strings.themeMode,
+                    subtitle = themeMode.getDisplayName(isRu),
+                    icon = themeModeIcon(themeMode),
+                    onClick = { showThemeModeDialog = true }
                 )
-            }
-            
-            // Цвет скроллбара (неактивно если включены темы по дням)
-            item {
-                val currentSbColor = com.dedovmosol.iwomail.ui.components.ScrollbarColor.fromCode(scrollbarColorCode)
-                val isEnabled = !dailyThemesEnabled
-                ListItem(
-                    headlineContent = { Text(if (isRu) "Цвет скроллбара" else "Scrollbar color") },
-                    supportingContent = { Text(currentSbColor.getDisplayName(isRu)) },
-                    leadingContent = {
+                SettingsNavRow(
+                    title = if (isRu) "Цвет скроллбара" else "Scrollbar color",
+                    subtitle = currentSbColor.getDisplayName(isRu),
+                    leading = {
                         Box(
                             modifier = Modifier
-                                .size(24.dp)
+                                .size(40.dp)
                                 .clip(CircleShape)
                                 .background(currentSbColor.color)
                         )
                     },
-                    modifier = if (isEnabled) Modifier.clickable { showScrollbarColorDialog = true } else Modifier
+                    enabled = themeEnabled,
+                    onClick = { showScrollbarColorDialog = true }
                 )
-            }
-            
-            // Темы по дням недели
-            item {
                 SettingsSwitchRow(
                     title = Strings.dailyThemes,
                     description = Strings.dailyThemesDesc,
@@ -641,25 +605,17 @@ fun PersonalizationScreen(
                         scope.launch { settingsRepo.setDailyThemesEnabled(enabled) }
                     }
                 )
-            }
-
-            // Настройка тем по дням (показывается только если включено)
-            if (dailyThemesEnabled) {
-                item {
-                    ListItem(
-                        headlineContent = { Text(Strings.configureDailyThemes) },
-                        leadingContent = { Icon(AppIcons.Settings, null) },
-                        modifier = Modifier.clickable { showDailyThemesDialog = true }
+                if (dailyThemesEnabled) {
+                    SettingsNavRow(
+                        title = Strings.configureDailyThemes,
+                        icon = AppIcons.Settings,
+                        onClick = { showDailyThemesDialog = true }
                     )
                 }
             }
-            
-            item {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            }
-            
-            // Анимации интерфейса
-            item {
+        }
+        item {
+            SettingsGroup {
                 SettingsSwitchRow(
                     title = Strings.animations,
                     description = Strings.animationsDesc,
@@ -670,6 +626,7 @@ fun PersonalizationScreen(
                     }
                 )
             }
+        }
     }
 }
 

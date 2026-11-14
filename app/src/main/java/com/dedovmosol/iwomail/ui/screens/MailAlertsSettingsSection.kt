@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -67,20 +66,21 @@ internal fun MailAlertsSettingsSection(
         }
 
         val vip = prefs?.vipSenders.orEmpty().sorted()
-        ListItem(
-            headlineContent = { Text(Strings.vipSenders) },
-            supportingContent = { if (vip.isEmpty()) Text(Strings.vipSendersHint) },
-            leadingContent = { Icon(AppIcons.Star, null) }
+        SettingsNavRow(
+            title = Strings.vipSenders,
+            subtitle = if (vip.isEmpty()) Strings.vipSendersHint else null,
+            icon = AppIcons.Star,
+            trailingIcon = null
         )
         for (address in vip) {
-            ListItem(
-                headlineContent = { Text(address) },
-                trailingContent = {
+            SettingsNavRow(
+                title = address,
+                trailingIcon = null,
+                trailing = {
                     IconButton(onClick = { scope.launch { settingsRepo.setVipSender(address, vip = false) } }) {
                         Icon(AppIcons.Close, Strings.removeVipSender)
                     }
-                },
-                modifier = Modifier.padding(start = 40.dp)
+                }
             )
         }
 

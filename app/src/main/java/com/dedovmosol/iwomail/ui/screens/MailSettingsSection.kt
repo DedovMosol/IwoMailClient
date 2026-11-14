@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -71,10 +69,13 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository) {
 
         val trusted = images?.trustedSenders.orEmpty()
         if (trusted.isNotEmpty()) {
-            ListItem(
-                headlineContent = { Text(Strings.trustedImageSenders(trusted.size)) },
-                trailingContent = {
-                    TextButton(onClick = { scope.launch { settingsRepo.clearTrustedImageSenders() } }) { Text(Strings.reset) }
+            SettingsNavRow(
+                title = Strings.trustedImageSenders(trusted.size),
+                trailingIcon = null,
+                trailing = {
+                    TextButton(onClick = { scope.launch { settingsRepo.clearTrustedImageSenders() } }) {
+                        Text(Strings.reset)
+                    }
                 }
             )
         }
