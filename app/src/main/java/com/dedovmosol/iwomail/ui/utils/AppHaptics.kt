@@ -2,6 +2,7 @@ package com.dedovmosol.iwomail.ui.utils
 
 import android.content.Context
 import android.os.Build
+import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -75,7 +76,7 @@ class AppHaptics internal constructor(
                     hasVibrator = vibrator?.hasVibrator() == true,
                     systemEnabled = { isSystemHapticEnabled(app) },
                     sdk = sdk,
-                    playEffect = { effect -> vibrator?.vibrate(effect) }
+                    playEffect = { effect -> playOnDevice(vibrator, effect, sdk) }
                 )
                 cached = created
                 return created
@@ -86,6 +87,7 @@ class AppHaptics internal constructor(
             synchronized(lock) { cached = null }
         }
 
+        @Suppress("DEPRECATION")
         fun isSystemHapticEnabled(context: Context): Boolean {
             return try {
                 Settings.System.getInt(
@@ -95,6 +97,21 @@ class AppHaptics internal constructor(
                 ) != 0
             } catch (_: Exception) {
                 true
+            }
+        }
+
+        /** API 33+: USAGE_TOUCH, чтобы не бить в «не беспокоить» как будильник. */
+        private fun playOnDevice(vibrator: Vibrator?, effect: VibrationEffect, sdk: Int) {
+            if (vibrator == null) return
+            if (sdk >= 33) {
+                vibrator.vibrate(
+                    effect,
+                    VibrationAttributes.Builder()
+                        .setUsage(VibrationAttributes.USAGE_TOUCH)
+                        .build()
+                )
+            } else {
+                vibrator.vibrate(effect)
             }
         }
 

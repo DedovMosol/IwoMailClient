@@ -49,7 +49,9 @@ sealed interface MailRow {
                 val open = thread.key in expanded
                 add(Header(thread, open))
                 if (open) {
-                    thread.emails.sortedByDescending { it.dateReceived }.forEach { add(Child(it)) }
+                    thread.emails.sortedWith(
+                        compareByDescending<EmailEntity> { it.dateReceived }.thenBy { it.id }
+                    ).forEach { add(Child(it)) }
                 }
             }
         }

@@ -63,7 +63,10 @@ class MainActivity : FragmentActivity() {
     
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { _ -> }
+    ) { promptPermissionsOnce() }
+
+    /** Системный лист уведомлений уже показали в этом процессе — не крутить его под батареей. */
+    private var notificationAskedThisProcess = false
     
     private var openInboxUnreadIntentId = mutableLongStateOf(0L)
     private var openEmailId = mutableStateOf<String?>(null)
@@ -108,7 +111,6 @@ class MainActivity : FragmentActivity() {
         }
         
         enableHighRefreshRate()
-        requestNotificationPermission()
         // Сам запрос разрешений — только при обычном запуске (значок приложения): не поверх письма из «Поделиться»,
         // ответа на mailto:, перехода из уведомления или виджета
         if (savedInstanceState == null && (intent?.action == null || intent?.action == Intent.ACTION_MAIN)) {
@@ -652,6 +654,8 @@ class MainActivity : FragmentActivity() {
             val settingsRepo = SettingsRepository.getInstance(applicationContext)
             if (!settingsRepo.onboardingShown.first()) return@launch
             if (showBatteryDialog.value || showAlarmDialog.value) return@launch
+            // Не поверх онбординга и не вместе с нашим листом: сначала системные уведомления (13+), потом фон, потом будильники
+            if (requestNotificationPermission()) return@launch
             if (!com.dedovmosol.iwomail.sync.BackgroundWork.isAllowed(this@MainActivity)) {
                 if (settingsRepo.claimBackgroundWorkPrompt()) showBatteryDialog.value = true
                 return@launch
@@ -669,20 +673,17 @@ class MainActivity : FragmentActivity() {
         if (!showAlarmDialog.value) showBatteryDialog.value = true
     }
     
-    private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            when {
-                ContextCompat.checkSelfPermission(
-                    this, Manifest.permission.POST_NOTIFICATIONS
-                ) == PackageManager.PERMISSION_GRANTED -> { }
-                shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) -> {
-                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
-                else -> {
-                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
-            }
-        }
+    /** @return true — системный лист открыт, следующие запросы подождут callback. */
+    private fun requestNotificationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        if (ContextCompat.checkSelfPermission(
+                this, Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        ) return false
+        if (notificationAskedThisProcess) return false
+        notificationAskedThisProcess = true
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        return true
     }
     
     private fun openAlarmSettings() {
