@@ -65,7 +65,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **Correct unread logic:** the widget's new-mail list is filtered by Inbox and `read = 0`.
 - **Race protection:** `updateMailWidget()` serializes `GlanceAppWidget.updateAll()` through a shared mutex and uses `applicationContext`.
 - **Width-adaptive layout:** the bottom action row adapts to widget width (a Glance `Row` never wraps its content) — narrow sizes show fewer avatars and hide the last-sync label so the buttons aren't clipped; avatars scale with the widget.
-- **Room indexes (migration 41→42):** indexes for hot widget queries: unread Inbox, folder type, active tasks, current and upcoming calendar events. The current schema version is v53.
+- **Room indexes (migration 41→42):** indexes for hot widget queries: unread Inbox, folder type, active tasks, current and upcoming calendar events. The current schema version is v54.
 
 </details>
 
@@ -136,7 +136,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **Office 365:** typically does not work without Basic Auth.
 - **NTLM for EAS:** the EAS transport supports Basic Auth only (NTLMv2 applies to EWS operations only); the `/Microsoft-Server-ActiveSync` virtual directory must allow Basic Auth.
 - **IMAP/POP3:** beta implementation, does not cover calendar, contacts, tasks, notes, Direct Push and EWS features. There is no SMTP sending: the outgoing server address is only stored in the account.
-- **Offline queue:** message star and read state, task and note edits and moves to trash. Creating tasks and notes, the calendar, folder operations and message moves are still server-first and are not deferred without a connection.
+- **Offline queue:** message star and read state, message moves (including to trash), task and note edits and moves to trash. Creating tasks and notes, the calendar and folder operations are still server-first and are not deferred without a connection.
 - **Exchange contacts:** read-only. They come from the server's Contacts folder (EAS Sync); edit and delete them in Outlook or OWA. In the app an Exchange contact can be copied to personal contacts, which are editable.
 - **On-device verification:** the horizontal-scroll fix in the message viewer and the WebView renderer-death recovery are covered by unit tests but have not been verified on a real device.
 - **S/MIME:** signing and encryption not implemented.
@@ -150,7 +150,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 | Build | Gradle 8.12, AGP 8.7.3, KSP 1.9.22-1.0.17, Kover 0.7.6, minSdk 26, targetSdk 36 |
 | UI | Jetpack Compose, Compose BOM 2024.06.00, Material 3, Navigation 2.7.6, Lifecycle/ViewModel 2.7.0 |
 | Async | Coroutines 1.7.3, Flow |
-| Storage | Room 2.6.1 (`MailDatabase` v53), DataStore Preferences 1.1.1 |
+| Storage | Room 2.6.1 (`MailDatabase` v54), DataStore Preferences 1.1.1 |
 | Network | OkHttp 4.12.0, Conscrypt 2.5.2 |
 | Protocols | EAS, EWS, JavaMail IMAP/POP3 (`android-mail` 1.6.7) |
 | Background | WorkManager 2.9.0, Foreground Service, AlarmManager |
@@ -176,7 +176,7 @@ Protocol Layer
   EasTransport + EAS services + EWS client + IMAP/POP3 beta clients
     ↓
 Persistence / Network
-  Room MailDatabase v53, DataStore
+  Room MailDatabase v54, DataStore
   HttpClientProvider, NetworkMonitor, NtlmAuthenticator
     ↓
 Background

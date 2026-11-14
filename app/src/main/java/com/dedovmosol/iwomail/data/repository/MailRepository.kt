@@ -128,7 +128,8 @@ class MailRepository(private val context: Context) {
     suspend fun flushPendingChanges(): Boolean = PendingMailChanges(
         database.pendingEmailChangeDao(),
         sendFlag = emailOperationsService::retryPendingFlag,
-        sendRead = emailOperationsService::retryPendingRead
+        sendRead = emailOperationsService::retryPendingRead,
+        sendMove = emailOperationsService::retryPendingMove
     ).flush()
     
     // === Делегирование к FolderSyncService ===
