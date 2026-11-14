@@ -651,7 +651,7 @@ Unit-тесты запускаются командой `./gradlew testDebugUnit
 | `docs/ARCHITECTURE_EN.md` | Архитектура проекта (английская версия) |
 | `docs/CHANGELOG_RU.md` | История изменений на русском |
 | `docs/CHANGELOG_EN.md` | История изменений на английском |
-| `docs/PRIVACY_POLICY.md` | Политика конфиденциальности |
+| `docs/PRIVACY_POLICY_RU.md` / `PRIVACY_POLICY_EN.md` | Политика конфиденциальности, в приложении по языку UI |
 | `docs/SECURITY.md` | Модель безопасности и модель угроз |
 | `SECURITY.md` | Политика сообщения об уязвимостях |
 | `docs/XMLPULLPARSER_MIGRATION_PLAN.md` | План миграции разбора XML на XmlPullParser |

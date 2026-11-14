@@ -650,7 +650,7 @@ Unit tests are run with `./gradlew testDebugUnitTest` (the same command runs in 
 | `docs/ARCHITECTURE_EN.md` | This document (English version) |
 | `docs/CHANGELOG_RU.md` | Changelog in Russian |
 | `docs/CHANGELOG_EN.md` | Changelog in English |
-| `docs/PRIVACY_POLICY.md` | Privacy policy |
+| `docs/PRIVACY_POLICY_EN.md` / `PRIVACY_POLICY_RU.md` | Privacy policy, app opens the UI language |
 | `docs/SECURITY.md` | Security model and threat model |
 | `SECURITY.md` | Vulnerability disclosure policy |
 | `docs/XMLPULLPARSER_MIGRATION_PLAN.md` | Plan for migrating XML parsing to XmlPullParser |

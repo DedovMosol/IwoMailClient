@@ -125,7 +125,7 @@ fun AboutScreen(
                     leadingContent = { Icon(AppIcons.Policy, null) },
                     trailingContent = { Icon(AppIcons.OpenInNew, null, modifier = Modifier.size(18.dp)) },
                     modifier = Modifier.clickable {
-                        uriHandler.openUri("https://github.com/DedovMosol/IwoMailClient/blob/main/docs/PRIVACY_POLICY.md")
+                        uriHandler.openUri(com.dedovmosol.iwomail.ui.PrivacyPolicy.url(isRu))
                     }
                 )
 
