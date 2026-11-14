@@ -207,7 +207,7 @@ On Windows:
 <p align="center">
   <a href="docs/CHANGELOG_EN.md"><img alt="Changelog" src="https://img.shields.io/badge/Changelog-EN-0366D6"></a>
   <a href="docs/CHANGELOG_RU.md"><img alt="История изменений" src="https://img.shields.io/badge/Changelog-RU-2EA44F"></a>
-  <a href="docs/ARCHITECTURE_EN.md"><img alt="Architecture in detail" src="https://img.shields.io/badge/Architecture-EN_detailed-FB8C00"></a>
+  <a href="docs/ARCHITECTURE_EN.md"><img alt="Architecture project in detail" src="https://img.shields.io/badge/Architecture-EN_detailed-FB8C00"></a>
   <a href="docs/ARCHITECTURE.md"><img alt="Архитектура проекта подробно" src="https://img.shields.io/badge/Архитектура_проекта-подробно-E36209"></a>
 </p>
 <p align="center">

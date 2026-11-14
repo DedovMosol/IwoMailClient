@@ -208,7 +208,7 @@ Background
   <a href="docs/CHANGELOG_RU.md"><img alt="История изменений" src="https://img.shields.io/badge/Changelog-RU-2EA44F"></a>
   <a href="docs/CHANGELOG_EN.md"><img alt="Changelog" src="https://img.shields.io/badge/Changelog-EN-0366D6"></a>
   <a href="docs/ARCHITECTURE.md"><img alt="Архитектура проекта подробно" src="https://img.shields.io/badge/Архитектура_проекта-подробно-E36209"></a>
-  <a href="docs/ARCHITECTURE_EN.md"><img alt="Architecture EN detailed" src="https://img.shields.io/badge/Architecture-EN_detailed-FB8C00"></a>
+  <a href="docs/ARCHITECTURE_EN.md"><img alt="Architecture project EN detailed" src="https://img.shields.io/badge/Architecture-EN_detailed-FB8C00"></a>
 </p>
 <p align="center">
   <a href="docs/SECURITY.md"><img alt="Модель безопасности" src="https://img.shields.io/badge/Security-6F42C1"></a>

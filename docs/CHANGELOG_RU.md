@@ -5,7 +5,7 @@
 
 ## v1.6.3b
 ### Full resync не стирает офлайн-перенос (15.11.2026)
-- После SyncKey=0 (EAS 12.1 Status 3/12) reconcile корзины/Sent/черновиков больше не удаляет письмо с `pending.move`: на сервере его в этой папке ещё нет. Inbox Add по-прежнему `INSERT IGNORE`. Тест: `EmailReconcileTest`
+- После SyncKey=0 (EAS 12.1 Status 3/12) reconcile корзины/Sent/черновиков больше не удаляет письмо с `pending.move`. Inbox Add с новым ServerId не создаёт дубль во Входящих: строка в корзине получает новый id (иначе MoveItems Status=1 и ghost-delete). Тесты: `EmailReconcileTest`
 ### Документация README и тихий синк пользовательских папок (15.11.2026)
 - README: разноцветные кнопки документации, отдельно «Политика конфиденциальности» и Privacy Policy, «Архитектура проекта подробно» и Architecture EN, счётчик скачиваний GitHub
 - Один `docs/SECURITY.md`: и как сообщить об уязвимости, и модель угроз. Корневой `SECURITY.md` удалён (GitHub читает файл из `docs/`)

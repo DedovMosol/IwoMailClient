@@ -80,10 +80,45 @@ Background layer
   ├─ PushService: EAS Ping (Direct Push) foreground service
   ├─ SyncWorker: periodic and manual sync, cleanup, notification check
   ├─ OutboxWorker: offline outbox send
-  ├─ PendingMailChangesWorker: sends stars and read state changed without a connection
+  ├─ PendingMailChangesWorker: sends stars, read state and moves queued without a connection
   ├─ ScheduledSendReceiver + ScheduledEmailWorker: scheduled send
   ├─ CalendarReminderReceiver / TaskReminderReceiver / FlagReminderReceiver / RescheduleRemindersWorker
   └─ BootReceiver / SyncAlarmReceiver / PushRestartWorker / ServiceWatchdogReceiver
+```
+
+How delete and sync meet (EAS 12.1–14.1):
+
+```mermaid
+flowchart LR
+  UI[Mail list] --> Ops[EmailOperationsService]
+  Ops -->|"folderId=trash now"| Room[(Room)]
+  Ops -->|"pending.move"| Q[pending_email_changes]
+  Ops -->|"MoveItems SrcFld=Inbox"| EAS[EAS]
+  Sync[EmailSyncService] --> Gate[FolderSyncGate]
+  Ops --> Gate
+  Gate --> EAS
+  Q -->|"offline: Worker"| Ops
+```
+
+```mermaid
+sequenceDiagram
+  participant UI
+  participant Room
+  participant Queue as pending.move
+  participant EAS
+  UI->>Room: message already in local trash
+  UI->>Queue: queued
+  UI->>EAS: MoveItems
+  alt no network
+    EAS-->>UI: NET
+    Queue->>EAS: Worker retries
+  else Status 1 on 2007 after SyncKey=0
+    EAS-->>UI: bad SrcMsgId
+    Note over Room: Inbox Sync, new ServerId stuck onto the trash row
+    UI->>EAS: MoveItems with the new id
+  else Status 3
+    EAS-->>Room: new ServerId, queue cleared
+  end
 ```
 
 ---

@@ -80,10 +80,45 @@ Domain (domain/)
   ├─ PushService: foreground-сервис EAS Ping (Direct Push)
   ├─ SyncWorker: периодическая и ручная синхронизация, очистка, проверка уведомлений
   ├─ OutboxWorker: отправка из офлайн-очереди
-  ├─ PendingMailChangesWorker: отправка звёзд и «прочитано», сделанных без связи
+  ├─ PendingMailChangesWorker: отправка звёзд, «прочитано» и переносов, сделанных без связи
   ├─ ScheduledSendReceiver + ScheduledEmailWorker: отложенная отправка
   ├─ CalendarReminderReceiver / TaskReminderReceiver / FlagReminderReceiver / RescheduleRemindersWorker
   └─ BootReceiver / SyncAlarmReceiver / PushRestartWorker / ServiceWatchdogReceiver
+```
+
+Как это стыкуется при удалении письма и синке (EAS 12.1–14.1):
+
+```mermaid
+flowchart LR
+  UI[Список писем] --> Ops[EmailOperationsService]
+  Ops -->|"сразу folderId=trash"| Room[(Room)]
+  Ops -->|"pending.move"| Q[pending_email_changes]
+  Ops -->|"MoveItems SrcFld=Inbox"| EAS[EAS]
+  Sync[EmailSyncService] --> Gate[FolderSyncGate]
+  Ops --> Gate
+  Gate --> EAS
+  Q -->|"нет сети: Worker"| Ops
+```
+
+```mermaid
+sequenceDiagram
+  participant UI
+  participant Room
+  participant Queue as pending.move
+  participant EAS
+  UI->>Room: письмо в корзине локально
+  UI->>Queue: очередь
+  UI->>EAS: MoveItems
+  alt нет сети
+    EAS-->>UI: NET
+    Queue->>EAS: повтор Worker
+  else Status 1 на 2007 после SyncKey=0
+    EAS-->>UI: неверный SrcMsgId
+    Note over Room: Inbox Sync, новый ServerId наклеивается на строку в корзине
+    UI->>EAS: MoveItems с новым id
+  else Status 3
+    EAS-->>Room: новый ServerId, очередь снята
+  end
 ```
 
 ---
