@@ -150,6 +150,10 @@ fun EmailListScreen(
     val isTrashFolder = folder?.type == FolderType.DELETED_ITEMS
     val isDraftsFolder = folder?.type == FolderType.DRAFTS
     val isSentFolder = folder?.type == FolderType.SENT_ITEMS
+    val recipientFolderIds = remember(folders) {
+        folders.filter { com.dedovmosol.iwomail.ui.screens.emaillist.folderShowsRecipient(it.type) }
+            .mapTo(HashSet()) { it.id }
+    }
 
     val nothingDeletedMsg = if (isRussian) "Ничего не удалено" else "Nothing deleted"
 
@@ -609,6 +613,7 @@ fun EmailListScreen(
                 isTrashOrSpam = isTrashFolder || isSpamFolder,
                 isDrafts = isDraftsFolder,
                 isSent = isSentFolder,
+                recipientFolderIds = recipientFolderIds,
                 onEmailClick = { email ->
                     if (isSelectionMode) {
                         hapticScreen.tick()
@@ -848,6 +853,7 @@ private fun EmailList(
     isTrashOrSpam: Boolean = false,
     isDrafts: Boolean = false,
     isSent: Boolean = false,
+    recipientFolderIds: Set<String> = emptySet(),
     onEmailClick: (EmailEntity) -> Unit,
     onLongClick: (EmailEntity) -> Unit,
     onStarClick: (EmailEntity) -> Unit,
@@ -921,6 +927,7 @@ private fun EmailList(
                         isTrashOrSpam = isTrashOrSpam,
                         isDrafts = isDrafts,
                         isSent = isSent,
+                        recipientFolderIds = recipientFolderIds,
                         listState = listState,
                         errorMessage = errorMessage,
                         onEmailClick = onEmailClick,
@@ -1059,6 +1066,7 @@ private fun EmailListContent(
     isTrashOrSpam: Boolean,
     isDrafts: Boolean = false,
     isSent: Boolean = false,
+    recipientFolderIds: Set<String> = emptySet(),
     listState: androidx.compose.foundation.lazy.LazyListState,
     errorMessage: String?,
     onEmailClick: (EmailEntity) -> Unit,
@@ -1207,6 +1215,7 @@ private fun EmailListContent(
                     showStar = false,
                     isSent = isSent,
                     isDrafts = isDrafts,
+                    recipientFolderIds = recipientFolderIds,
                     thread = row.thread,
                     expanded = row.expanded,
                     onClickLabel = if (isSelectionMode) null else if (row.expanded) Strings.collapseThread else Strings.expandThread,
@@ -1244,6 +1253,7 @@ private fun EmailListContent(
                     showStar = !isTrashOrSpam && !isDrafts,
                     isSent = isSent,
                     isDrafts = isDrafts,
+                    recipientFolderIds = recipientFolderIds,
                     nested = row is MailRow.Child,
                     imagePreview = imagePreviewCache[email.id],
                     onClick = remember { { stableOnEmailClick(latestEmail) } },
@@ -1266,6 +1276,7 @@ private fun EmailListItem(
     showStar: Boolean = true,
     isSent: Boolean = false,
     isDrafts: Boolean = false,
+    recipientFolderIds: Set<String> = emptySet(),
     imagePreview: com.dedovmosol.iwomail.ui.screens.emaillist.ListPreview? = null,
     /** Строка цепочки: число писем, сводный флажок, стрелка вместо флажка. */
     thread: com.dedovmosol.iwomail.domain.EmailThread? = null,
@@ -1321,7 +1332,7 @@ private fun EmailListItem(
         ) {
             // Отправленные и черновики — «Кому»: отправитель в них вы сами (как в Outlook). У черновика из Outlook
             // отправителя нет вовсе (From появляется при отправке), у созданного приложением — имя аккаунта в приложении.
-            val showsRecipient = isSent || isDrafts
+            val showsRecipient = isSent || isDrafts || email.folderId in recipientFolderIds
             val recipientName = remember(email.to, email.cc, email.bcc) {
                 com.dedovmosol.iwomail.ui.screens.emaillist.firstRecipientName(email.to, email.cc, email.bcc)
             }
