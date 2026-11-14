@@ -971,6 +971,12 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             filteredByRecentDelete, existingEmailsMap, isDrafts, skipRecentEditCheck
         )
 
+        val pendingMoveIds = database.pendingEmailChangeDao().getPendingMoveEmailIds()
+        val pendingMoves = if (pendingMoveIds.isEmpty()) emptyList()
+        else pendingMoveIds.mapNotNull { emailDao.getEmail(it) }
+        applyPendingMoveRetargets(pendingMoveRetargets(finalFiltered, pendingMoves))
+        val afterPending = filterIncomingAgainstPendingMoves(finalFiltered, pendingMoves)
+
         // MS-ASCMD §2.2.3.166.8: ServerId stability guaranteed ONLY on EAS 16.1.
         // On EAS 12.1 (Exchange 2007 SP1) ServerIds CAN change after SyncKey=0 reset.
         // Migrate old records to new serverId/id so MoveItems uses valid serverIds.
@@ -999,7 +1005,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             }
         }
 
-        val migratedEasIds = insertBatchInTransaction(finalFiltered, folder, syncData, accountId, folderId)
+        val migratedEasIds = insertBatchInTransaction(afterPending, folder, syncData, accountId, folderId)
 
         // batchServerIds contains ALL server IDs from this batch (including migrated new IDs).
         // Migrated records already have new IDs in the DB, matching these server IDs.
@@ -1009,11 +1015,11 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         serverGenericIdsInFullResync?.addAll(batchServerIds)
 
         val toInsert = if (migratedEasIds.isNotEmpty()) {
-            finalFiltered.filter { it.id !in migratedEasIds }
+            afterPending.filter { it.id !in migratedEasIds }
         } else {
-            finalFiltered
+            afterPending
         }
-        val allInserted = toInsert + finalFiltered.filter { it.id in migratedEasIds }
+        val allInserted = toInsert + afterPending.filter { it.id in migratedEasIds }
 
         return NewEmailsBatchResult(
             allInserted = allInserted,
@@ -1228,6 +1234,25 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
      * EWS→EAS миграция для черновиков + вставка батча — атомарная транзакция.
      * @return set of migrated EAS email IDs (для которых body/attachments взяты из EWS-записи)
      */
+    private suspend fun applyPendingMoveRetargets(retargets: List<PendingMoveRetarget>) {
+        if (retargets.isEmpty()) return
+        database.withTransaction {
+            for (r in retargets) {
+                val old = emailDao.getEmail(r.oldId) ?: continue
+                if (emailDao.getEmail(r.newId) != null) continue
+                val oldAttachments = attachmentDao.getAttachmentsList(r.oldId)
+                attachmentDao.deleteByEmail(r.oldId)
+                emailDao.delete(r.oldId)
+                emailDao.insert(old.copy(id = r.newId, serverId = r.newServerId))
+                if (oldAttachments.isNotEmpty()) {
+                    attachmentDao.insertAll(oldAttachments.map { it.copy(id = 0, emailId = r.newId) })
+                }
+                database.pendingEmailChangeDao().rename(r.oldId, r.newId)
+                registerDeletedEmail(r.oldId, context)
+            }
+        }
+    }
+
     private suspend fun insertBatchInTransaction(
         finalFiltered: List<EmailEntity>,
         folder: FolderEntity,

@@ -5,7 +5,7 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 
 ## v1.6.3b
 ### Full resync does not wipe an offline move (2026-11-15)
-- After SyncKey=0 (EAS 12.1 Status 3/12) trash/Sent/drafts reconcile no longer deletes a `pending.move` row: the server does not have it in that folder yet. Inbox Add is still `INSERT IGNORE`. Test: `EmailReconcileTest`
+- After SyncKey=0 (EAS 12.1 Status 3/12) trash/Sent/drafts reconcile no longer deletes a `pending.move` row. An Inbox Add with a new ServerId does not duplicate the message: the trash row is retargeted (otherwise MoveItems Status=1 and ghost-delete). Tests: `EmailReconcileTest`
 ### README docs badges and quiet sync of user folders (2026-11-15)
 - README: coloured documentation badges, separate Privacy Policy and Политика конфиденциальности, Architecture in detail RU/EN, GitHub download count
 - Single `docs/SECURITY.md`: how to report a vulnerability and the threat model. Root `SECURITY.md` removed (GitHub reads the file from `docs/`)
