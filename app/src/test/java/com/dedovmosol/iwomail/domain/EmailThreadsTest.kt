@@ -128,6 +128,29 @@ class EmailThreadsTest {
     }
 
     @Test
+    fun `two originals with the same subject are not glued together by a reply prefix`() {
+        val threads = EmailThreads.group(
+            listOf(
+                email("3", "RE: Встреча"),
+                email("2", "Встреча"),
+                email("1", "Встреча")
+            )
+        )
+        assertThat(threads.ids()).containsExactly(listOf("3"), listOf("2"), listOf("1")).inOrder()
+    }
+
+    @Test
+    fun `References chain unions with In-Reply-To targets`() {
+        val threads = EmailThreads.group(
+            listOf(
+                email("2", "RE: Встреча", inReplyTo = "<mid1@corp> <mid0@corp>"),
+                email("1", "Встреча", internetMessageId = "<mid0@corp>")
+            )
+        )
+        assertThat(threads.ids()).containsExactly(listOf("2", "1"))
+    }
+
+    @Test
     fun `accounts are not mixed and empty subjects stay apart`() {
         val threads = EmailThreads.group(
             listOf(

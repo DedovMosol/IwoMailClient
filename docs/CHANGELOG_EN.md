@@ -5,7 +5,7 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 
 ## v1.6.3b
 ### Conversations: search, Inbox+Sent, In-Reply-To on 2007 (2026-11-14)
-- **Two “RE: Meeting”** messages without an original and without In-Reply-To no longer merge: subject grouping needs both a reply and a non-prefixed message
+- **Two “RE: Meeting”** messages without In-Reply-To no longer merge. A reply joins by subject only if there is **exactly one** non-prefixed message with that subject; two originals stay apart. All In-Reply-To and References ids are used. The peer folder (Inbox↔Sent) is loaded only when conversations are on
 - **In-Reply-To**: from MIME when the body is loaded and from EWS GetItem (`message:InReplyTo`) on Exchange 2007; column `emails.inReplyTo` (DB v53). Message-ID links beat subject
 - **Inbox and Sent**: an Inbox thread can include Sent replies and vice versa (not drafts)
 - **Search**: the same grouping when conversations are on

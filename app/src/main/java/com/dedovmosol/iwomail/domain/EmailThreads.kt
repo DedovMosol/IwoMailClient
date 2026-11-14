@@ -108,11 +108,20 @@ object EmailThreads {
                 conversationBySubject.merge(subject, conversation) { old, new -> if (old == new) old else AMBIGUOUS }
             }
         }
+        val uniqueRoot = HashMap<String, Int>()
+        emails.forEachIndexed { index, email ->
+            if (conversationKey(email) != null || graph[index] != null) return@forEachIndexed
+            if (isReply(email.subject)) return@forEachIndexed
+            val subject = subjects[index] ?: return@forEachIndexed
+            uniqueRoot.merge(subject, index) { _, _ -> -1 }
+        }
         return emails.mapIndexed { index, email ->
             conversationKey(email) ?: graph[index] ?: subjects[index]?.let { subject ->
                 conversationBySubject[subject]
                     ?.takeIf { it != AMBIGUOUS && (isReply(email.subject) || it in conversationsWithReply) }
-                    ?: subject
+                    ?: uniqueRoot[subject]?.takeIf { it >= 0 }?.let { root ->
+                        if (index == root || isReply(email.subject)) subjects[root] else null
+                    }
             }
         }
     }
@@ -148,9 +157,10 @@ object EmailThreads {
             normalizeMessageId(email.internetMessageId)?.let { byId.putIfAbsent(it, i) }
         }
         emails.forEachIndexed { i, email ->
-            val reply = normalizeMessageId(email.inReplyTo) ?: return@forEachIndexed
-            val parentIndex = byId[reply] ?: return@forEachIndexed
-            if (emails[i].accountId == emails[parentIndex].accountId) union(i, parentIndex)
+            for (reply in referencedIds(email.inReplyTo)) {
+                val parentIndex = byId[reply] ?: continue
+                if (emails[i].accountId == emails[parentIndex].accountId) union(i, parentIndex)
+            }
         }
         val members = Array(n) { ArrayList<String>(1) }
         emails.indices.forEach { i -> members[find(i)].add(emails[i].id) }
@@ -164,6 +174,15 @@ object EmailThreads {
     private fun normalizeMessageId(value: String?): String? {
         val t = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         return if (t.startsWith("<") && t.endsWith(">")) t else "<$t>"
+    }
+
+    private val ANGLE_ID = Regex("<[^>]+>")
+
+    private fun referencedIds(value: String?): List<String> {
+        if (value.isNullOrBlank()) return emptyList()
+        val found = ANGLE_ID.findAll(value).mapNotNull { normalizeMessageId(it.value) }.toList()
+        if (found.isNotEmpty()) return found
+        return listOfNotNull(normalizeMessageId(value))
     }
 
     private const val BY_CONVERSATION = "c:"
