@@ -144,6 +144,19 @@ object Strings {
     val settings: String @Composable get() = if (isRussian()) "Настройки" else "Settings"
     val accounts: String @Composable get() = if (isRussian()) "Аккаунты" else "Accounts"
     val addAccount: String @Composable get() = if (isRussian()) "Добавить аккаунт" else "Add account"
+    @Composable fun accountsCount(n: Int): String = accountsCountLabel(n, isRussian())
+
+    fun accountsCountLabel(n: Int, russian: Boolean): String {
+        if (!russian) return if (n == 1) "1 account" else "$n accounts"
+        val n10 = n % 10
+        val n100 = n % 100
+        val word = when {
+            n10 == 1 && n100 != 11 -> "аккаунт"
+            n10 in 2..4 && n100 !in 12..14 -> "аккаунта"
+            else -> "аккаунтов"
+        }
+        return "$n $word"
+    }
     val accountSettings: String @Composable get() = if (isRussian()) "Настройки аккаунта" else "Account settings"
     val changeCredentials: String @Composable get() = if (isRussian()) "Изменить учётные данные" else "Change credentials"
     val deleteAccount: String @Composable get() = if (isRussian()) "Удалить аккаунт?" else "Delete account?"

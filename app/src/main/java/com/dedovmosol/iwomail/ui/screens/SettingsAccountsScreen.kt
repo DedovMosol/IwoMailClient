@@ -4,12 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -44,31 +41,22 @@ internal fun SettingsAccountsScreen(
 
     SettingsPageScaffold(title = Strings.accounts, onBackClick = onBackClick) {
         items(accounts, key = { it.id }) { account ->
-            AccountCard(
-                account = account,
-                onOpenClick = { onNavigateToAccountSettings(account.id) }
-            )
+            SettingsGroup {
+                AccountCard(
+                    account = account,
+                    onOpenClick = { onNavigateToAccountSettings(account.id) }
+                )
+            }
         }
         item {
-            ListItem(
-                headlineContent = { Text(Strings.addAccount) },
-                leadingContent = {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            AppIcons.Add,
-                            null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
-                },
-                modifier = Modifier.clickable(onClick = onAddAccount)
-            )
+            SettingsGroup {
+                SettingsHubRow(
+                    title = Strings.addAccount,
+                    subtitle = null,
+                    icon = AppIcons.Add,
+                    onClick = onAddAccount
+                )
+            }
         }
     }
 }
@@ -78,57 +66,47 @@ private fun AccountCard(
     account: AccountEntity,
     onOpenClick: () -> Unit
 ) {
-    val accountType = try {
-        AccountType.valueOf(account.accountType)
-    } catch (_: Exception) {
-        AccountType.EXCHANGE
-    }
-    val accountColor = try {
-        Color(account.color)
-    } catch (_: Exception) {
-        MaterialTheme.colorScheme.primary
-    }
-    Card(
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        )
-    ) {
-        ListItem(
-            modifier = Modifier.clickable(onClickLabel = account.displayName, onClick = onOpenClick),
-            headlineContent = {
+    val accountType = AccountType.fromStored(account.accountType)
+    val accountColor = Color(account.color)
+    val glyph = Color(contrastingContentArgb(account.color))
+    ListItem(
+        modifier = Modifier.clickable(
+            role = androidx.compose.ui.semantics.Role.Button,
+            onClickLabel = account.displayName,
+            onClick = onOpenClick
+        ),
+        headlineContent = {
+            Text(
+                account.displayName,
+                fontWeight = if (account.isActive) FontWeight.Bold else FontWeight.Normal
+            )
+        },
+        supportingContent = {
+            Column {
+                Text(account.email)
                 Text(
-                    account.displayName,
-                    fontWeight = if (account.isActive) FontWeight.Bold else FontWeight.Normal
+                    accountType.displayName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
                 )
-            },
-            supportingContent = {
-                Column {
-                    Text(account.email)
-                    Text(
-                        accountType.displayName,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-            },
-            leadingContent = {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(accountColor),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = account.displayName.firstOrNull()?.uppercase() ?: "?",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            },
-            trailingContent = { Icon(AppIcons.ChevronRight, contentDescription = null) },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent)
-        )
-    }
+            }
+        },
+        leadingContent = {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(accountColor),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = account.displayName.firstOrNull()?.uppercase() ?: "?",
+                    color = glyph,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        trailingContent = { Icon(AppIcons.ChevronRight, contentDescription = null) },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+    )
 }

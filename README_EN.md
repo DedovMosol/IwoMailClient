@@ -139,7 +139,6 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **IMAP/POP3:** beta implementation, does not cover calendar, contacts, tasks, notes, Direct Push and EWS features. There is no SMTP sending: the outgoing server address is only stored in the account.
 - **Offline queue:** message star and read state, message moves (including to trash), task and note edits and moves to trash. Creating tasks and notes, the calendar and folder operations are still server-first and are not deferred without a connection.
 - **Exchange contacts:** read-only. They come from the server's Contacts folder (EAS Sync); edit and delete them in Outlook or OWA. In the app an Exchange contact can be copied to personal contacts, which are editable.
-- **On-device verification:** the horizontal-scroll fix in the message viewer and the WebView renderer-death recovery are covered by unit tests but have not been verified on a real device.
 - **S/MIME:** signing and encryption not implemented.
 - **EAS 16.x:** explicitly not a target version of the project; the code's main range is EAS 12.x-14.1.
 

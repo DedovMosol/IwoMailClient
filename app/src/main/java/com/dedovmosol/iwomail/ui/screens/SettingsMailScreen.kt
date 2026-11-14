@@ -13,7 +13,11 @@ internal fun SettingsMailScreen(onBackClick: () -> Unit) {
     val context = LocalContext.current
     val settingsRepo = remember { RepositoryProvider.getSettingsRepository(context) }
     SettingsPageScaffold(title = Strings.mailSection, onBackClick = onBackClick) {
-        item { MailSettingsSection(settingsRepo, showHeader = false) }
+        item {
+            SettingsGroup {
+                MailSettingsSection(settingsRepo, showHeader = false)
+            }
+        }
     }
 }
 
@@ -24,6 +28,10 @@ internal fun SettingsNotificationsScreen(onBackClick: () -> Unit) {
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val accounts by accountRepo.accounts.collectAsStateWithLifecycle(initialValue = emptyList())
     SettingsPageScaffold(title = Strings.mailAlertsSection, onBackClick = onBackClick) {
-        item { MailAlertsSettingsSection(settingsRepo, accounts, showHeader = false) }
+        item {
+            SettingsGroup {
+                MailAlertsSettingsSection(settingsRepo, accounts, showHeader = false)
+            }
+        }
     }
 }

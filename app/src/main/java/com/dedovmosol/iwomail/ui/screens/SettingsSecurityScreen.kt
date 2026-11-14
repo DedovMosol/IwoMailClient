@@ -1,15 +1,11 @@
 package com.dedovmosol.iwomail.ui.screens
 
-import androidx.compose.foundation.clickable
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
@@ -81,45 +77,42 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
 
     SettingsPageScaffold(title = Strings.appLockSection, onBackClick = onBackClick) {
         item {
-            SettingsSwitchRow(
-                title = Strings.appLockTitle,
-                description = Strings.appLockDesc,
-                icon = { Icon(AppIcons.Lock, null) },
-                checked = appLockEnabled,
-                onChange = { enabled ->
-                    if (enabled) {
-                        if (lockPasswordSet) {
-                            scope.launch { settingsRepo.setAppLockEnabled(true) }
-                        } else {
-                            lockDialog = LockDialogType.SetPassword
-                        }
-                    } else {
-                        lockDialog = LockDialogType.Disable
-                    }
-                }
-            )
-        }
-        if (appLockEnabled) {
-            item {
-                ListItem(
-                    headlineContent = { Text(Strings.appLockChangePassword) },
-                    leadingContent = { Icon(AppIcons.Security, null) },
-                    trailingContent = { Icon(AppIcons.ChevronRight, null) },
-                    modifier = Modifier.clickable { lockDialog = LockDialogType.ChangePassword }
-                )
-            }
-            item {
+            SettingsGroup {
                 SettingsSwitchRow(
-                    title = Strings.appLockFingerprintTitle,
-                    description = if (biometricAvailable) Strings.appLockFingerprintDesc
-                    else Strings.appLockBiometricUnavailable,
-                    icon = { Icon(AppIcons.Fingerprint, null) },
-                    checked = appLockBiometricEnabled,
-                    enabled = biometricAvailable,
+                    title = Strings.appLockTitle,
+                    description = Strings.appLockDesc,
+                    icon = { Icon(AppIcons.Lock, null) },
+                    checked = appLockEnabled,
                     onChange = { enabled ->
-                        scope.launch { settingsRepo.setAppLockBiometricEnabled(enabled) }
+                        if (enabled) {
+                            if (lockPasswordSet) {
+                                scope.launch { settingsRepo.setAppLockEnabled(true) }
+                            } else {
+                                lockDialog = LockDialogType.SetPassword
+                            }
+                        } else {
+                            lockDialog = LockDialogType.Disable
+                        }
                     }
                 )
+                if (appLockEnabled) {
+                    SettingsNavRow(
+                        title = Strings.appLockChangePassword,
+                        icon = AppIcons.Security,
+                        onClick = { lockDialog = LockDialogType.ChangePassword }
+                    )
+                    SettingsSwitchRow(
+                        title = Strings.appLockFingerprintTitle,
+                        description = if (biometricAvailable) Strings.appLockFingerprintDesc
+                        else Strings.appLockBiometricUnavailable,
+                        icon = { Icon(AppIcons.Fingerprint, null) },
+                        checked = appLockBiometricEnabled,
+                        enabled = biometricAvailable,
+                        onChange = { enabled ->
+                            scope.launch { settingsRepo.setAppLockBiometricEnabled(enabled) }
+                        }
+                    )
+                }
             }
         }
     }
