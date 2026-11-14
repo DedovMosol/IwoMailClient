@@ -45,6 +45,30 @@ class EmailThreadsTest {
         assertThat(EmailThreads.isReply("Re: ")).isTrue()
         assertThat(EmailThreads.isReply("Regards")).isFalse()
         assertThat(EmailThreads.isReply("x RE: y")).isFalse()
+        assertThat(EmailThreads.isReply("SV: möte")).isTrue()
+        assertThat(EmailThreads.isReply("VS: plan")).isTrue()
+        assertThat(EmailThreads.isReply("Enc: factura")).isTrue()
+        assertThat(EmailThreads.isReply("Od: spotkanie")).isTrue()
+        assertThat(EmailThreads.isReply("YNT: toplantı")).isTrue()
+        assertThat(EmailThreads.isReply("Doorst: nota")).isTrue()
+        assertThat(EmailThreads.isReply("RES: orçamento")).isTrue()
+        assertThat(EmailThreads.isReply("REF: ticket")).isTrue()
+        // Однобуквенный итальянский R: не считаем ответом
+        assertThat(EmailThreads.isReply("R: Q1")).isFalse()
+        assertThat(EmailThreads.isReply("Odessa meeting")).isFalse()
+    }
+
+    @Test
+    fun `Exchange 2007 Swedish reply groups with the original subject`() {
+        val threads = EmailThreads.group(
+            listOf(
+                email("2", "SV: Budget"),
+                email("1", "Budget")
+            )
+        )
+
+        assertThat(threads.ids()).containsExactly(listOf("2", "1"))
+        assertThat(EmailThreads.normalizeSubject("SV: Budget")).isEqualTo("budget")
     }
 
     @Test

@@ -20,7 +20,7 @@ data class EmailThread(val key: String, val emails: List<EmailEntity>) {
  *
  * - Exchange 2010 и новее (EAS 14.0+) присылают у письма email2:ConversationId — по нему, как в Outlook.
  * - Exchange 2007 его не присылает, а заголовков References/In-Reply-To в синхронизации нет (только в MIME каждого
- *   письма) — по теме без «Re:», «Fwd:» и подобных. Чтобы не склеить несвязанные письма с одинаковой темой
+ *   письма) — по теме без «Re:», «Fwd:», «SV:», «VS:», «Enc:», «Od:» и подобных. Чтобы не склеить несвязанные письма с одинаковой темой
  *   («Отчёт», «Вопрос»), цепочка по теме — только если в ней есть ответ или пересылка.
  * - Письма, полученные до появления цепочек в приложении, ConversationId не знают: они присоединяются по теме к
  *   переписке с ConversationId (если такая тема у одной переписки и есть ответ — в ней или в самом письме).
@@ -29,9 +29,11 @@ data class EmailThread(val key: String, val emails: List<EmailEntity>) {
  */
 object EmailThreads {
 
-    // Повторяющиеся префиксы ответа и пересылки (англ., нем., рус.), со счётчиком «Re[2]:», «RE (3):»
+    // Повторяющиеся префиксы ответа и пересылки, со счётчиком «Re[2]:», «RE (3):».
+    // Длинные ветки первыми. Однобуквенные R:/I: не берём: «R: Q1» — не ответ.
+    // SV/VS/Enc/Od/YNT/Doorst — типичные клиенты на Exchange 2007 без ConversationId.
     private val REPLY_PREFIX = Regex(
-        """^(?:\s*(?:re|fwd?|aw|wg|antw|ответ|отв|пересл)\.?\s*(?:\[\d+]|\(\d+\))?\s*[:：])+\s*""",
+        """^(?:\s*(?:doorst|antw|ответ|пересл|ynt|res|ref|enc|fwd?|sv|vs|aw|wg|od|re|отв)\.?\s*(?:\[\d+]|\(\d+\))?\s*[:：])+\s*""",
         RegexOption.IGNORE_CASE
     )
     private val SPACES = Regex("""\s+""")

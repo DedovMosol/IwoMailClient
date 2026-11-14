@@ -4,6 +4,10 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Exchange 2007 conversations: more reply prefixes (2026-11-14)
+- **Before**: without ConversationId (EAS 12.x) a thread formed by subject only if Re/Fwd/AW/WG/Antw/Ответ was present. Swedish SV:, Dutch VS:, Spanish Enc:, Polish Od: did not join the original
+- **Now**: the same rules (colon after the prefix; two “Meeting” subjects without a reply stay apart). Added SV, VS, Enc, Od, YNT, Doorst, RES, REF. Single-letter R:/I: are not treated as replies (“R: Q1” is not a reply)
+- **Tests**: `EmailThreadsTest` — prefixes, “Odessa meeting” and “R: Q1” are not replies, SV: Budget + Budget is one thread
 ### Conversations: expand without a duplicate latest (2026-11-14)
 - **Before**: the header was a full preview of the newest message, then every message again, including that latest
 - **Why not drop latest from the children**: the header does not open a message — without a latest row it could not be read
