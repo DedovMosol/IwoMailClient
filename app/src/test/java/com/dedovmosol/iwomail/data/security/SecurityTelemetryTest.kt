@@ -79,29 +79,6 @@ class SecurityTelemetryTest {
     }
 
     @Test
-    fun `hasAcknowledgedWarning - initial state is false`() {
-        assertThat(telemetry.hasAcknowledgedWarning()).isFalse()
-    }
-
-    @Test
-    fun `acknowledgeWarning sets flag`() {
-        telemetry.acknowledgeWarning()
-        assertThat(telemetry.hasAcknowledgedWarning()).isTrue()
-    }
-
-    @Test
-    fun `insecure storage toast follows app language`() {
-        assertThat(insecureStorageWarningText(true, "KeyStore unavailable"))
-            .contains("Шифрование паролей недоступно")
-        assertThat(insecureStorageWarningText(true, "KeyStore unavailable"))
-            .contains("KeyStore unavailable")
-        assertThat(insecureStorageWarningText(false, "KeyStore unavailable"))
-            .contains("Password encryption is unavailable")
-        assertThat(insecureStorageWarningText(false, "KeyStore unavailable"))
-            .doesNotContain("⚠️")
-    }
-
-    @Test
     fun `warning text is localized and includes the reason`() {
         assertThat(insecureStorageWarningText(true, "KeyStore unavailable"))
             .contains("Шифрование паролей недоступно")
@@ -136,17 +113,14 @@ class SecurityTelemetryTest {
     @Test
     fun `reset clears all telemetry data`() {
         telemetry.recordInsecureStorageUsed("test reason")
-        telemetry.acknowledgeWarning()
         telemetry.setFailClosedMode(true)
 
         assertThat(telemetry.isUsingInsecureStorage()).isTrue()
-        assertThat(telemetry.hasAcknowledgedWarning()).isTrue()
         assertThat(telemetry.isFailClosedEnabled()).isTrue()
 
         telemetry.reset()
 
         assertThat(telemetry.isUsingInsecureStorage()).isFalse()
-        assertThat(telemetry.hasAcknowledgedWarning()).isFalse()
         assertThat(telemetry.isFailClosedEnabled()).isFalse()
         assertThat(telemetry.getInsecureStorageReason()).isNull()
         assertThat(telemetry.getInsecureStorageFirstUsedTime()).isEqualTo(0L)

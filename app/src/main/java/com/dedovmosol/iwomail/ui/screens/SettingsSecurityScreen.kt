@@ -37,7 +37,10 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
     val telemetry = remember {
         com.dedovmosol.iwomail.data.security.SecurityTelemetry.getInstance(context)
     }
-    val storageDegraded = remember { passwordStorage.isUsingInsecureStorage() }
+    val storageDegraded = remember {
+        passwordStorage.isUsingInsecureStorage() ||
+            com.dedovmosol.iwomail.data.security.AppLockManager.isUsingInsecureStorage()
+    }
     var failClosed by remember { mutableStateOf(telemetry.isFailClosedEnabled()) }
 
     when (lockDialog) {

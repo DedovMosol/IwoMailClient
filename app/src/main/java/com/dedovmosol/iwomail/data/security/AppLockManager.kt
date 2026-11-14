@@ -68,6 +68,12 @@ object AppLockManager {
     @Volatile
     private var storage: android.content.SharedPreferences? = null
 
+    @Volatile
+    private var appContext: Context? = null
+
+    @Volatile
+    private var usingInsecureStorage: Boolean = false
+
     /**
      * Состояние сессии: true = приложение заблокировано (показывать экран ввода пароля).
      * Стартует как true (fail-closed); фактическое значение определяется [evaluateInitialState]
@@ -87,11 +93,14 @@ object AppLockManager {
         if (storage != null) return
         synchronized(this) {
             if (storage != null) return
-            storage = EncryptedStoreProvider.create(
+            appContext = context.applicationContext
+            val result = EncryptedStoreProvider.create(
                 context.applicationContext,
                 "app_lock_store",
                 "app_lock_fallback"
-            ).prefs
+            )
+            storage = result.prefs
+            usingInsecureStorage = result.insecureReason != null
             evaluateInitialState()
         }
     }
@@ -105,14 +114,22 @@ object AppLockManager {
         return parseStoredHash(hash) != null
     }
 
+    fun isUsingInsecureStorage(): Boolean = usingInsecureStorage
+
     /**
      * Установить или заменить пароль блокировки. Возвращает false, если пароль
-     * короче [MIN_PASSWORD_LENGTH] (валидация до хеширования — лишняя работа не нужна).
+     * короче [MIN_PASSWORD_LENGTH] или включён fail-closed при обфусцированном хранилище.
      * После успешной установки сессия разблокируется.
      */
     fun setPassword(password: String): Boolean {
         val prefs = storage ?: return false
         if (password.length < MIN_PASSWORD_LENGTH) return false
+        if (usingInsecureStorage) {
+            val ctx = appContext
+            if (ctx != null && SecurityTelemetry.getInstance(ctx).isFailClosedEnabled()) {
+                return false
+            }
+        }
         val salt = ByteArray(SALT_LENGTH_BYTES).also(secureRandom::nextBytes)
         val hash = buildStoredHash(password, salt, PBKDF2_ITERATIONS)
         prefs.edit().putString(KEY_LOCK_HASH, hash).apply()
@@ -264,6 +281,8 @@ object AppLockManager {
     fun resetForTesting() {
         synchronized(this) {
             storage = null
+            appContext = null
+            usingInsecureStorage = false
             _locked.value = true
             leavingForExternalUi = false
             notedExternalUiAtElapsed = 0L
@@ -277,7 +296,16 @@ object AppLockManager {
     fun setStorageForTesting(prefs: android.content.SharedPreferences) {
         synchronized(this) {
             storage = prefs
+            usingInsecureStorage = false
             evaluateInitialState()
+        }
+    }
+
+    @androidx.annotation.VisibleForTesting
+    fun markInsecureForTesting(context: Context) {
+        synchronized(this) {
+            usingInsecureStorage = true
+            appContext = context.applicationContext
         }
     }
 

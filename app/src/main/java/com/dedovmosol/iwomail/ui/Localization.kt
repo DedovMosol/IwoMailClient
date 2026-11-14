@@ -1473,12 +1473,12 @@ object Strings {
     val appLockDesc: String @Composable get() = if (isRussian()) "Защита входа паролем и отпечатком пальца" else "Protect access with a password and fingerprint"
     val passwordStorageDegradedTitle: String @Composable get() = if (isRussian()) "Шифрование паролей недоступно" else "Password encryption unavailable"
     val passwordStorageDegradedDesc: String @Composable get() = if (isRussian())
-        "Keystore недоступен. Пароли ящиков хранятся с ослабленной защитой на этом устройстве."
-        else "The Keystore is unavailable. Mailbox passwords on this device are stored with reduced protection."
+        "Keystore недоступен. Пароли ящиков и пароль блокировки на этом устройстве хранятся с ослабленной защитой."
+        else "The Keystore is unavailable. Mailbox passwords and the app lock password on this device are stored with reduced protection."
     val failClosedTitle: String @Composable get() = if (isRussian()) "Не сохранять пароли без шифрования" else "Do not save passwords without encryption"
     val failClosedDesc: String @Composable get() = if (isRussian())
-        "Новый ящик или смена пароля не запишутся, пока шифрование не заработает. Уже сохранённые пароли остаются."
-        else "A new mailbox or a password change will not be stored until encryption works again. Passwords already saved stay as they are."
+        "Новый ящик, смена пароля ящика и пароль блокировки приложения не запишутся, пока шифрование не заработает. Уже сохранённое остаётся."
+        else "A new mailbox, a mailbox password change and the app lock password will not be stored until encryption works. What is already saved stays."
     val appLockFingerprintTitle: String @Composable get() = if (isRussian()) "Вход по отпечатку пальца" else "Unlock with fingerprint"
     val appLockFingerprintDesc: String @Composable get() = if (isRussian()) "Быстрая разблокировка вместо ввода пароля" else "Quick unlock instead of typing the password"
     val appLockSetPassword: String @Composable get() = if (isRussian()) "Установить пароль" else "Set password"

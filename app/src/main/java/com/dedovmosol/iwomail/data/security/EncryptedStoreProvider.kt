@@ -26,8 +26,15 @@ internal object EncryptedStoreProvider {
      */
     data class Result(val prefs: SharedPreferences, val insecureReason: String?)
 
+    @androidx.annotation.VisibleForTesting
+    @Volatile
+    var forceInsecureForTesting: Boolean = false
+
     fun create(context: Context, fileName: String, fallbackFileName: String): Result {
         return try {
+            if (forceInsecureForTesting) {
+                error("forced insecure store for tests")
+            }
             val masterKey = MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()

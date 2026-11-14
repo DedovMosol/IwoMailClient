@@ -55,7 +55,8 @@ class SecurityTelemetry private constructor(
     }
 
     /**
-     * Check if currently using insecure storage.
+     * Когда-либо срабатывал ли fallback. Это журнал, не текущий бэкенд:
+     * UI смотрит [PasswordStorage.isUsingInsecureStorage] / [AppLockManager].
      */
     fun isUsingInsecureStorage(): Boolean {
         return prefs.getBoolean(KEY_USING_INSECURE_STORAGE, false)
@@ -73,22 +74,6 @@ class SecurityTelemetry private constructor(
      */
     fun getInsecureStorageFirstUsedTime(): Long {
         return prefs.getLong(KEY_INSECURE_STORAGE_FIRST_USED, 0L)
-    }
-
-    /**
-     * Check if user has acknowledged the security warning.
-     */
-    fun hasAcknowledgedWarning(): Boolean {
-        return prefs.getBoolean(KEY_WARNING_ACKNOWLEDGED, false)
-    }
-
-    /**
-     * Mark security warning as acknowledged by user.
-     */
-    fun acknowledgeWarning() {
-        prefs.edit()
-            .putBoolean(KEY_WARNING_ACKNOWLEDGED, true)
-            .apply()
     }
 
     /**
@@ -119,13 +104,7 @@ class SecurityTelemetry private constructor(
      * Show warning to user about insecure storage.
      */
     private fun showInsecureStorageWarning(reason: String) {
-        val russian = runCatching {
-            com.dedovmosol.iwomail.data.repository.SettingsRepository.getInstance(context)
-                .getLanguageSync() == "ru"
-        }.getOrDefault(
-            context.resources.configuration.locales[0].language.startsWith("ru")
-        )
-        val message = insecureStorageWarningText(russian, reason)
+        val message = insecureStorageWarningText(com.dedovmosol.iwomail.AppLanguageCode.isRussian(), reason)
         SafeToast.long(context, message)
         android.util.Log.w(TAG, "Insecure storage warning shown to user: $message")
     }
@@ -138,7 +117,6 @@ class SecurityTelemetry private constructor(
         private const val KEY_INSECURE_STORAGE_REASON = "insecure_storage_reason"
         private const val KEY_INSECURE_STORAGE_FIRST_USED = "insecure_storage_first_used"
         private const val KEY_INSECURE_STORAGE_WARNING_SHOWN = "insecure_storage_warning_shown"
-        private const val KEY_WARNING_ACKNOWLEDGED = "warning_acknowledged"
         private const val KEY_FAIL_CLOSED_MODE = "fail_closed_mode"
 
         @Volatile

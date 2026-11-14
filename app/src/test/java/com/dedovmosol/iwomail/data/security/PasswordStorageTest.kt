@@ -56,7 +56,7 @@ class PasswordStorageTest {
 
     @After
     fun tearDown() {
-        // Clean up
+        EncryptedStoreProvider.forceInsecureForTesting = false
         context.getSharedPreferences("secure_passwords", Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("passwords_fallback", Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("security_telemetry", Context.MODE_PRIVATE).edit().clear().commit()
@@ -245,5 +245,22 @@ class PasswordStorageTest {
         } else {
             assertThat(storage.getInsecureStorageReason()).isNull()
         }
+    }
+
+    @Test
+    fun `fail-closed throws when the store is obfuscated`() {
+        EncryptedStoreProvider.forceInsecureForTesting = true
+        PasswordStorage.resetForTesting()
+        SecurityTelemetry.resetForTesting()
+        val insecure = PasswordStorage.getInstance(context)
+        assertThat(insecure.isUsingInsecureStorage()).isTrue()
+        SecurityTelemetry.getInstance(context).setFailClosedMode(true)
+        try {
+            insecure.savePassword(99L, "secret")
+            throw AssertionError("expected SecurityException")
+        } catch (e: SecurityException) {
+            assertThat(e).isInstanceOf(SecurityException::class.java)
+        }
+        assertThat(insecure.getPassword(99L)).isNull()
     }
 }

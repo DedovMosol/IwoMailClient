@@ -260,4 +260,14 @@ class AppLockManagerTest {
         assertThat(AppLockManager.shouldLockAfterExternalUi(59_999L, 60_000L)).isFalse()
         assertThat(AppLockManager.shouldLockAfterExternalUi(60_000L, 60_000L)).isTrue()
     }
+
+    @Test
+    fun `fail-closed blocks writing the lock password to obfuscated storage`() {
+        SecurityTelemetry.resetForTesting()
+        SecurityTelemetry.getInstance(context).setFailClosedMode(true)
+        AppLockManager.markInsecureForTesting(context)
+        assertThat(AppLockManager.setPassword("123456")).isFalse()
+        assertThat(AppLockManager.isPasswordSet()).isFalse()
+        SecurityTelemetry.resetForTesting()
+    }
 }

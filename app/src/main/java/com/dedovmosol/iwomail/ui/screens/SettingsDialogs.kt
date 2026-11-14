@@ -779,6 +779,7 @@ internal fun LockPasswordDialog(
     val tooShortMsg = Strings.appLockTooShort
     val mismatchMsg = Strings.appLockMismatch
     val wrongPasswordMsg = Strings.appLockWrongPassword
+    val saveRejectedMsg = Strings.failClosedTitle
     // БЕЗОПАСНОСТЬ: пароли хранятся только в памяти композабля (remember), а НЕ в
     // rememberSaveable — сериализация секрета в instance-state недопустима. При
     // смерти процесса/конфигурации диалог закроется и пользователь введёт заново —
@@ -822,7 +823,11 @@ internal fun LockPasswordDialog(
                 onSubmit(currentPassword, newPassword)
             }
             isChecking = false
-            if (committed) onSuccess()
+            if (committed) {
+                onSuccess()
+            } else {
+                error = saveRejectedMsg
+            }
         }
     }
 
