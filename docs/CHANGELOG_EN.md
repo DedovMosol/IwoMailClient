@@ -4,6 +4,11 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### ConversationIndex and offline task/note create (2026-11-14)
+- **Thread order (EAS 14+)**: `emails.conversationIndex` (DB v52). Expanded list is root then replies by the Index blob; without the field (Exchange 2007) it stays newest-first by date
+- **Create offline**: the task/note is stored (`local_task_` / `local_note_`) and queued as `pendingCreate`. Assigning a task offline is an error. Send uses the same EAS/EWS path as online. Sync does not treat local-only rows as deleted on the server
+- **Lint**: `createPredefined` / `USAGE_TOUCH` only at sdk 29/33; NewApi is suppressed so CI with min 26 passes
+- **Tests**: Index order; 2010 parses Index, 2007 is null
 ### Exchange 2007 conversations: more reply prefixes (2026-11-14)
 - **Before**: without ConversationId (EAS 12.x) a thread formed by subject only if Re/Fwd/AW/WG/Antw/Ответ was present. Swedish SV:, Dutch VS:, Spanish Enc:, Polish Od: did not join the original
 - **Now**: the same rules (colon after the prefix; two “Meeting” subjects without a reply stay apart). Added SV, VS, Enc, Od, YNT, Doorst, RES, REF. Single-letter R:/I: are not treated as replies (“R: Q1” is not a reply)

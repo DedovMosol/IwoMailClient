@@ -72,6 +72,7 @@ class EasConversationIdSyncTest {
         val email = (exchange.emailService("14.1").sync("2", "K1") as EasResult.Success).data.emails.single()
 
         assertThat(email.conversationId).isEqualTo("AAQkADAwATM0MDAAMS1iNWM=")
+        assertThat(email.conversationIndex).isEqualTo("AdcA1B2C3D4=")
     }
 
     @Test
@@ -81,6 +82,7 @@ class EasConversationIdSyncTest {
         val email = (exchange.emailService("12.1").sync("2", "K1") as EasResult.Success).data.emails.single()
 
         assertThat(email.conversationId).isNull()
+        assertThat(email.conversationIndex).isNull()
         assertThat(email.subject).isEqualTo("RE: Смета")
     }
 }

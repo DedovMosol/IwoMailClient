@@ -1070,7 +1070,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             importance = email.importance,
             hasAttachments = email.attachments.isNotEmpty(),
             messageClass = email.messageClass,
-            conversationId = email.conversationId
+            conversationId = email.conversationId,
+            conversationIndex = email.conversationIndex
         ).withFlag(email.flag)
     }
 

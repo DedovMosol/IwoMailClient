@@ -45,6 +45,33 @@ object EmailThreads {
     /** Тема ответа или пересылки. */
     fun isReply(subject: String): Boolean = REPLY_PREFIX.containsMatchIn(subject)
 
+    /**
+     * Порядок в цепочке по ConversationIndex ([MS-ASEMAIL] 2.2.2.21): корень короче, ответы наращивают blob.
+     * Нет индекса (Exchange 2007) — 0, вызывающий сортирует по дате.
+     */
+    fun compareConversationIndex(a: String?, b: String?): Int {
+        val left = decodeIndex(a)
+        val right = decodeIndex(b)
+        if (left == null && right == null) return 0
+        if (left == null) return 1
+        if (right == null) return -1
+        val n = minOf(left.size, right.size)
+        for (i in 0 until n) {
+            val d = (left[i].toInt() and 0xFF) - (right[i].toInt() and 0xFF)
+            if (d != 0) return d
+        }
+        return left.size - right.size
+    }
+
+    private fun decodeIndex(value: String?): ByteArray? {
+        if (value.isNullOrBlank()) return null
+        return try {
+            java.util.Base64.getDecoder().decode(value)
+        } catch (_: IllegalArgumentException) {
+            value.toByteArray(Charsets.ISO_8859_1)
+        }
+    }
+
     fun group(emails: List<EmailEntity>): List<EmailThread> {
         val keys = keysOf(emails)
         val members = LinkedHashMap<String, MutableList<EmailEntity>>()

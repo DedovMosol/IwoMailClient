@@ -46,7 +46,9 @@ class AppHaptics internal constructor(
         fun shouldPlay(hasVibrator: Boolean, systemEnabled: Boolean): Boolean =
             hasVibrator && systemEnabled
 
-        /** API 29+: системный тик/клик. Ниже — короткий one-shot (VibrationEffect есть с API 26 = minSdk). */
+        /** API 29+: системный тик/клик. Ниже — короткий one-shot (VibrationEffect есть с API 26 = minSdk).
+         * [sdk] для тестов; Lint не видит параметр как guard, поэтому NewApi подавлен — вызов только при sdk>=29. */
+        @Suppress("NewApi")
         fun effect(sdk: Int, pulse: Pulse): VibrationEffect {
             if (sdk >= 29) {
                 val id = when (pulse) {
@@ -101,6 +103,7 @@ class AppHaptics internal constructor(
         }
 
         /** API 33+: USAGE_TOUCH, чтобы не бить в «не беспокоить» как будильник. */
+        @Suppress("NewApi")
         private fun playOnDevice(vibrator: Vibrator?, effect: VibrationEffect, sdk: Int) {
             if (vibrator == null) return
             if (sdk >= 33) {
@@ -115,6 +118,7 @@ class AppHaptics internal constructor(
             }
         }
 
+        @Suppress("NewApi")
         private fun resolveVibrator(app: Context, sdk: Int): Vibrator? {
             return try {
                 if (sdk >= Build.VERSION_CODES.S) {
