@@ -33,4 +33,19 @@ class EmailRowNamesTest {
         assertThat(firstRecipientName("  ", "petr@corp.ru")).isEqualTo("petr")
         assertThat(firstRecipientName("anna@corp.ru", "ivan@corp.ru")).isEqualTo("anna")
     }
+
+    @Test
+    fun `empty To and Cc use Bcc`() {
+        assertThat(firstRecipientName("", "", "\"Иван\" <ivan@corp.ru>")).isEqualTo("Иван")
+        assertThat(firstRecipientName("  ", "", "hidden@corp.ru")).isEqualTo("hidden")
+        assertThat(firstRecipientName("", "cc@corp.ru", "bcc@corp.ru")).isEqualTo("cc")
+        assertThat(firstRecipientField("", "", null)).isEmpty()
+    }
+
+    @Test
+    fun `sent and drafts show the recipient not From`() {
+        assertThat(folderShowsRecipient(com.dedovmosol.iwomail.eas.FolderType.SENT_ITEMS)).isTrue()
+        assertThat(folderShowsRecipient(com.dedovmosol.iwomail.eas.FolderType.DRAFTS)).isTrue()
+        assertThat(folderShowsRecipient(com.dedovmosol.iwomail.eas.FolderType.INBOX)).isFalse()
+    }
 }

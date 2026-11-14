@@ -15,10 +15,12 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import com.dedovmosol.iwomail.ui.screens.emaillist.folderShowsRecipient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -38,7 +40,9 @@ data class SearchUiState(
     val dateFilter: DateFilter = DateFilter.ALL,
     val allResults: List<EmailEntity> = emptyList(),
     val isSearching: Boolean = false,
-    val selectedIds: Set<String> = emptySet()
+    val selectedIds: Set<String> = emptySet(),
+    /** Папки «Отправленные» и «Черновики»: в поиске строка показывает Кому, не From. */
+    val recipientFolderIds: Set<String> = emptySet()
 )
 
 /**
@@ -81,6 +85,21 @@ class SearchViewModel(
     // значение читается синхронно в search().
     private val activeAccount = accountRepo.activeAccount
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    init {
+        viewModelScope.launch {
+            accountRepo.activeAccount.collectLatest { account ->
+                if (account == null) {
+                    _uiState.update { it.copy(recipientFolderIds = emptySet()) }
+                    return@collectLatest
+                }
+                mailRepo.getFolders(account.id).collect { folders ->
+                    val ids = folders.filter { folderShowsRecipient(it.type) }.mapTo(HashSet()) { it.id }
+                    _uiState.update { it.copy(recipientFolderIds = ids) }
+                }
+            }
+        }
+    }
 
     private var searchJob: Job? = null
 

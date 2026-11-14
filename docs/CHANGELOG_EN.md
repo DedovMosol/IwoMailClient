@@ -4,6 +4,10 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Search and list: To in Sent/drafts, Bcc, schema v53 (2026-11-14)
+- Search no longer shows From on Sent and Drafts rows: same To / Cc / Bcc as the folder list
+- Empty To and Cc use Bcc. README: current Room schema is v53, not v51
+- Tests: `EmailRowNamesTest` (Bcc, folder type), `SearchViewModelTest` (recipient folder ids)
 ### Reminders: right mailbox, then the event/task/message (2026-11-14)
 - A calendar tap while another mailbox is on screen no longer drops the id: the screen gets it only after the account switch (`visibleNotificationItemId`). Missing after sync — the id is not stuck
 - A task tap used a dead `open_tasks` extra (the widget reads `tasks`). Now: mailbox + id, the task card opens
