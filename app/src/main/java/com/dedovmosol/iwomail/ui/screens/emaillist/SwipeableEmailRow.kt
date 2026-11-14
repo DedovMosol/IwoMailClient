@@ -18,9 +18,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalHapticFeedback
+import com.dedovmosol.iwomail.ui.utils.rememberAppHaptics
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
@@ -56,7 +55,7 @@ internal fun SwipeableEmailRow(
         content()
         return
     }
-    val haptic = LocalHapticFeedback.current
+    val haptic = rememberAppHaptics()
     val currentStart by rememberUpdatedState(startAction)
     val currentEnd by rememberUpdatedState(endAction)
     val currentOnSwipe by rememberUpdatedState(onSwipe)
@@ -71,7 +70,7 @@ internal fun SwipeableEmailRow(
             }
             val offset = geometry.state?.let { runCatching { it.requireOffset() }.getOrNull() } ?: Float.NaN
             if (action != SwipeAction.NONE && isSwipeCommitted(offset, geometry.width)) {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                haptic.confirm()
                 currentOnSwipe(action)
             }
             false

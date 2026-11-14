@@ -28,9 +28,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
+import com.dedovmosol.iwomail.ui.utils.rememberAppHaptics
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -65,7 +64,7 @@ fun NotesScreen(
 ) {
     val context = LocalContext.current
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
-    val haptic = LocalHapticFeedback.current
+    val haptic = rememberAppHaptics()
 
     val viewModel: NotesViewModel = viewModel(
         factory = NotesViewModel.provideFactory(context.applicationContext as android.app.Application)
@@ -654,7 +653,7 @@ fun NotesScreen(
                             isSelectionMode = isSelectionMode,
                             onClick = {
                                 if (isSelectionMode) {
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    haptic.tick()
                                     viewModel.toggleSelection(note.id)
                                 } else {
                                     selectedNoteId = note.id
@@ -662,7 +661,7 @@ fun NotesScreen(
                             },
                             onLongClick = {
                                 if (!isSelectionMode) {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    haptic.confirm()
                                     viewModel.addToSelection(note.id)
                                 }
                             }

@@ -28,8 +28,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
+import com.dedovmosol.iwomail.ui.utils.rememberAppHaptics
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -137,7 +136,7 @@ internal fun AgendaView(
     categoryColors: CategoryColors = CategoryColors.EMPTY
 ) {
     val isSelectionMode = selectedEventIds.isNotEmpty()
-    val haptic = LocalHapticFeedback.current
+    val haptic = rememberAppHaptics()
     Column {
         // Поле поиска (на всю ширину)
         OutlinedTextField(
@@ -332,11 +331,11 @@ internal fun AgendaView(
                                     else expandedSeriesIds + masterId
                                 },
                                 onLongClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    haptic.confirm()
                                     onDragSelect(selectedEventIds + allOccurrenceIds)
                                 },
                                 onSelectionToggle = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    haptic.tick()
                                     if (seriesSelectionState == ToggleableState.On) {
                                         onDragSelect(selectedEventIds - allOccurrenceIds)
                                     } else {

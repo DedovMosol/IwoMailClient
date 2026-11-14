@@ -32,9 +32,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
+import com.dedovmosol.iwomail.ui.utils.rememberAppHaptics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -434,7 +433,7 @@ private fun SearchResultItem(
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val haptic = LocalHapticFeedback.current
+    val haptic = rememberAppHaptics()
     val context = LocalContext.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
 
@@ -516,7 +515,7 @@ private fun SearchResultItem(
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    haptic.confirm()
                     onLongClick()
                 }
             ),
@@ -539,7 +538,7 @@ private fun SearchResultItem(
                         },
                         onLongClick = {
                             // Долгий клик = выделение
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            haptic.confirm()
                             onLongClick()
                         }
                     ),

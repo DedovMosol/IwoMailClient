@@ -17,8 +17,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
+import com.dedovmosol.iwomail.ui.utils.rememberAppHaptics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.CalendarEventEntity
@@ -265,7 +264,7 @@ fun CalendarScreen(
     var pendingEditOccurrenceId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
 
     // Множественный выбор
-    val haptic = LocalHapticFeedback.current
+    val haptic = rememberAppHaptics()
     var selectedEventIds by rememberSaveable(accountId,
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
@@ -1294,7 +1293,7 @@ fun CalendarScreen(
                         listState = listState,
                         selectedEventIds = selectedEventIds,
                         onEventSelectionChange = { eventId, selected ->
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            haptic.tick()
                             selectedEventIds = if (selected) {
                                 selectedEventIds + eventId
                             } else {
@@ -1302,7 +1301,7 @@ fun CalendarScreen(
                             }
                         },
                         onEventLongClick = { eventId ->
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            haptic.confirm()
                             selectedEventIds = selectedEventIds + eventId
                         },
                         onDragSelect = { newIds -> selectedEventIds = newIds },
@@ -1333,7 +1332,7 @@ fun CalendarScreen(
                         },
                         selectedEventIds = selectedEventIds,
                         onEventSelectionChange = { eventId, selected ->
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            haptic.tick()
                             selectedEventIds = if (selected) {
                                 selectedEventIds + eventId
                             } else {
@@ -1341,7 +1340,7 @@ fun CalendarScreen(
                             }
                         },
                         onEventLongClick = { eventId ->
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            haptic.confirm()
                             selectedEventIds = selectedEventIds + eventId
                         },
                         onDragSelect = { newIds -> selectedEventIds = newIds },

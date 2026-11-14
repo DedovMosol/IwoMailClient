@@ -17,9 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
+import com.dedovmosol.iwomail.ui.utils.rememberAppHaptics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -50,7 +49,7 @@ fun UserFoldersScreen(
     onComposeClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val haptic = LocalHapticFeedback.current
+    val haptic = rememberAppHaptics()
 
     val viewModel: UserFoldersViewModel = viewModel(
         factory = UserFoldersViewModel.provideFactory(context.applicationContext as android.app.Application)
@@ -259,7 +258,7 @@ fun UserFoldersScreen(
                                 isSelectionMode = isSelectionMode,
                                 onClick = {
                                     if (isSelectionMode) {
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        haptic.tick()
                                         viewModel.toggleSelection(folder.id)
                                     } else {
                                         onFolderClick(folder.id)

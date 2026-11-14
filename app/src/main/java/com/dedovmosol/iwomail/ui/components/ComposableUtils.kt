@@ -16,10 +16,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
+import com.dedovmosol.iwomail.ui.utils.rememberAppHaptics
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -299,7 +298,7 @@ fun BoxScope.ScrollColumnScrollbar(scrollState: ScrollState) {
 /**
  * Modifier для drag selection в LazyColumn.
  * Долгий тап + протягивание = выделение диапазона элементов.
- * Авто-скролл при приближении к краям, вибрация при каждом новом элементе.
+ * Авто-скролл при приближении к краям, тик [com.dedovmosol.iwomail.ui.utils.AppHaptics] при каждом новом элементе.
  *
  * @param listState состояние LazyColumn
  * @param itemKeys ключи элементов в порядке отображения (должны совпадать с key { } в items())
@@ -315,7 +314,7 @@ fun rememberDragSelectModifier(
     onSelectionChange: (Set<String>) -> Unit,
     expand: (String) -> Collection<String> = { listOf(it) }
 ): Modifier {
-    val haptic = LocalHapticFeedback.current
+    val haptic = rememberAppHaptics()
     val scope = rememberCoroutineScope()
     var dragStartIndex by remember { mutableIntStateOf(-1) }
     var dragCurrentIndex by remember { mutableIntStateOf(-1) }
@@ -333,14 +332,12 @@ fun rememberDragSelectModifier(
         itemKeys.withIndex().associate { (index, key) -> key to index }
     }
 
-    fun updateDraggedSelection(pointerY: Float, withHaptic: Boolean) {
+    fun updateDraggedSelection(pointerY: Float) {
         if (dragStartIndex < 0 || pointerY.isNaN()) return
         val index = findItemIndexAtY(listState, indexMap, pointerY)
         if (index >= 0 && index != dragCurrentIndex) {
             dragCurrentIndex = index
-            if (withHaptic) {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            }
+            haptic.tick()
             val start = minOf(dragStartIndex, dragCurrentIndex)
             val end = minOf(maxOf(dragStartIndex, dragCurrentIndex), itemKeys.size - 1)
             val rangeIds = itemKeys.subList(start, end + 1).flatMapTo(HashSet()) { currentExpand(it) }
@@ -363,7 +360,7 @@ fun rememberDragSelectModifier(
                     val pointerY = lastPointerY
                     if (delta == 0f || pointerY.isNaN() || dragStartIndex < 0) break
                     listState.scrollBy(delta)
-                    updateDraggedSelection(pointerY, withHaptic = false)
+                    updateDraggedSelection(pointerY)
                     withFrameNanos { }
                 }
             } finally {
@@ -383,7 +380,7 @@ fun rememberDragSelectModifier(
             onDragStart = { offset ->
                 val index = findItemIndexAtY(listState, indexMap, offset.y)
                 if (index >= 0 && index < itemKeys.size) {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    haptic.confirm()
                     dragStartIndex = index
                     dragCurrentIndex = index
                     initialSelection = currentSelectedIds
@@ -395,7 +392,7 @@ fun rememberDragSelectModifier(
                 if (dragStartIndex >= 0) {
                     change.consume()
                     lastPointerY = change.position.y
-                    updateDraggedSelection(change.position.y, withHaptic = true)
+                    updateDraggedSelection(change.position.y)
 
                     // Авто-скролл при приближении к краям с плавной скоростью
                     val viewportHeight = listState.layoutInfo.viewportSize.height.toFloat()

@@ -30,9 +30,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
+import com.dedovmosol.iwomail.ui.utils.rememberAppHaptics
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -88,7 +87,7 @@ fun EmailDetailScreen(
     val context = LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val view = LocalView.current
-    val haptic = LocalHapticFeedback.current
+    val haptic = rememberAppHaptics()
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val calendarRepo = remember { RepositoryProvider.getCalendarRepository(context) }
@@ -763,11 +762,11 @@ fun EmailDetailScreen(
                                 .size(48.dp)
                                 .combinedClickable(
                                     onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        haptic.tick()
                                         viewModel.toggleFlag()
                                     },
                                     onLongClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        haptic.confirm()
                                         flagMenuOpen = true
                                     },
                                     onLongClickLabel = Strings.flagRemind
