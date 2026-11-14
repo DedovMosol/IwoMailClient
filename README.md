@@ -65,7 +65,7 @@
 - **Корректная логика непрочитанных:** список новых писем в виджете фильтруется по Inbox и `read = 0`.
 - **Защита от гонок:** `updateMailWidget()` сериализует `GlanceAppWidget.updateAll()` через общий mutex и использует `applicationContext`.
 - **Адаптивная раскладка:** нижний ряд действий подстраивается под ширину виджета (Glance `Row` не переносит содержимое) — на узких размерах меньше аватаров и без метки времени синхронизации, чтобы кнопки не обрезались; аватары масштабируются вместе с виджетом.
-- **Индексы Room (миграция 41→42):** индексы под горячие widget-запросы: unread Inbox, тип папки, активные задачи, текущие и ближайшие события календаря. Текущая версия схемы — v51.
+- **Индексы Room (миграция 41→42):** индексы под горячие widget-запросы: unread Inbox, тип папки, активные задачи, текущие и ближайшие события календаря. Текущая версия схемы — v53.
 
 </details>
 
@@ -150,7 +150,7 @@
 | Сборка | Gradle 8.12, AGP 8.7.3, KSP 1.9.22-1.0.17, Kover 0.7.6, minSdk 26, targetSdk 36 |
 | UI | Jetpack Compose, Compose BOM 2024.06.00, Material 3, Navigation 2.7.6, Lifecycle/ViewModel 2.7.0 |
 | Асинхронность | Coroutines 1.7.3, Flow |
-| Хранилище | Room 2.6.1 (`MailDatabase` v51), DataStore Preferences 1.1.1 |
+| Хранилище | Room 2.6.1 (`MailDatabase` v53), DataStore Preferences 1.1.1 |
 | Сеть | OkHttp 4.12.0, Conscrypt 2.5.2 |
 | Протоколы | EAS, EWS, JavaMail IMAP/POP3 (`android-mail` 1.6.7) |
 | Фоновые задачи | WorkManager 2.9.0, Foreground Service, AlarmManager |
@@ -176,7 +176,7 @@ Protocol Layer
   EasTransport + EAS services + EWS client + IMAP/POP3 beta clients
     ↓
 Persistence / Network
-  Room MailDatabase v51, DataStore
+  Room MailDatabase v53, DataStore
   HttpClientProvider, NetworkMonitor, NtlmAuthenticator
     ↓
 Background

@@ -2,6 +2,8 @@ package com.dedovmosol.iwomail.ui.screens
 
 import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.EmailEntity
+import com.dedovmosol.iwomail.data.database.FolderEntity
+import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.data.repository.AccountRepository
 import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.eas.EasResult
@@ -46,6 +48,7 @@ class SearchViewModelTest {
         accountRepo = mockk(relaxed = true)
         // Активный аккаунт по умолчанию (читается синхронно в search() через stateIn)
         every { accountRepo.activeAccount } returns flowOf(accountMock(ACCOUNT_ID))
+        every { mailRepo.getFolders(any()) } returns flowOf(emptyList())
     }
 
     @After
@@ -83,6 +86,20 @@ class SearchViewModelTest {
         advanceUntilIdle()
         coVerify(exactly = 0) { mailRepo.search(any(), any()) }
         assertThat(vm.uiState.value.isSearching).isFalse()
+    }
+
+    @Test
+    fun `sent and drafts folder ids are recipient folders`() = runTest(dispatcher) {
+        every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(
+            listOf(
+                com.dedovmosol.iwomail.data.database.FolderEntity("sent", ACCOUNT_ID, "5", "Sent", "0", com.dedovmosol.iwomail.eas.FolderType.SENT_ITEMS),
+                com.dedovmosol.iwomail.data.database.FolderEntity("drafts", ACCOUNT_ID, "3", "Drafts", "0", com.dedovmosol.iwomail.eas.FolderType.DRAFTS),
+                com.dedovmosol.iwomail.data.database.FolderEntity("inbox", ACCOUNT_ID, "2", "Inbox", "0", com.dedovmosol.iwomail.eas.FolderType.INBOX)
+            )
+        )
+        val vm = createViewModel()
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.recipientFolderIds).containsExactly("sent", "drafts")
     }
 
     @Test
@@ -294,6 +311,31 @@ class SearchViewModelTest {
 
         assertThat(events.any { it is SearchEvent.ShowError }).isTrue()
         assertThat(vm.uiState.value.selectedIds).isEmpty()
+    }
+
+    @Test
+    fun `recipientFolderIds are Sent and Drafts of the active account`() = runTest(dispatcher) {
+        val sent = FolderEntity("${ACCOUNT_ID}_5", ACCOUNT_ID, "5", "Sent", "0", FolderType.SENT_ITEMS)
+        val drafts = FolderEntity("${ACCOUNT_ID}_3", ACCOUNT_ID, "3", "Drafts", "0", FolderType.DRAFTS)
+        val inbox = FolderEntity("${ACCOUNT_ID}_2", ACCOUNT_ID, "2", "Inbox", "0", FolderType.INBOX)
+        every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(listOf(inbox, sent, drafts))
+        val vm = createViewModel()
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.recipientFolderIds).containsExactly(sent.id, drafts.id)
+    }
+
+    @Test
+    fun `sent and drafts folder ids are the recipient folders`() = runTest(dispatcher) {
+        every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(
+            listOf(
+                FolderEntity("1_5", ACCOUNT_ID, "5", "Sent", "0", FolderType.SENT_ITEMS),
+                FolderEntity("1_2", ACCOUNT_ID, "2", "Inbox", "0", FolderType.INBOX),
+                FolderEntity("1_3", ACCOUNT_ID, "3", "Drafts", "0", FolderType.DRAFTS)
+            )
+        )
+        val vm = createViewModel()
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.recipientFolderIds).containsExactly("1_5", "1_3")
     }
 
     // ===================== helpers =====================

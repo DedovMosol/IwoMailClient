@@ -363,6 +363,7 @@ fun SearchScreen(
                                     SearchResultItem(
                                         email = email,
                                         query = query,
+                                        showsRecipient = email.folderId in uiState.recipientFolderIds,
                                         isSelected = if (row is MailRow.Header) selectedIds.containsAll(row.thread.ids) else email.id in selectedIds,
                                         onClick = {
                                             if (isSelectionMode) {
@@ -460,6 +461,7 @@ private fun FilterBar(
 private fun SearchResultItem(
     email: EmailEntity,
     query: String,
+    showsRecipient: Boolean,
     isSelected: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -478,8 +480,15 @@ private fun SearchResultItem(
         }
     }
 
-    val senderName = cachedSenderName ?: email.fromName.ifEmpty { email.from }
-    val avatarColor = getAvatarColor(senderName)
+    val recipientName = remember(email.to, email.cc, email.bcc) {
+        com.dedovmosol.iwomail.ui.screens.emaillist.firstRecipientName(email.to, email.cc, email.bcc)
+    }
+    val senderName = if (showsRecipient) {
+        if (recipientName.isBlank()) Strings.noRecipients else "${Strings.toPrefix} $recipientName"
+    } else {
+        cachedSenderName ?: email.fromName.ifEmpty { email.from }
+    }
+    val avatarColor = getAvatarColor(if (showsRecipient) recipientName else senderName)
     // Используем цвет аватара для подсветки найденного текста
     val highlightColor = avatarColor
 
@@ -584,7 +593,8 @@ private fun SearchResultItem(
                     )
                 } else {
                     Text(
-                        text = senderName.firstOrNull()?.uppercase() ?: "?",
+                        text = (if (showsRecipient) recipientName else senderName)
+                            .firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "?",
                         fontWeight = FontWeight.Bold,
                         color = Color.White
                     )

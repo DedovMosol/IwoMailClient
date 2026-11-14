@@ -1319,8 +1319,8 @@ private fun EmailListItem(
             // Отправленные и черновики — «Кому»: отправитель в них вы сами (как в Outlook). У черновика из Outlook
             // отправителя нет вовсе (From появляется при отправке), у созданного приложением — имя аккаунта в приложении.
             val showsRecipient = isSent || isDrafts
-            val recipientName = remember(email.to, email.cc) {
-                com.dedovmosol.iwomail.ui.screens.emaillist.firstRecipientName(email.to, email.cc)
+            val recipientName = remember(email.to, email.cc, email.bcc) {
+                com.dedovmosol.iwomail.ui.screens.emaillist.firstRecipientName(email.to, email.cc, email.bcc)
             }
             val cachedSenderName = remember(email.from) {
                 if (isDrafts) {
@@ -1372,9 +1372,9 @@ private fun EmailListItem(
             }
             val avatarColor = getAvatarColor(avatarName)
             // Адрес для фото из адресной книги: получатель (Отправленные, черновики) или отправитель
-            val avatarAddress = remember(email.from, email.to, email.cc, showsRecipient) {
+            val avatarAddress = remember(email.from, email.to, email.cc, email.bcc, showsRecipient) {
                 if (showsRecipient) {
-                    val field = email.to.ifBlank { email.cc }
+                    val field = com.dedovmosol.iwomail.ui.screens.emaillist.firstRecipientField(email.to, email.cc, email.bcc)
                     field.split(',', ';').firstNotNullOfOrNull { part ->
                         com.dedovmosol.iwomail.util.extractEmailAddress(part.trim()).takeIf { it.contains('@') }
                     }.orEmpty()
