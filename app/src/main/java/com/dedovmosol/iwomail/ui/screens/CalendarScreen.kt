@@ -123,7 +123,9 @@ private fun buildRecurringOccurrenceSelectionId(
 fun CalendarScreen(
     onBackClick: () -> Unit,
     onComposeClick: (String) -> Unit = {},
-    initialDateFilter: CalendarDateFilter = CalendarDateFilter.ALL
+    initialDateFilter: CalendarDateFilter = CalendarDateFilter.ALL,
+    initialEventId: String? = null,
+    onInitialEventConsumed: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
@@ -247,6 +249,16 @@ fun CalendarScreen(
         }
     }
     var selectedEventId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(initialEventId, accountId, events) {
+        val id = initialEventId ?: return@LaunchedEffect
+        if (accountId <= 0) return@LaunchedEffect
+        if (events.any { it.id == id }) {
+            selectedEventId = id
+            onInitialEventConsumed()
+        } else if (events.isNotEmpty()) {
+            onInitialEventConsumed()
+        }
+    }
     var viewMode by rememberSaveable { mutableStateOf(CalendarViewMode.AGENDA) }
     var selectedDateMillis by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
     val selectedDate = remember(selectedDateMillis) { Date(selectedDateMillis) }

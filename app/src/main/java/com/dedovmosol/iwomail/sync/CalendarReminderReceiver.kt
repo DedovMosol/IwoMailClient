@@ -84,8 +84,9 @@ class CalendarReminderReceiver : BroadcastReceiver() {
         // Intent для открытия приложения при клике - с переключением на нужный аккаунт
         val contentIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra("open_calendar", true)
+            putExtra(MainActivity.EXTRA_OPEN_CALENDAR, true)
             putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, event.accountId)
+            putExtra(MainActivity.EXTRA_CALENDAR_EVENT_ID, event.id)
         }
         val safeHash = safeHashForId(event.id)
         val contentPendingIntent = PendingIntent.getActivity(

@@ -97,19 +97,17 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository, showHeader: B
         )
 
         ListItem(
-            headlineContent = { Text(Strings.swipeSetting) },
-            supportingContent = {
-                Column {
-                    Text("${Strings.swipeStart}: ${Strings.swipeActionName(swipes.first)}")
-                    Text("${Strings.swipeEnd}: ${Strings.swipeActionName(swipes.second)}")
-                }
-            },
-            leadingContent = { Icon(AppIcons.SwapHoriz, null) }
+            headlineContent = { Text(Strings.swipeStart) },
+            supportingContent = { Text(Strings.swipeActionName(swipes.first)) },
+            leadingContent = { Icon(AppIcons.SwapHoriz, null) },
+            modifier = Modifier.clickable { choice = "start" }
         )
-        Row(modifier = Modifier.fillMaxWidth().padding(start = 56.dp)) {
-            TextButton(onClick = { choice = "start" }) { Text(Strings.swipeStart) }
-            TextButton(onClick = { choice = "end" }) { Text(Strings.swipeEnd) }
-        }
+        ListItem(
+            headlineContent = { Text(Strings.swipeEnd) },
+            supportingContent = { Text(Strings.swipeActionName(swipes.second)) },
+            leadingContent = { Icon(AppIcons.SwapHoriz, null) },
+            modifier = Modifier.clickable { choice = "end" }
+        )
     }
 
     when (choice) {
