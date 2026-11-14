@@ -48,7 +48,13 @@ class SyncConversationIdTest {
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
         db = Room.inMemoryDatabaseBuilder(context, MailDatabase::class.java).allowMainThreadQueries().build()
-        val account = AccountEntity(email = "me@corp.example", displayName = "Me", serverUrl = "mail.corp.example", username = "me")
+        val account = AccountEntity(
+            id = 10_000L + (System.nanoTime() % 90_000),
+            email = "me@corp.example",
+            displayName = "Me",
+            serverUrl = "mail.corp.example",
+            username = "me"
+        )
         accountId = runBlocking { db.accountDao().insert(account) }
         runBlocking {
             db.folderDao().insert(FolderEntity("${accountId}_2", accountId, "2", "Входящие", "0", FolderType.INBOX, syncKey = "K1"))
@@ -82,9 +88,11 @@ class SyncConversationIdTest {
     fun `folder sync keeps the conversation of each email`() = runBlocking<Unit> {
         serverSends("2", mail("2:1", "RE: Смета", "AAQkADAwATM0MDAAMS1iNWM="), mail("2:2", "Смета", null))
 
-        service.syncEmailsEas(accountId, "${accountId}_2")
+        val syncResult = service.syncEmailsEas(accountId, "${accountId}_2")
+        assertThat(syncResult).isInstanceOf(EasResult.Success::class.java)
 
         val emails = db.emailDao().getEmailsByFolderList("${accountId}_2").associateBy { it.serverId }
+        assertThat(emails.keys).containsAtLeast("2:1", "2:2")
         assertThat(emails.getValue("2:1").conversationId).isEqualTo("AAQkADAwATM0MDAAMS1iNWM=")
         assertThat(emails.getValue("2:2").conversationId).isNull()
     }
@@ -93,7 +101,8 @@ class SyncConversationIdTest {
     fun `full Sent sync keeps the conversation of replies`() = runBlocking<Unit> {
         serverSends("5", mail("5:1", "RE: Смета", "AAQkADAwATM0MDAAMS1iNWM="))
 
-        service.syncEmailsEas(accountId, "${accountId}_5", forceFullSync = true)
+        val sentResult = service.syncEmailsEas(accountId, "${accountId}_5", forceFullSync = true)
+        assertThat(sentResult).isInstanceOf(EasResult.Success::class.java)
 
         val sent = db.emailDao().getEmailsByFolderList("${accountId}_5").single()
         assertThat(sent.conversationId).isEqualTo("AAQkADAwATM0MDAAMS1iNWM=")

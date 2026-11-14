@@ -7,7 +7,7 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 ### Inbox open and offline moves (2026-11-14)
 - Opening Inbox or Sent runs a quiet incremental Sync of that folder, at most every 30 s, not `SyncKey=0`, with no pull-to-refresh spinner (or pull-to-refresh would be blocked). Drafts still once. If the message is already in the target folder locally, the move queue is cleared instead of looping on ALREADY_IN_FOLDER
 - Offline: the message is already in the target folder locally, queued as `pending_email_changes.move` (DB v54), sent with the same MoveItems. SrcFldId is the original folder, not trash (or 14.x would send trash→trash)
-- A server rejection restores the source folder. Tests: `OfflineMailChangesTest` (offline trash and rollback)
+- A server rejection restores the source folder. Tests: `OfflineMailChangesTest` (offline trash and rollback). `SyncConversationIdTest` no longer shares `activeSyncs` with other tests (unique accountId), so CI does not fail on an empty folder after someone else's Sync
 ### Delete and move: MoveItems first, Sync only on Status=1 (2026-11-14)
 - No folder Sync before every move to trash. MoveItems runs first. Folder Sync only on Status=1 (stale ServerId on 12.1). Status=2/7 skip that Sync, per-item retry as before
 - The list hides rows immediately (`pendingRemovalIds`). A rejection or 0 moved shows them again, otherwise they stayed gone forever
