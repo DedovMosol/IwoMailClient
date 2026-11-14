@@ -232,11 +232,14 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
                 )
                 
                 val accountId = accountDao.insert(account)
-                savePassword(accountId, password)
-                
-                // Сохраняем пароль клиентского сертификата если есть
-                if (clientCertificatePassword != null) {
-                    saveClientCertPassword(accountId, clientCertificatePassword)
+                try {
+                    savePassword(accountId, password)
+                    if (clientCertificatePassword != null) {
+                        saveClientCertPassword(accountId, clientCertificatePassword)
+                    }
+                } catch (e: SecurityException) {
+                    accountDao.delete(accountId)
+                    return EasResult.Error("FAIL_CLOSED")
                 }
                 
                 // Делаем новый аккаунт активным
@@ -298,11 +301,15 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
         val alternateMoved = com.dedovmosol.iwomail.eas.ServerAddress.key(oldAccount.alternateServerUrl, oldAccount.incomingPort) !=
             com.dedovmosol.iwomail.eas.ServerAddress.key(account.alternateServerUrl, account.incomingPort)
         val toSave = if (alternateMoved) CertificatePins.withoutAlternatePin(account) else account
+        try {
+            password?.let { savePassword(account.id, it) }
+        } catch (e: SecurityException) {
+            return EasResult.Error("FAIL_CLOSED")
+        }
         // Сначала запись, потом сброс кэша и health: иначе параллельный createEasClient успевал
         // закэшировать клиент из СТАРОЙ строки, а запросы к старому серверу снова наполняли health
         // (клиент, который собирается во время сброса, в кэш уже не попадёт — EndpointClientCache).
         accountDao.update(toSave)
-        password?.let { savePassword(account.id, it) }
         // Предупреждение о смене сертификата сервера, которого в настройках больше нет, снимается
         // (на оставшемся сервере несовпадение пина обнаружится заново при следующем подключении).
         val detector = com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector

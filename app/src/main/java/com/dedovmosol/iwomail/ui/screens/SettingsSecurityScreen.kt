@@ -140,29 +140,7 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
                     SettingsSwitchRow(
                         title = Strings.failClosedTitle,
                         description = Strings.failClosedDesc,
-                        icon = { Icon(AppIcons.Security, null) },
-                        checked = failClosed,
-                        onChange = { enabled ->
-                            failClosed = enabled
-                            telemetry.setFailClosedMode(enabled)
-                        }
-                    )
-                }
-            }
-        }
-        if (storageDegraded) {
-            item {
-                SettingsGroup {
-                    SettingsNavRow(
-                        title = Strings.passwordStorageDegradedTitle,
-                        subtitle = Strings.passwordStorageDegradedDesc,
-                        icon = AppIcons.ErrorOutline,
-                        trailingIcon = null
-                    )
-                    SettingsSwitchRow(
-                        title = Strings.failClosedTitle,
-                        description = Strings.failClosedDesc,
-                        icon = { Icon(AppIcons.Security, null) },
+                        icon = { Icon(AppIcons.ErrorOutline, null) },
                         checked = failClosed,
                         onChange = { enabled ->
                             failClosed = enabled

@@ -1839,6 +1839,9 @@ object NotificationStrings {
             errorCode == "Spam folder not found" -> getSpamFolderNotFound(isRussian)
             errorCode == "NO_INTERNET" -> getNoInternetConnection(isRussian)
             errorCode == "ACCOUNT_EXISTS" -> if (isRussian) "Аккаунт с таким email уже добавлен" else "Account with this email already exists"
+            errorCode == "FAIL_CLOSED" -> if (isRussian)
+                "Пароль не сохранён: включён запрет записи без шифрования."
+                else "Password not saved: writing without encryption is turned off."
             errorCode == "SYNC_NOT_READY" -> if (isRussian) "Дождитесь завершения синхронизации папки" else "Wait for folder sync to complete"
             errorCode == "DELETE_FAILED" -> if (isRussian) "Не удалось удалить. Попробуйте синхронизировать и повторить." else "Deletion failed. Try syncing and retry."
             errorCode.startsWith("Delete error:") -> if (isRussian) "Ошибка удаления: ${errorCode.removePrefix("Delete error: ")}" else errorCode
