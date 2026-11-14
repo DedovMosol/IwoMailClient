@@ -28,7 +28,7 @@
 | Security | `security-crypto` `1.1.0-alpha06` (EncryptedSharedPreferences), `biometric` `1.1.0` |
 | APK architectures | `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64` + universal APK |
 | Tests | Unit tests in `app/src/test`: 184 `.kt` files, 1601 `@Test` annotations (counted in the sources); there is no `androidTest` directory |
-| Published release | `update.json` → `1.6.2` (`versionCode` 25); `1.6.3b` is a beta build |
+| Published release | GitHub Releases → `1.6.1` (`versionCode` 24); `1.6.3b` is a beta build |
 | Runtime model | Offline-first: Room + Flow → UI, background sync updates the DB |
 
 The main production scenario is on-premise Exchange, especially Exchange 2007 SP1/SP2. IMAP/POP3 are implemented as beta clients for reading (folder list and the latest messages; IMAP can also create, rename and delete folders) and do not reach parity with Exchange features.

@@ -19,7 +19,7 @@
 
 > **Важно:** 🚧 Работа над проектом активно ведётся. Следующая версия в релизе — **1.7.0**. Отличия от 1.6.1 и последующих beta-сборок будут значительными.
 
-**Версия:** 1.6.3b (beta, versionCode 26; последний опубликованный релиз — 1.6.2) · **Пакет:** `com.dedovmosol.iwomail` · **Разработчик:** DedovMosol · **Telegram:** [@i_wantout](https://t.me/i_wantout) · **Email:** andreyid@outlook.com
+**Версия:** 1.6.3b (beta, versionCode 26; последний опубликованный релиз — 1.6.1) · **Пакет:** `com.dedovmosol.iwomail` · **Разработчик:** DedovMosol · **Telegram:** [@i_wantout](https://t.me/i_wantout) · **Email:** andreyid@outlook.com
 
 ## 📖 О проекте
 

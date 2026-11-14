@@ -4,6 +4,8 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Docs: published release is 1.6.1 (2026-11-14)
+- GitHub Releases Latest is **v1.6.1**. There is no 1.6.2 tag. README, ARCHITECTURE and `update.json` no longer point at missing 1.6.2 APKs
 ### ConversationIndex and offline task/note create (2026-11-14)
 - **Thread order (EAS 14+)**: `emails.conversationIndex` (DB v52). Expanded list is root then replies by the Index blob; without the field (Exchange 2007) it stays newest-first by date
 - **Create offline**: the task/note is stored (`local_task_` / `local_note_`) and queued as `pendingCreate`. Assigning a task offline is an error. Send uses the same EAS/EWS path as online. Sync does not treat local-only rows as deleted on the server
