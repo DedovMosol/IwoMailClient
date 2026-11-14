@@ -62,7 +62,13 @@ class OfflineMailChangesTest {
         context = ApplicationProvider.getApplicationContext()
         WorkManagerTestInitHelper.initializeTestWorkManager(context)
         db = Room.inMemoryDatabaseBuilder(context, MailDatabase::class.java).allowMainThreadQueries().build()
-        val account = AccountEntity(email = "me@corp.example", displayName = "Me", serverUrl = "mail.corp.example", username = "me")
+        val account = AccountEntity(
+            id = 20_000L + (System.nanoTime() % 80_000),
+            email = "me@corp.example",
+            displayName = "Me",
+            serverUrl = "mail.corp.example",
+            username = "me"
+        )
         accountId = runBlocking { db.accountDao().insert(account) }
         runBlocking {
             db.folderDao().insert(FolderEntity(inbox, accountId, "2", "Входящие", "0", FolderType.INBOX, syncKey = "K1"))
