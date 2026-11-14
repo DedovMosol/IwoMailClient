@@ -314,6 +314,8 @@ class TasksViewModel(
                 }
                 when {
                     result is EasResult.Error -> sendEvent(TasksEvent.Error(result.message))
+                    existing == null && result is EasResult.Success && isQueued(result.data) ->
+                        sendEvent(TasksEvent.SavedOffline)
                     existing == null -> sendEvent(TasksEvent.TaskCreated)
                     isQueued(existing) -> sendEvent(TasksEvent.SavedOffline)
                     else -> sendEvent(TasksEvent.TaskUpdated)

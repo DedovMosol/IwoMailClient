@@ -128,11 +128,19 @@ class TaskRepository internal constructor(
                     !existing.complete
                 }
                 if (duplicate != null) {
-                    android.util.Log.w("TaskRepository", 
+                    android.util.Log.w("TaskRepository",
                         "createTask: Duplicate detected (subject=$subject), returning existing")
                     return@withEasClient EasResult.Success(duplicate)
                 }
-                
+                if (!assignTo.isNullOrBlank() && offline.offline()) {
+                    return@withEasClient EasResult.Error(RepositoryErrors.TASK_ASSIGN_NEEDS_NETWORK)
+                }
+                if (offline.offline()) {
+                    return@withEasClient EasResult.Success(
+                        keepTaskCreate(accountId, subject, body, startDate, dueDate, importance, reminderSet, reminderTime)
+                    )
+                }
+
                 val result = withEasRetry {
                     easClient.createTask(
                         subject = subject,
@@ -310,6 +318,45 @@ class TaskRepository internal constructor(
         offline.schedule()
     }
 
+    private suspend fun keepTaskCreate(
+        accountId: Long,
+        subject: String,
+        body: String,
+        startDate: Long,
+        dueDate: Long,
+        importance: Int,
+        reminderSet: Boolean,
+        reminderTime: Long
+    ): TaskEntity {
+        val token = "local_task_${java.util.UUID.randomUUID().toString().replace("-", "")}"
+        val effectiveDueDate = if (dueDate == 0L && startDate > 0) startDate else dueDate
+        val task = TaskEntity(
+            id = "${accountId}_$token",
+            accountId = accountId,
+            serverId = token,
+            subject = subject,
+            body = body,
+            startDate = startDate,
+            dueDate = effectiveDueDate,
+            complete = false,
+            dateCompleted = 0,
+            importance = importance,
+            sensitivity = 0,
+            reminderSet = reminderSet,
+            reminderTime = reminderTime,
+            categories = "",
+            lastModified = System.currentTimeMillis(),
+            assignTo = ""
+        )
+        taskDao.insert(task)
+        if (reminderSet && reminderTime > 0) {
+            TaskReminderReceiver.scheduleReminder(context, task)
+        }
+        pendingDao.markCreate(task.id, accountId, PimKind.TASK, subject)
+        offline.schedule()
+        return task
+    }
+
     /**
      * Отправка правки из очереди: текущее состояние задачи — тем же путём (EAS или EWS по версии Exchange), что и
      * правка со связью. Сервер отказал — запись снимается, и синхронизация вернёт его версию; связи нет — остаётся.
@@ -321,9 +368,43 @@ class TaskRepository internal constructor(
         }
         if (offline.offline()) return PimSendOutcome.KEPT
         val client = accountRepo.createEasClient(task.accountId) ?: return PimSendOutcome.KEPT
+        var working = task
+        if (change.pendingCreate) {
+            val created = client.createTask(
+                subject = task.subject,
+                body = task.body,
+                startDate = task.startDate,
+                dueDate = task.dueDate,
+                importance = task.importance,
+                reminderSet = task.reminderSet,
+                reminderTime = task.reminderTime,
+                assignTo = null
+            )
+            when (created) {
+                is EasResult.Error -> {
+                    if (offline.canDefer(created.message)) return PimSendOutcome.KEPT
+                    android.util.Log.w("TaskRepository", "Pending task create rejected: ${created.message}")
+                    pendingDao.delete(task.id)
+                    return PimSendOutcome.DONE
+                }
+                is EasResult.Success -> {
+                    val newId = "${task.accountId}_${created.data}"
+                    val renamed = task.copy(id = newId, serverId = created.data)
+                    taskDao.delete(task.id)
+                    taskDao.insert(renamed)
+                    pendingDao.rename(task.id, newId)
+                    pendingDao.clearCreate(newId, change.version)
+                    working = renamed
+                    if (renamed.reminderSet && renamed.reminderTime > 0) {
+                        TaskReminderReceiver.cancelReminder(context, task.id)
+                        TaskReminderReceiver.scheduleReminder(context, renamed)
+                    }
+                }
+            }
+        }
         if (change.pendingUpdate) {
             val result = client.updateTask(
-                serverId = task.serverId,
+                serverId = working.serverId,
                 subject = task.subject,
                 body = task.body,
                 startDate = task.startDate,
@@ -338,16 +419,16 @@ class TaskRepository internal constructor(
                 if (offline.canDefer(result.message)) return PimSendOutcome.KEPT
                 android.util.Log.w("TaskRepository", "Pending task update rejected: ${result.message}")
             }
-            pendingDao.clearUpdate(task.id, change.version)
+            pendingDao.clearUpdate(working.id, change.version)
         }
         if (change.pendingTrash) {
-            val first = client.deleteTask(task.serverId)
+            val first = client.deleteTask(working.serverId)
             val result = if (first is EasResult.Error && !offline.canDefer(first.message)) {
                 // Exchange 2007: после UpdateItem у задачи мог смениться ServerId — как и без очереди (deleteTask),
                 // синхронизация и поиск по теме и сроку
                 syncTasks(task.accountId, skipRecentDeleteCheck = true)
                 val fresh = taskDao.getTasksByAccountList(task.accountId)
-                    .find { it.id != task.id && it.subject == task.subject && it.dueDate == task.dueDate }
+                    .find { it.id != working.id && it.subject == working.subject && it.dueDate == working.dueDate }
                 if (fresh != null) client.deleteTask(fresh.serverId) else first
             } else {
                 first
@@ -356,11 +437,11 @@ class TaskRepository internal constructor(
                 if (offline.canDefer(result.message)) return PimSendOutcome.KEPT
                 android.util.Log.w("TaskRepository", "Pending task trash rejected: ${result.message}")
             }
-            pendingDao.clearTrash(task.id, change.version)
+            pendingDao.clearTrash(working.id, change.version)
         }
         // Exchange 2007 после UpdateItem может выдать задаче новый ServerId: синхронизация находит её по теме в окне
         // свежей правки, поэтому время правки — сейчас. Только это поле: правку, сделанную во время отправки, не трогаем.
-        taskDao.touch(task.id, System.currentTimeMillis())
+        taskDao.touch(working.id, System.currentTimeMillis())
         if (resync) syncTasks(task.accountId, skipRecentDeleteCheck = true)
         return PimSendOutcome.DONE
     }
@@ -707,6 +788,8 @@ class TaskRepository internal constructor(
                             currentExistingTasks
                         } else {
                             currentExistingTasks.filter { !it.isDeleted }
+                        }.filter {
+                            !it.serverId.startsWith("local_task_") && !it.serverId.startsWith("pending_sync_")
                         }
                         val deletedServerIds = deletionDomain.map { it.serverId }.toSet() - serverIds
                         

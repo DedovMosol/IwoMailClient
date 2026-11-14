@@ -9,7 +9,7 @@ import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class, PendingEmailChangeEntity::class, PendingPimChangeEntity::class],
-    version = 51,
+    version = 52,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -299,6 +299,13 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_pending_pim_changes_accountId` ON `pending_pim_changes` (`accountId`)")
             }
         }
+        /** ConversationIndex (EAS 14+) и очередь создания задач/заметок без связи. */
+        private val MIGRATION_51_52 = object : Migration(51, 52) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `emails` ADD COLUMN `conversationIndex` TEXT")
+                db.execSQL("ALTER TABLE `pending_pim_changes` ADD COLUMN `pendingCreate` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
         internal val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -327,7 +334,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_47_48,
             MIGRATION_48_49,
             MIGRATION_49_50,
-            MIGRATION_50_51
+            MIGRATION_50_51,
+            MIGRATION_51_52
         )
 
         fun getInstance(context: Context): MailDatabase {
@@ -571,7 +579,9 @@ data class EmailEntity(
     val requestDeliveryReceipt: Boolean? = null,
     // Переписка ([MS-ASEMAIL] email2:ConversationId, base64): её присылает Exchange 2010 и новее (EAS 14.0+);
     // на Exchange 2007 нет — цепочки тогда по теме. null — не известна (письмо пришло до поддержки или с 2007)
-    val conversationId: String? = null
+    val conversationId: String? = null,
+    // Порядок в переписке ([MS-ASEMAIL] email2:ConversationIndex, base64). EAS 14.0+; на 2007 нет.
+    val conversationIndex: String? = null
 )
 
 /**

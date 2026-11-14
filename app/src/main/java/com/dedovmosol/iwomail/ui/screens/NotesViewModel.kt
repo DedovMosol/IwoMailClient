@@ -243,6 +243,10 @@ class NotesViewModel(
                 }
                 when {
                     result is EasResult.Error -> sendEvent(NotesEvent.Error(result.message))
+                    existing == null && result is EasResult.Success && isQueued(result.data.id) -> {
+                        sendEvent(NotesEvent.SavedOffline)
+                        sendEvent(NotesEvent.ScrollToTop)
+                    }
                     existing == null -> {
                         sendEvent(NotesEvent.NoteCreated)
                         sendEvent(NotesEvent.ScrollToTop)

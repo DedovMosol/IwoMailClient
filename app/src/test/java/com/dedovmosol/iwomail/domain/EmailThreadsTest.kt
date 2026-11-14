@@ -175,6 +175,15 @@ class EmailThreadsTest {
     }
 
     @Test
+    fun `conversation index orders the root before a longer reply blob`() {
+        val root = java.util.Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3))
+        val reply = java.util.Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3, 9, 9))
+        assertThat(EmailThreads.compareConversationIndex(root, reply)).isLessThan(0)
+        assertThat(EmailThreads.compareConversationIndex(null, root)).isGreaterThan(0)
+        assertThat(EmailThreads.compareConversationIndex(null, null)).isEqualTo(0)
+    }
+
+    @Test
     fun `newest message is chosen by date, not by list order`() {
         val newest = email("2", "RE: x", "C1")
         val oldest = email("1", "x", "C1")

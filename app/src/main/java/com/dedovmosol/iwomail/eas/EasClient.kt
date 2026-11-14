@@ -2623,7 +2623,8 @@ data class EasEmail(
     val messageClass: String = "", // MS-ASEMAIL MessageClass (IPM.Note, IPM.Schedule.Meeting.Request, etc.)
     /** [MS-ASAIRS] Truncated: тело в ответе обрезано — для черновика это не полное тело. */
     val bodyTruncated: Boolean = false,
-    val conversationId: String? = null
+    val conversationId: String? = null,
+    val conversationIndex: String? = null
 ) {
     /** Флаг избранного (Status=2 на сервере). */
     val flagged: Boolean get() = flag.active

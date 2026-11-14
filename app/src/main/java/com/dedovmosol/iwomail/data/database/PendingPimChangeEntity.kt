@@ -42,6 +42,7 @@ data class PendingPimChangeEntity(
     val kind: PimKind,
     @ColumnInfo(defaultValue = "0") val pendingUpdate: Boolean = false,
     @ColumnInfo(defaultValue = "0") val pendingTrash: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val pendingCreate: Boolean = false,
     @ColumnInfo(defaultValue = "") val serverSubject: String = "",
     @ColumnInfo(defaultValue = "0") val version: Long = 0
 )
@@ -63,8 +64,8 @@ abstract class PendingPimChangeDao {
     abstract suspend fun getItemIds(accountId: Long, kind: PimKind): List<String>
 
     @Query("""
-        INSERT OR IGNORE INTO pending_pim_changes (itemId, accountId, kind, pendingUpdate, pendingTrash, serverSubject, version)
-        VALUES (:itemId, :accountId, :kind, 0, 0, :serverSubject, 0)
+        INSERT OR IGNORE INTO pending_pim_changes (itemId, accountId, kind, pendingUpdate, pendingTrash, pendingCreate, serverSubject, version)
+        VALUES (:itemId, :accountId, :kind, 0, 0, 0, :serverSubject, 0)
     """)
     protected abstract suspend fun insertIfAbsent(itemId: String, accountId: Long, kind: PimKind, serverSubject: String)
 
@@ -74,13 +75,19 @@ abstract class PendingPimChangeDao {
     @Query("UPDATE pending_pim_changes SET pendingTrash = 1, version = version + 1 WHERE itemId = :itemId")
     protected abstract suspend fun setTrash(itemId: String)
 
+    @Query("UPDATE pending_pim_changes SET pendingCreate = 1, version = version + 1 WHERE itemId = :itemId")
+    protected abstract suspend fun setCreate(itemId: String)
+
     @Query("UPDATE pending_pim_changes SET pendingUpdate = 0 WHERE itemId = :itemId AND version = :version")
     protected abstract suspend fun resetUpdate(itemId: String, version: Long)
 
     @Query("UPDATE pending_pim_changes SET pendingTrash = 0 WHERE itemId = :itemId AND version = :version")
     protected abstract suspend fun resetTrash(itemId: String, version: Long)
 
-    @Query("DELETE FROM pending_pim_changes WHERE itemId = :itemId AND pendingUpdate = 0 AND pendingTrash = 0")
+    @Query("UPDATE pending_pim_changes SET pendingCreate = 0 WHERE itemId = :itemId AND version = :version")
+    protected abstract suspend fun resetCreate(itemId: String, version: Long)
+
+    @Query("DELETE FROM pending_pim_changes WHERE itemId = :itemId AND pendingUpdate = 0 AND pendingTrash = 0 AND pendingCreate = 0")
     protected abstract suspend fun deleteIfEmpty(itemId: String)
 
     @Query("DELETE FROM pending_pim_changes WHERE itemId = :itemId")
@@ -105,6 +112,20 @@ abstract class PendingPimChangeDao {
     open suspend fun markTrash(itemId: String, accountId: Long, kind: PimKind, serverSubject: String) {
         insertIfAbsent(itemId, accountId, kind, serverSubject)
         setTrash(itemId)
+    }
+
+    /** Создание без связи ждёт отправки. */
+    @Transaction
+    open suspend fun markCreate(itemId: String, accountId: Long, kind: PimKind, serverSubject: String) {
+        insertIfAbsent(itemId, accountId, kind, serverSubject)
+        setCreate(itemId)
+    }
+
+    /** Создание принято сервером — если после отправки его не правили ещё раз ([version]). */
+    @Transaction
+    open suspend fun clearCreate(itemId: String, version: Long) {
+        resetCreate(itemId, version)
+        deleteIfEmpty(itemId)
     }
 
     /** Изменение принято сервером — если после отправки его не правили ещё раз ([version]). */

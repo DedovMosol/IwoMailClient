@@ -79,6 +79,17 @@ class MailRowTest {
     }
 
     @Test
+    fun `EAS 14 conversation index orders root before reply even if the reply is newer`() {
+        val rootBlob = java.util.Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3))
+        val replyBlob = java.util.Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3, 4))
+        val reply = email("r", "RE: x", "C8").copy(dateReceived = 9_000L, conversationIndex = replyBlob)
+        val root = email("o", "x", "C8").copy(dateReceived = 1_000L, conversationIndex = rootBlob)
+        val thread = EmailThreads.group(listOf(reply, root)).single()
+        val rows = MailRow.threaded(listOf(thread), expanded = setOf(thread.key))
+        assertThat(rows.filterIsInstance<MailRow.Child>().map { it.key }).containsExactly("o", "r").inOrder()
+    }
+
+    @Test
     fun `row keys are unique and the thread key is not an email id`() {
         val rows = MailRow.threaded(threads, expanded = setOf(budget.key))
         val keys = rows.map { it.key }

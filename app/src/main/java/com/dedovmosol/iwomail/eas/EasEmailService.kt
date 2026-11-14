@@ -1412,7 +1412,8 @@ $deleteCommands
             messageClass = messageClass,
             bodyTruncated = bodySectionAdd?.let { deps.extractValue(it, "Truncated") == "1" } ?: false,
             // email2:ConversationId (EAS 14.0+, OPAQUE → base64 при разборе WBXML); на Exchange 2007 его нет
-            conversationId = deps.extractValue(xml, "ConversationId")?.trim()?.takeIf { it.isNotEmpty() }
+            conversationId = deps.extractValue(xml, "ConversationId")?.trim()?.takeIf { it.isNotEmpty() },
+            conversationIndex = deps.extractValue(xml, "ConversationIndex")?.trim()?.takeIf { it.isNotEmpty() }
         )
     }
 

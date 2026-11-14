@@ -24,6 +24,7 @@ object RepositoryErrors {
     
     // Operation errors
     const val TASK_CREATE_ERROR = "Ошибка создания задачи"
+    const val TASK_ASSIGN_NEEDS_NETWORK = "Назначение задачи без связи недоступно"
     const val TASK_UPDATE_ERROR = "Ошибка обновления задачи"
     const val TASK_DELETE_ERROR = "Ошибка удаления задачи"
     const val TASK_RESTORE_ERROR = "Ошибка восстановления задачи"

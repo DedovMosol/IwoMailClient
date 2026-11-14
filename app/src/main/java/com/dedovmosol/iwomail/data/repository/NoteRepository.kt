@@ -47,6 +47,23 @@ class NoteRepository internal constructor(
         offline.schedule()
     }
 
+    private suspend fun keepNoteCreate(accountId: Long, subject: String, body: String): NoteEntity {
+        val token = "local_note_${java.util.UUID.randomUUID().toString().replace("-", "")}"
+        val note = NoteEntity(
+            id = "${accountId}_$token",
+            accountId = accountId,
+            serverId = token,
+            subject = subject,
+            body = body,
+            categories = "",
+            lastModified = System.currentTimeMillis()
+        )
+        noteDao.insert(note)
+        pendingDao.markCreate(note.id, accountId, PimKind.NOTE, subject)
+        offline.schedule()
+        return note
+    }
+
     /** Без связи или за правкой этой заметки, ждущей отправки, — в очередь: порядок правок на сервере сохраняется. */
     private suspend fun mustQueue(noteId: String): Boolean = offline.offline() || pendingDao.get(noteId) != null
 
@@ -71,22 +88,43 @@ class NoteRepository internal constructor(
         }
         if (offline.offline()) return PimSendOutcome.KEPT
         val client = accountRepo.createEasClient(note.accountId) ?: return PimSendOutcome.KEPT
+        var working = note
+        if (change.pendingCreate) {
+            val created = client.createNote(note.subject, note.body)
+            when (created) {
+                is EasResult.Error -> {
+                    if (offline.canDefer(created.message)) return PimSendOutcome.KEPT
+                    android.util.Log.w("NoteRepository", "Pending note create rejected: ${created.message}")
+                    pendingDao.delete(note.id)
+                    return PimSendOutcome.DONE
+                }
+                is EasResult.Success -> {
+                    val newId = "${note.accountId}_${created.data}"
+                    val renamed = note.copy(id = newId, serverId = created.data)
+                    noteDao.delete(note.id)
+                    noteDao.insert(renamed)
+                    pendingDao.rename(note.id, newId)
+                    pendingDao.clearCreate(newId, change.version)
+                    working = renamed
+                }
+            }
+        }
         if (change.pendingUpdate) {
-            val result = client.updateNote(note.serverId, note.subject, note.body)
+            val result = client.updateNote(working.serverId, working.subject, working.body)
             if (result is EasResult.Error) {
                 if (offline.canDefer(result.message)) return PimSendOutcome.KEPT
                 android.util.Log.w("NoteRepository", "Pending note update rejected: ${result.message}")
             }
-            pendingDao.clearUpdate(note.id, change.version)
+            pendingDao.clearUpdate(working.id, change.version)
         }
         if (change.pendingTrash) {
-            val first = client.deleteNote(note.serverId)
+            val first = client.deleteNote(working.serverId)
             val result = if (first is EasResult.Error && !offline.canDefer(first.message)) {
                 // Сервер мог выдать заметке новый ServerId (UpdateItem на Exchange 2007) — как и без очереди
                 // (deleteNote), синхронизация и поиск по содержимому среди активных
                 syncNotes(note.accountId, skipRecentDeleteCheck = true)
                 val fresh = noteDao.getAllNotesByAccountList(note.accountId)
-                    .find { it.id != note.id && !it.isDeleted && noteContentMatches(it.subject, it.body, note.subject, note.body) }
+                    .find { it.id != working.id && !it.isDeleted && noteContentMatches(it.subject, it.body, working.subject, working.body) }
                 if (fresh != null) client.deleteNote(fresh.serverId) else first
             } else {
                 first
@@ -95,11 +133,11 @@ class NoteRepository internal constructor(
                 if (offline.canDefer(result.message)) return PimSendOutcome.KEPT
                 android.util.Log.w("NoteRepository", "Pending note trash rejected: ${result.message}")
             }
-            pendingDao.clearTrash(note.id, change.version)
+            pendingDao.clearTrash(working.id, change.version)
         }
         // Сервер мог выдать заметке новый ServerId (перенос в Deleted Items, UpdateItem на Exchange 2007):
         // синхронизация сопоставит её с локальной записью.
-        if (resync) syncNotes(note.accountId, skipRecentDeleteCheck = true)
+        if (resync) syncNotes(working.accountId, skipRecentDeleteCheck = true)
         return PimSendOutcome.DONE
     }
 
@@ -347,6 +385,9 @@ class NoteRepository internal constructor(
                     android.util.Log.w("NoteRepository",
                         "createNote: Duplicate detected (subject=$subject), returning existing")
                     return@withEasClient EasResult.Success(duplicate)
+                }
+                if (offline.offline()) {
+                    return@withEasClient EasResult.Success(keepNoteCreate(accountId, subject, body))
                 }
 
                 val result = withEasRetry { easClient.createNote(subject, body) }
@@ -997,7 +1038,8 @@ class NoteRepository internal constructor(
                         // ТАКЖЕ НЕ удаляем свежеудалённые заметки (< 30 сек) - даём серверу время обработать
                         // И только если ОБЕ выдачи полны: окно Deleted Items без пагинации часто неполно,
                         // тогда отсутствие в нём ничего не доказывает и корзину не трогаем.
-                        val missingDeletedServerIds = existingDeletedServerIds - deletedServerIds - activeServerIds - unresolvedServerIds
+                        val missingDeletedServerIds = (existingDeletedServerIds - deletedServerIds - activeServerIds - unresolvedServerIds)
+                            .filter { !it.startsWith("local_note_") }
                         if (snapshot.isActiveAuthoritative && snapshot.isDeletedAuthoritative) {
                             val currentTime = System.currentTimeMillis()
                             for (serverId in missingDeletedServerIds) {
