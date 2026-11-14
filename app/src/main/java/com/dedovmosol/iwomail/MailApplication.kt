@@ -48,7 +48,8 @@ class MailApplication : Application() {
         // sync при возврате из фона (см. AppForegroundTracker / PushService).
         com.dedovmosol.iwomail.sync.AppForegroundTracker.init()
         settingsRepository = SettingsRepository.getInstance(this)
-        
+        AppLanguageCode.load(this)
+
         // Блокировка приложения паролем + отпечатком (цель релиза).
         // Fail-closed: холодный старт с заданным паролем = заблокировано.
         com.dedovmosol.iwomail.data.security.AppLockManager.init(this)

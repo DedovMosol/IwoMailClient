@@ -152,7 +152,7 @@ class SettingsRepository private constructor(
                     cachedAnimationsEnabled.set(prefs[Keys.ANIMATIONS_ENABLED] ?: true)
                     val language = prefs[Keys.LANGUAGE] ?: "ru"
                     cachedLanguage.set(language)
-                    com.dedovmosol.iwomail.AppLanguageCode.set(language)
+                    com.dedovmosol.iwomail.AppLanguageCode.persist(context, language)
                     if (!themeModeWrittenBySetter.get()) {
                         cachedThemeMode.set(ThemeMode.fromName(prefs[Keys.THEME_MODE]))
                     }                    
@@ -400,7 +400,7 @@ class SettingsRepository private constructor(
     
     suspend fun setLanguage(languageCode: String) {
         cachedLanguage.set(languageCode)
-        com.dedovmosol.iwomail.AppLanguageCode.set(languageCode)
+        com.dedovmosol.iwomail.AppLanguageCode.persist(context, languageCode)
         dataStore.edit { prefs ->
             prefs[Keys.LANGUAGE] = languageCode
         }

@@ -42,6 +42,7 @@ class PasswordStorageTest {
         // тестов в одной JVM (особенность Robolectric). Без сброса сюда утекает
         // чужое состояние — напр. fail_closed_mode=true из SecurityTelemetryTest,
         // который ломал все 12 тестов через SecurityException.
+        EncryptedStoreProvider.forceInsecureForTesting = false
         PasswordStorage.resetForTesting()
         SecurityTelemetry.resetForTesting()
 
