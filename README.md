@@ -5,6 +5,7 @@
 <p align="center">
   <a href="https://github.com/DedovMosol/IwoMailClient/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/DedovMosol/IwoMailClient/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/DedovMosol/IwoMailClient/releases"><img alt="Release" src="https://img.shields.io/github/v/release/DedovMosol/IwoMailClient?label=release&color=7DC42A"></a>
+  <a href="https://github.com/DedovMosol/IwoMailClient/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/DedovMosol/IwoMailClient/total?label=downloads&color=0078D4"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPLv3-7DC42A.svg"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Android-23272E">
   <img alt="Min API" src="https://img.shields.io/badge/API-26%2B-7DC42A">
@@ -26,7 +27,7 @@
 - **Production-фокус:** Exchange 2007 SP1/SP2 и совместимые on-premise Exchange-серверы.
 - **Основной протокол:** EAS 12.0/12.1/14.0/14.1 для почты, папок, контактов, Direct Push и части операций.
 - **EWS-дополнение:** календарь, задачи, заметки, черновики, вложения календаря, ответы на встречи и fallback-сценарии для Exchange 2007.
-- **Auth:** Basic Auth; для EWS-операций дополнительно NTLMv2-fallback. EAS-транспорт работает только с Basic Auth. OAuth 2.0 / Modern Auth пока не реализованы.
+- **Auth:** Basic Auth, для EWS-операций дополнительно NTLMv2-fallback. EAS-транспорт работает только с Basic Auth. OAuth 2.0 / Modern Auth пока не реализованы.
 - **Локальная модель:** offline-first через Room DB, UI читает данные через Flow, фоновые сервисы обновляют базу.
 
 ## ✨ Возможности
@@ -204,19 +205,19 @@ Background
 ## 📚 Документация
 
 <p align="center">
-  <a href="docs/CHANGELOG_RU.md"><img alt="История изменений" src="https://img.shields.io/badge/Changelog-RU-7DC42A"></a>
-  <a href="docs/CHANGELOG_EN.md"><img alt="Changelog" src="https://img.shields.io/badge/Changelog-EN-7DC42A"></a>
-  <a href="docs/ARCHITECTURE.md"><img alt="Архитектура" src="https://img.shields.io/badge/Architecture-RU-7DC42A"></a>
-  <a href="docs/ARCHITECTURE_EN.md"><img alt="Architecture" src="https://img.shields.io/badge/Architecture-EN-7DC42A"></a>
+  <a href="docs/CHANGELOG_RU.md"><img alt="История изменений" src="https://img.shields.io/badge/Changelog-RU-2EA44F"></a>
+  <a href="docs/CHANGELOG_EN.md"><img alt="Changelog" src="https://img.shields.io/badge/Changelog-EN-0366D6"></a>
+  <a href="docs/ARCHITECTURE.md"><img alt="Архитектура проекта подробно" src="https://img.shields.io/badge/Архитектура_проекта-подробно-E36209"></a>
+  <a href="docs/ARCHITECTURE_EN.md"><img alt="Architecture EN detailed" src="https://img.shields.io/badge/Architecture-EN_detailed-FB8C00"></a>
 </p>
 <p align="center">
-  <a href="docs/SECURITY.md"><img alt="Модель безопасности" src="https://img.shields.io/badge/Security-model-23272E"></a>
-  <a href="SECURITY.md"><img alt="Сообщить об уязвимости" src="https://img.shields.io/badge/Report-vulnerability-23272E"></a>
-  <a href="docs/XMLPULLPARSER_MIGRATION_PLAN.md"><img alt="XML parser plan" src="https://img.shields.io/badge/XML-parser_plan-23272E"></a>
+  <a href="docs/SECURITY.md"><img alt="Модель безопасности" src="https://img.shields.io/badge/Security-6F42C1"></a>
+  <a href="docs/SECURITY.md#reporting-a-vulnerability"><img alt="Сообщить об уязвимости" src="https://img.shields.io/badge/Report_a_vulnerability-D73A49"></a>
+  <a href="docs/XMLPULLPARSER_MIGRATION_PLAN.md"><img alt="XML parser plan" src="https://img.shields.io/badge/XML_parser-plan-6A737D"></a>
 </p>
 <p align="center">
   <a href="docs/PRIVACY_POLICY_RU.md"><img alt="Политика конфиденциальности" src="https://img.shields.io/badge/Политика_конфиденциальности-RU-7DC42A"></a>
-  <a href="docs/PRIVACY_POLICY_EN.md"><img alt="Privacy Policy" src="https://img.shields.io/badge/Privacy_Policy-EN-7DC42A"></a>
+  <a href="docs/PRIVACY_POLICY_EN.md"><img alt="Privacy Policy" src="https://img.shields.io/badge/Privacy_Policy-EN-2188FF"></a>
 </p>
 
 ## ♻️ Важно: переименование пакета
