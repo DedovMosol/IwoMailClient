@@ -26,4 +26,11 @@ class EmailRowNamesTest {
         assertThat(firstRecipientName("")).isEmpty()
         assertThat(firstRecipientName("   ")).isEmpty()
     }
+
+    @Test
+    fun `empty To uses the first Cc`() {
+        assertThat(firstRecipientName("", "\"Иван\" <ivan@corp.ru>, petr@corp.ru")).isEqualTo("Иван")
+        assertThat(firstRecipientName("  ", "petr@corp.ru")).isEqualTo("petr")
+        assertThat(firstRecipientName("anna@corp.ru", "ivan@corp.ru")).isEqualTo("anna")
+    }
 }

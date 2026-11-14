@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import androidx.activity.compose.BackHandler
 import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -79,6 +80,7 @@ fun NotesScreen(
     val selectedTab = uiState.selectedTab
     val selectedIds = uiState.selectedIds
     val isSelectionMode = selectedIds.isNotEmpty()
+    BackHandler(enabled = isSelectionMode) { viewModel.clearSelection() }
     val isSyncing = uiState.isSyncing
     val isCreating = uiState.isCreating
     val isInitialLoadDone = uiState.isInitialLoadDone

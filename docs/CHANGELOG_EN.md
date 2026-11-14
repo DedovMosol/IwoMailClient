@@ -4,6 +4,9 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Sent: empty To uses Cc; Back clears selection (2026-11-14)
+- In Sent and Drafts, if To is empty the row and avatar use the first Cc (as in Outlook)
+- System Back / the back gesture in selection mode clears the marks (mail, search, tasks, notes, contacts) instead of leaving for Home. Calendar and user folders already did this
 ### Conversations: search, Inbox+Sent, In-Reply-To on 2007 (2026-11-14)
 - **Two “RE: Meeting”** messages without In-Reply-To no longer merge. A reply joins by subject only if there is **exactly one** non-prefixed message with that subject; two originals stay apart. All In-Reply-To and References ids are used. The peer folder (Inbox↔Sent) is loaded only when conversations are on
 - **In-Reply-To**: from MIME when the body is loaded and from EWS GetItem (`message:InReplyTo`) on Exchange 2007; column `emails.inReplyTo` (DB v53). Message-ID links beat subject

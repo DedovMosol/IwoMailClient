@@ -1,5 +1,6 @@
 ﻿package com.dedovmosol.iwomail.ui.screens
 
+import androidx.activity.compose.BackHandler
 import com.dedovmosol.iwomail.util.SafeToast
 import com.dedovmosol.iwomail.ui.components.launchLeavingApp
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -158,6 +159,10 @@ fun ContactsScreen(
     var selectedContactIds by rememberSaveable(
         stateSaver = StringSetStateSaver
     ) { mutableStateOf(setOf<String>()) }
+    BackHandler(enabled = isSelectionMode) {
+        isSelectionMode = false
+        selectedContactIds = emptySet()
+    }
     // Флаг для пропуска первого срабатывания LaunchedEffect(selectedTab) при повороте экрана.
     // remember (не rememberSaveable) — пересоздаётся при rotation, что нам и нужно.
     var skipFirstTabEffect by remember { mutableStateOf(true) }
