@@ -119,15 +119,14 @@ class SecurityTelemetry private constructor(
      * Show warning to user about insecure storage.
      */
     private fun showInsecureStorageWarning(reason: String) {
-        val message = buildString {
-            append("⚠️ Security Warning: Password encryption unavailable. ")
-            append("Passwords stored with reduced protection. ")
-            append("Reason: $reason")
-        }
-
-        // Use SafeToast for thread-safe, non-blocking notification
+        val russian = runCatching {
+            com.dedovmosol.iwomail.data.repository.SettingsRepository.getInstance(context)
+                .getLanguageSync() == "ru"
+        }.getOrDefault(
+            context.resources.configuration.locales[0].language.startsWith("ru")
+        )
+        val message = insecureStorageWarningText(russian, reason)
         SafeToast.long(context, message)
-
         android.util.Log.w(TAG, "Insecure storage warning shown to user: $message")
     }
 
@@ -163,3 +162,10 @@ class SecurityTelemetry private constructor(
         }
     }
 }
+
+internal fun insecureStorageWarningText(russian: Boolean, reason: String): String =
+    if (russian) {
+        "Шифрование паролей недоступно. Пароли хранятся с ослабленной защитой. Причина: $reason"
+    } else {
+        "Password encryption is unavailable. Passwords are stored with reduced protection. Reason: $reason"
+    }

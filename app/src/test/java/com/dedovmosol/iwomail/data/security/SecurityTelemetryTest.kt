@@ -90,6 +90,30 @@ class SecurityTelemetryTest {
     }
 
     @Test
+    fun `insecure storage toast follows app language`() {
+        assertThat(insecureStorageWarningText(true, "KeyStore unavailable"))
+            .contains("Шифрование паролей недоступно")
+        assertThat(insecureStorageWarningText(true, "KeyStore unavailable"))
+            .contains("KeyStore unavailable")
+        assertThat(insecureStorageWarningText(false, "KeyStore unavailable"))
+            .contains("Password encryption is unavailable")
+        assertThat(insecureStorageWarningText(false, "KeyStore unavailable"))
+            .doesNotContain("⚠️")
+    }
+
+    @Test
+    fun `warning text is localized and includes the reason`() {
+        assertThat(insecureStorageWarningText(true, "KeyStore unavailable"))
+            .contains("Шифрование паролей недоступно")
+        assertThat(insecureStorageWarningText(true, "KeyStore unavailable"))
+            .contains("KeyStore unavailable")
+        assertThat(insecureStorageWarningText(false, "KeyStore unavailable"))
+            .contains("Password encryption is unavailable")
+        assertThat(insecureStorageWarningText(false, "KeyStore unavailable"))
+            .doesNotContain("⚠️")
+    }
+
+    @Test
     fun `isFailClosedEnabled - initial state is false`() {
         assertThat(telemetry.isFailClosedEnabled()).isFalse()
     }
@@ -156,6 +180,18 @@ class SecurityTelemetryTest {
 
         telemetry.recordInsecureStorageUsed("reason 2")
         assertThat(telemetry.getInsecureStorageReason()).isEqualTo("reason 2")
+    }
+
+    @Test
+    fun `warning text follows the app language and includes the reason`() {
+        assertThat(insecureStorageWarningText(true, "KeyStore unavailable"))
+            .contains("Шифрование паролей недоступно")
+        assertThat(insecureStorageWarningText(true, "KeyStore unavailable"))
+            .contains("KeyStore unavailable")
+        assertThat(insecureStorageWarningText(false, "KeyStore unavailable"))
+            .contains("Password encryption is unavailable")
+        assertThat(insecureStorageWarningText(false, "KeyStore unavailable"))
+            .doesNotContain("⚠️")
     }
 
     @Test

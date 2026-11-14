@@ -31,6 +31,14 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
             .canAuthenticate(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK) ==
             androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS
     }
+    val passwordStorage = remember {
+        com.dedovmosol.iwomail.data.security.PasswordStorage.getInstance(context)
+    }
+    val telemetry = remember {
+        com.dedovmosol.iwomail.data.security.SecurityTelemetry.getInstance(context)
+    }
+    val storageDegraded = remember { passwordStorage.isUsingInsecureStorage() }
+    var failClosed by remember { mutableStateOf(telemetry.isFailClosedEnabled()) }
 
     when (lockDialog) {
         LockDialogType.SetPassword -> LockPasswordDialog(
@@ -115,6 +123,50 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
                         onChange = { enabled ->
                             if (enabled && !biometricAvailable) return@SettingsSwitchRow
                             scope.launch { settingsRepo.setAppLockBiometricEnabled(enabled) }
+                        }
+                    )
+                }
+            }
+        }
+        if (storageDegraded) {
+            item {
+                SettingsGroup {
+                    SettingsNavRow(
+                        title = Strings.passwordStorageDegradedTitle,
+                        subtitle = Strings.passwordStorageDegradedDesc,
+                        icon = AppIcons.ErrorOutline,
+                        trailingIcon = null
+                    )
+                    SettingsSwitchRow(
+                        title = Strings.failClosedTitle,
+                        description = Strings.failClosedDesc,
+                        icon = { Icon(AppIcons.Security, null) },
+                        checked = failClosed,
+                        onChange = { enabled ->
+                            failClosed = enabled
+                            telemetry.setFailClosedMode(enabled)
+                        }
+                    )
+                }
+            }
+        }
+        if (storageDegraded) {
+            item {
+                SettingsGroup {
+                    SettingsNavRow(
+                        title = Strings.passwordStorageDegradedTitle,
+                        subtitle = Strings.passwordStorageDegradedDesc,
+                        icon = AppIcons.ErrorOutline,
+                        trailingIcon = null
+                    )
+                    SettingsSwitchRow(
+                        title = Strings.failClosedTitle,
+                        description = Strings.failClosedDesc,
+                        icon = { Icon(AppIcons.Security, null) },
+                        checked = failClosed,
+                        onChange = { enabled ->
+                            failClosed = enabled
+                            telemetry.setFailClosedMode(enabled)
                         }
                     )
                 }
