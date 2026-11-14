@@ -153,7 +153,7 @@ com.dedovmosol.iwomail/
 │   │   ├── contacts/ — contact dialogs, list views and utilities
 │   │   ├── emaildetail/ — attachments section, inline attachments, EmailDetailActions
 │   │   └── emaillist/ — SwipeableEmailRow, SwipeRules, ThreadRows, row names, image previews
-│   ├── components/ — HtmlBodyView, RichTextEditor, SendController, FlagMenu, EmailPrinter,
+│   ├── components/ — HtmlBodyView, RichTextEditor, SendController, FlagMenu, EmailPrinter, AppPermissionDialog,
 │   │                 WebViewRenderer (+ RendererRecovery), TouchDirectionLock, banners, dialogs, DeletionProgressBar
 │   ├── theme/ — Theme, AppIcons, CustomTextToolbar
 │   └── utils/ — animations, avatar colors, date formatting, ContextExtensions, LargeStateSaver, AppHaptics

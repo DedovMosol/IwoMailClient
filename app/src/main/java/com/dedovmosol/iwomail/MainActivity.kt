@@ -10,29 +10,19 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextIndent
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
+import com.dedovmosol.iwomail.ui.components.AppPermissionDialog
+import com.dedovmosol.iwomail.ui.components.AppPermissionPrompt
 import androidx.lifecycle.lifecycleScope
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import kotlinx.coroutines.flow.first
@@ -43,136 +33,6 @@ import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.ExchangeMailTheme
 import com.dedovmosol.iwomail.ui.theme.AppColorTheme
 import com.dedovmosol.iwomail.ui.navigation.AppNavigation
-
-@Composable
-private fun PermissionDialog(
-    title: String,
-    text: String,
-    dismissText: String,
-    confirmText: String,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit
-) {
-    val colorTheme = com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current
-    val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
-    
-    // Анимация появления
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { visible = true }
-    
-    val scale by animateFloatAsState(
-        targetValue = if (visible && animationsEnabled) 1f else 0.8f,
-        animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
-        label = "scale"
-    )
-    val alpha by animateFloatAsState(
-        targetValue = if (visible) 1f else 0f,
-        animationSpec = tween(200),
-        label = "alpha"
-    )
-    
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    this.alpha = alpha
-                },
-            shape = RoundedCornerShape(28.dp)
-        ) {
-            Column {
-                // Градиентная полоска сверху
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .background(
-                            brush = Brush.horizontalGradient(
-                                colors = listOf(colorTheme.gradientStart, colorTheme.gradientEnd)
-                            )
-                        )
-                )
-                
-                Column(
-                    modifier = Modifier.padding(24.dp)
-                ) {
-                    // Иконка в градиентном круге
-                    Box(
-                        modifier = Modifier
-                            .size(56.dp)
-                            .align(Alignment.CenterHorizontally)
-                            .background(
-                                brush = Brush.linearGradient(
-                                    colors = listOf(colorTheme.gradientStart, colorTheme.gradientEnd)
-                                ),
-                                shape = CircleShape
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            AppIcons.BatteryChargingFull,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.headlineSmall,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    
-                    // Разбиваем текст на абзацы с красной строкой
-                    // UI-6: сплит абзацев один раз (мемоизирован), а не дважды на каждую рекомпозицию.
-                    val paragraphs = remember(text) { text.split("\n\n") }
-                    Column(
-                        modifier = Modifier.padding(top = 16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        paragraphs.forEachIndexed { index, paragraph ->
-                            if (paragraph.isNotBlank()) {
-                                val isLastParagraph = index == paragraphs.lastIndex
-                                Text(
-                                    text = paragraph,
-                                    style = if (isLastParagraph) {
-                                        MaterialTheme.typography.bodyMedium
-                                    } else {
-                                        MaterialTheme.typography.bodyMedium.copy(
-                                            textIndent = TextIndent(firstLine = 24.sp)
-                                        )
-                                    },
-                                    textAlign = if (isLastParagraph) TextAlign.Center else TextAlign.Justify,
-                                    modifier = if (isLastParagraph) Modifier.fillMaxWidth() else Modifier
-                                )
-                            }
-                        }
-                    }
-                    
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 24.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        TextButton(onClick = onDismiss) {
-                            Text(dismissText)
-                        }
-                        com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                            onClick = onConfirm,
-                            text = confirmText
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
 
 /**
  * Главная Activity.
@@ -473,7 +333,8 @@ class MainActivity : FragmentActivity() {
                     
                     val showBattery by showBatteryDialog
                     if (showBattery) {
-                        PermissionDialog(
+                        AppPermissionDialog(
+                            prompt = AppPermissionPrompt.BackgroundWork,
                             title = Strings.backgroundWorkTitle,
                             text = Strings.backgroundWorkText,
                             dismissText = Strings.later,
@@ -486,10 +347,11 @@ class MainActivity : FragmentActivity() {
                             }
                         )
                     }
-                    
+
                     val showAlarm by showAlarmDialog
                     if (showAlarm) {
-                        PermissionDialog(
+                        AppPermissionDialog(
+                            prompt = AppPermissionPrompt.ExactAlarms,
                             title = Strings.exactAlarmsTitle,
                             text = Strings.exactAlarmsText,
                             dismissText = Strings.later,

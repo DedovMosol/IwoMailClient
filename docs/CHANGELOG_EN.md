@@ -4,6 +4,10 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Permission prompts match the rest of the UI (2026-11-14)
+- **Before**: a custom `Dialog`+`Card` with a gradient strip, first-line indent and justified copy; the battery icon was used for both background work and exact alarms
+- **Now**: `ScaledAlertDialog`, same as language/settings. Background work uses the battery icon, exact alarms use the clock. No first-line indent. The once-per-install queue and the system notification prompt are unchanged: the Android 13+ system sheet cannot be restyled
+- **Tests**: `AppPermissionDialogTest` — different prompts get different icons
 ### Onboarding: page enter matches Mail & notifications (2026-11-14)
 - **Before**: the pager precomposed the next slide (`beyondBoundsPageCount = 1`). Enter (`fade`/`scale`/`slide`) started on first composition and finished off-screen — Organizer, Settings, and the language/theme slides after the first opened with no appearance
 - **Why not hide the neighbor until currentPage**: the swipe preview would be blank
