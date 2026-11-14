@@ -557,14 +557,18 @@ class EasEmailService internal constructor(
         }
     }
 
-    /** RFC 5322 In-Reply-To; если пусто — первый id из References. */
+    /** RFC 5322 In-Reply-To и все id из References — для цепочки на Exchange 2007. */
     private fun parseInReplyToHeader(mimeHeaders: String): String? {
-        val raw = mimeHeaderValue(mimeHeaders, "In-Reply-To")
-            ?: mimeHeaderValue(mimeHeaders, "References")?.let { refs ->
-                Regex("<[^>]+>").find(refs)?.value
-            }
-        val id = raw?.trim()?.takeIf { it.isNotBlank() } ?: return null
-        return if (id.startsWith("<") && id.endsWith(">")) id else "<$id>"
+        val angle = Regex("<[^>]+>")
+        fun ids(name: String): List<String> {
+            val raw = mimeHeaderValue(mimeHeaders, name) ?: return emptyList()
+            val found = angle.findAll(raw).map { it.value }.toList()
+            if (found.isNotEmpty()) return found
+            val t = raw.trim()
+            return if (t.isEmpty()) emptyList() else listOf(if (t.startsWith("<")) t else "<$t>")
+        }
+        val all = (ids("In-Reply-To") + ids("References")).distinct()
+        return all.takeIf { it.isNotEmpty() }?.joinToString(" ")
     }
 
     private fun extractTopLevelMimeHeaders(mimeData: String): String {

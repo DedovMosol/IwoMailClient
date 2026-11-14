@@ -100,7 +100,8 @@ class EmailListViewModel(
     private val accountRepo: AccountRepository,
     initialFilter: MailFilter = MailFilter.ALL,
     initialDateFilter: EmailDateFilter = EmailDateFilter.ALL,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val conversationView: kotlinx.coroutines.flow.Flow<Boolean> = flowOf(false)
 ) : ViewModel() {
 
     /** Спец-папки: «Избранное» (флаги) и кросс-папочный список «Сегодня». */
@@ -150,13 +151,14 @@ class EmailListViewModel(
                     }
                     val foldersFlow = if (id > 0L) mailRepo.getFolders(id) else flowOf(emptyList())
 
-                    combine(emailsFlow, foldersFlow) { emails, folders -> emails to folders }
-                        .flatMapLatest { (emails, folders) ->
-                            val folder = if (isFavorites || isTodayAll) null else folders.find { it.id == folderId }
-                            val peerId = peerMailboxId(folder, folders)
-                            if (peerId == null) flowOf(Triple(emails, folders, emptyList()))
-                            else mailRepo.getEmails(peerId).map { peer -> Triple(emails, folders, peer) }
-                        }
+                    combine(emailsFlow, foldersFlow, conversationView) { emails, folders, threaded ->
+                        Triple(emails, folders, threaded)
+                    }.flatMapLatest { (emails, folders, threaded) ->
+                        val folder = if (isFavorites || isTodayAll) null else folders.find { it.id == folderId }
+                        val peerId = if (threaded) peerMailboxId(folder, folders) else null
+                        if (peerId == null) flowOf(Triple(emails, folders, emptyList()))
+                        else mailRepo.getEmails(peerId).map { peer -> Triple(emails, folders, peer) }
+                    }
                         .collect { (emails, folders, peer) ->
                             val folder = if (isFavorites || isTodayAll) null else folders.find { it.id == folderId }
                             _uiState.update { s ->
@@ -521,7 +523,8 @@ class EmailListViewModel(
                         RepositoryProvider.getMailRepository(application),
                         RepositoryProvider.getAccountRepository(application),
                         initialFilter,
-                        initialDateFilter
+                        initialDateFilter,
+                        conversationView = RepositoryProvider.getSettingsRepository(application).conversationView
                     ) as T
                 }
             }
