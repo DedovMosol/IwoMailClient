@@ -12,7 +12,8 @@ import com.dedovmosol.iwomail.eas.EasResult
 class PendingMailChanges(
     private val queue: PendingEmailChangeDao,
     private val sendFlag: suspend (emailId: String) -> EasResult<Boolean>,
-    private val sendRead: suspend (emailId: String) -> EasResult<Boolean>
+    private val sendRead: suspend (emailId: String) -> EasResult<Boolean>,
+    private val sendMove: suspend (emailId: String) -> EasResult<Boolean> = { EasResult.Success(true) }
 ) {
     /**
      * Отправляет всё, что ждёт, включая правки, появившиеся во время отправки; каждое письмо — не больше одного раза
@@ -27,6 +28,7 @@ class PendingMailChanges(
                 attempted += change.emailId
                 if (change.flag) sendFlag(change.emailId)
                 if (change.read) sendRead(change.emailId)
+                if (change.move) sendMove(change.emailId)
             }
         }
         return queue.count() == 0

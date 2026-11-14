@@ -97,7 +97,36 @@ class OfflineMailChangesTest {
     private fun key(folderId: String) = runBlocking { db.folderDao().getFolder(folderId)!!.syncKey }
     private fun pending(id: String) = runBlocking { db.pendingEmailChangeDao().get(id) }
     private fun flushQueue() = runBlocking {
-        PendingMailChanges(db.pendingEmailChangeDao(), ops::retryPendingFlag, ops::retryPendingRead).flush()
+        PendingMailChanges(db.pendingEmailChangeDao(), ops::retryPendingFlag, ops::retryPendingRead, ops::retryPendingMove).flush()
+    }
+
+    @Test
+    fun `offline trash stays in trash and is moved when the connection is back`() = runBlocking<Unit> {
+        val id = email()
+        coEvery { client.moveItems(any(), any()) } returns offline
+
+        val result = ops.moveToTrash(listOf(id)) { _, _ -> EasResult.Error("no-draft") }
+
+        assertThat(result).isEqualTo(EasResult.Success(1))
+        assertThat(stored(id).folderId).isEqualTo(trash)
+        assertThat(pending(id)!!.move).isTrue()
+
+        coEvery { client.moveItems(any(), "3") } returns EasResult.Success(mapOf("2:1" to "3:9"))
+        assertThat(flushQueue()).isTrue()
+        assertThat(pending(id)).isNull()
+        assertThat(runBlocking { db.emailDao().getEmail("${accountId}_3:9") }?.folderId).isEqualTo(trash)
+    }
+
+    @Test
+    fun `server rejection of move puts the email back in the source folder`() = runBlocking<Unit> {
+        val id = email()
+        coEvery { client.moveItems(any(), any()) } returns EasResult.Error("MOVEITEMS_ALL_FAILED:status=2,failed=1,locked=0")
+
+        val result = ops.moveToTrash(listOf(id)) { _, _ -> EasResult.Error("no-draft") }
+
+        assertThat(result).isInstanceOf(EasResult.Error::class.java)
+        assertThat(stored(id).folderId).isEqualTo(inbox)
+        assertThat(pending(id)?.move == true).isFalse()
     }
 
     // ── Звезда ──────────────────────────────────────────────────────────────────────────────────────────────────

@@ -124,6 +124,8 @@ class EmailListViewModel(
 
     /** Авто-синхронизация черновиков выполняется один раз на открытие папки (на каждый аккаунт). */
     private var draftsSynced = false
+    /** Тихий инкремент Inbox/Sent при входе, не чаще чем раз в 30 с на экземпляр VM. */
+    private var lastOpenedFolderSyncElapsed = 0L
 
     init {
         observeAccountAndEmails()
@@ -142,6 +144,7 @@ class EmailListViewModel(
                 .distinctUntilChanged()
                 .collectLatest { id ->
                     draftsSynced = false
+                    lastOpenedFolderSyncElapsed = 0L
                     _uiState.update {
                         it.copy(
                             accountId = id,
@@ -186,23 +189,31 @@ class EmailListViewModel(
                                     pendingRemovalIds = stillPending
                                 )
                             }
-                            maybeAutoSyncDrafts(folder)
+                            maybeAutoSyncOpenedFolder(folder)
                         }
                 }
         }
     }
 
     /**
-     * Авто-синхронизация только для папки «Черновики» и только один раз. Исходный экран делал это в
-     * `LaunchedEffect` с флагом `draftsSynced by rememberSaveable`, чтобы избежать повторного sync
-     * при повороте (лишняя нагрузка на сервер + потенциальная гонка с PushService → INVALID_SYNCKEY).
+     * Тихий инкрементальный Sync при входе: черновики — один раз (как раньше), Inbox и Sent — не чаще 30 с.
+     * Не полный resync. Шлюз папки сериализует с Push. Избранное/«Сегодня» не синкаем.
      */
-    private fun maybeAutoSyncDrafts(folder: FolderEntity?) {
-        if (draftsSynced) return
-        if (folder?.type == FolderType.DRAFTS && folder.accountId > 0L) {
-            draftsSynced = true
-            viewModelScope.launch { runSync(folder.accountId, setError = false) }
+    private fun maybeAutoSyncOpenedFolder(folder: FolderEntity?) {
+        if (folder == null || folder.accountId <= 0L) return
+        when (folder.type) {
+            FolderType.DRAFTS -> {
+                if (draftsSynced) return
+                draftsSynced = true
+            }
+            FolderType.INBOX, FolderType.SENT_ITEMS -> {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastOpenedFolderSyncElapsed < 30_000L) return
+                lastOpenedFolderSyncElapsed = now
+            }
+            else -> return
         }
+        viewModelScope.launch { runSync(folder.accountId, setError = false) }
     }
 
     private suspend fun runSync(accountId: Long, setError: Boolean) {

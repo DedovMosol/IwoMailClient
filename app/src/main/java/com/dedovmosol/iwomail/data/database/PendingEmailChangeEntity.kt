@@ -33,7 +33,9 @@ data class PendingEmailChangeEntity(
     @PrimaryKey val emailId: String,
     val accountId: Long,
     val flag: Boolean = false,
-    val read: Boolean = false
+    val read: Boolean = false,
+    @androidx.room.ColumnInfo(defaultValue = "0") val move: Boolean = false,
+    @androidx.room.ColumnInfo(defaultValue = "") val targetFolderId: String = ""
 )
 
 /** Очередь изменений писем, ждущих отправки на сервер. Без UPSERT: SQLite Android 8 (3.18) его не знает. */
@@ -50,16 +52,31 @@ abstract class PendingEmailChangeDao {
     abstract suspend fun get(emailId: String): PendingEmailChangeEntity?
 
     @Query("""
-        INSERT OR REPLACE INTO pending_email_changes (emailId, accountId, flag, read)
-        VALUES (:emailId, :accountId, 1, COALESCE((SELECT read FROM pending_email_changes WHERE emailId = :emailId), 0))
+        INSERT OR REPLACE INTO pending_email_changes (emailId, accountId, flag, read, move, targetFolderId)
+        VALUES (:emailId, :accountId, 1,
+            COALESCE((SELECT read FROM pending_email_changes WHERE emailId = :emailId), 0),
+            COALESCE((SELECT move FROM pending_email_changes WHERE emailId = :emailId), 0),
+            COALESCE((SELECT targetFolderId FROM pending_email_changes WHERE emailId = :emailId), ''))
     """)
     abstract suspend fun markFlag(emailId: String, accountId: Long)
 
     @Query("""
-        INSERT OR REPLACE INTO pending_email_changes (emailId, accountId, flag, read)
-        VALUES (:emailId, :accountId, COALESCE((SELECT flag FROM pending_email_changes WHERE emailId = :emailId), 0), 1)
+        INSERT OR REPLACE INTO pending_email_changes (emailId, accountId, flag, read, move, targetFolderId)
+        VALUES (:emailId, :accountId,
+            COALESCE((SELECT flag FROM pending_email_changes WHERE emailId = :emailId), 0), 1,
+            COALESCE((SELECT move FROM pending_email_changes WHERE emailId = :emailId), 0),
+            COALESCE((SELECT targetFolderId FROM pending_email_changes WHERE emailId = :emailId), ''))
     """)
     abstract suspend fun markRead(emailId: String, accountId: Long)
+
+    @Query("""
+        INSERT OR REPLACE INTO pending_email_changes (emailId, accountId, flag, read, move, targetFolderId)
+        VALUES (:emailId, :accountId,
+            COALESCE((SELECT flag FROM pending_email_changes WHERE emailId = :emailId), 0),
+            COALESCE((SELECT read FROM pending_email_changes WHERE emailId = :emailId), 0),
+            1, :targetFolderId)
+    """)
+    abstract suspend fun markMove(emailId: String, accountId: Long, targetFolderId: String)
 
     @Query("UPDATE pending_email_changes SET flag = 0 WHERE emailId = :emailId")
     protected abstract suspend fun resetFlag(emailId: String)
@@ -67,7 +84,10 @@ abstract class PendingEmailChangeDao {
     @Query("UPDATE pending_email_changes SET read = 0 WHERE emailId = :emailId")
     protected abstract suspend fun resetRead(emailId: String)
 
-    @Query("DELETE FROM pending_email_changes WHERE emailId = :emailId AND flag = 0 AND read = 0")
+    @Query("UPDATE pending_email_changes SET move = 0, targetFolderId = '' WHERE emailId = :emailId")
+    protected abstract suspend fun resetMove(emailId: String)
+
+    @Query("DELETE FROM pending_email_changes WHERE emailId = :emailId AND flag = 0 AND read = 0 AND move = 0")
     protected abstract suspend fun deleteIfEmpty(emailId: String)
 
     @Query("DELETE FROM pending_email_changes WHERE emailId = :emailId")
@@ -88,6 +108,12 @@ abstract class PendingEmailChangeDao {
     @Transaction
     open suspend fun clearRead(emailId: String) {
         resetRead(emailId)
+        deleteIfEmpty(emailId)
+    }
+
+    @Transaction
+    open suspend fun clearMove(emailId: String) {
+        resetMove(emailId)
         deleteIfEmpty(emailId)
     }
 }

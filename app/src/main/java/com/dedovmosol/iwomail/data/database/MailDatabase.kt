@@ -9,7 +9,7 @@ import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class, PendingEmailChangeEntity::class, PendingPimChangeEntity::class],
-    version = 53,
+    version = 54,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -312,6 +312,13 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `emails` ADD COLUMN `inReplyTo` TEXT")
             }
         }
+        /** Очередь переноса письма (корзина и др.) без связи. */
+        private val MIGRATION_53_54 = object : Migration(53, 54) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `pending_email_changes` ADD COLUMN `move` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `pending_email_changes` ADD COLUMN `targetFolderId` TEXT NOT NULL DEFAULT ''")
+            }
+        }
         internal val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -342,7 +349,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_49_50,
             MIGRATION_50_51,
             MIGRATION_51_52,
-            MIGRATION_52_53
+            MIGRATION_52_53,
+            MIGRATION_53_54
         )
 
         fun getInstance(context: Context): MailDatabase {

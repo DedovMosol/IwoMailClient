@@ -718,7 +718,10 @@ class EmailOperationsService(
      * Собирает пары (emailServerId, srcFolderServerId) для MoveItems.
      * DRY: используется при первой попытке и при retry.
      */
-    private suspend fun buildMoveItems(emailIds: List<String>): List<Triple<String, String, String>> {
+    private suspend fun buildMoveItems(
+        emailIds: List<String>,
+        srcFolderServerIdByEmailId: Map<String, String> = emptyMap()
+    ): List<Triple<String, String, String>> {
         val result = mutableListOf<Triple<String, String, String>>() // (emailId, emailServerId, srcFolderServerId)
         for (emailId in emailIds) {
             val email = emailDao.getEmail(emailId) ?: continue
@@ -726,8 +729,9 @@ class EmailOperationsService(
             val srcFolderServerId = if (emailServerId.contains(":")) {
                 emailServerId.substringBefore(":")
             } else {
-                val sourceFolder = folderDao.getFolder(email.folderId)
-                sourceFolder?.serverId ?: email.folderId.substringAfter("_")
+                srcFolderServerIdByEmailId[emailId]
+                    ?: folderDao.getFolder(email.folderId)?.serverId
+                    ?: email.folderId.substringAfter("_")
             }
             result.add(Triple(emailId, emailServerId, srcFolderServerId))
         }
@@ -800,24 +804,52 @@ class EmailOperationsService(
             return EasResult.Error("Move is only supported for Exchange")
         }
 
-        val client = accountRepo.createEasClient(firstEmail.accountId)
-            ?: return EasResult.Error("Failed to create client")
-
         val targetFolder = folderDao.getFolder(targetFolderId)
             ?: return EasResult.Error("Target folder not found")
 
         val sourceFolderId = firstEmail.folderId
-        // MoveItems сразу. Sync папки — только если сервер вернул Status=1 (устаревший ServerId на EAS 12.1).
         val resolvedEmailIds = resolveEmailIds(allEmails, sourceFolderId)
         if (resolvedEmailIds.isEmpty()) return EasResult.Error("Emails not found")
 
-        val triples = buildMoveItems(resolvedEmailIds)
+        val srcFolderServerIdByEmailId = HashMap<String, String>(resolvedEmailIds.size)
+        for (id in resolvedEmailIds) {
+            val email = emailDao.getEmail(id) ?: continue
+            val srcFolderId = if (email.folderId == targetFolderId) {
+                email.originalFolderId ?: email.folderId
+            } else {
+                email.folderId
+            }
+            val src = if (email.serverId.contains(":")) email.serverId.substringBefore(":")
+            else folderDao.getFolder(srcFolderId)?.serverId ?: srcFolderId.substringAfter("_")
+            srcFolderServerIdByEmailId[id] = src
+        }
+
+        val triples = buildMoveItems(resolvedEmailIds, srcFolderServerIdByEmailId)
         if (triples.isEmpty()) return EasResult.Success(0)
 
         val items = triples.map { it.second to it.third }
-
         if (items.first().second == targetFolder.serverId) {
             return EasResult.Error("ALREADY_IN_FOLDER")
+        }
+
+        val originalFolderById = allEmails.associate { it.id to it.folderId }
+        for (id in resolvedEmailIds) {
+            val email = emailDao.getEmail(id) ?: continue
+            if (email.folderId != targetFolderId) {
+                emailDao.updateFolderId(id, targetFolderId)
+                if (updateOriginalFolder) {
+                    originalFolderById[id]?.let { emailDao.updateOriginalFolderId(id, it) }
+                }
+            }
+            pendingChanges.markMove(id, firstEmail.accountId, targetFolderId)
+        }
+        originalFolderById.values.toSet().forEach { updateFolderCounts(it) }
+        updateFolderCounts(targetFolderId)
+
+        val client = accountRepo.createEasClient(firstEmail.accountId)
+        if (client == null) {
+            com.dedovmosol.iwomail.sync.PendingMailChangesWorker.enqueue(context)
+            return EasResult.Success(resolvedEmailIds.size)
         }
 
         var result = client.moveItems(items, targetFolder.serverId)
@@ -830,8 +862,8 @@ class EmailOperationsService(
             try {
                 emailSyncService.syncEmails(firstEmail.accountId, sourceFolderId, forceFullSync = false)
 
-                val retryIds = resolveEmailIds(allEmails, sourceFolderId)
-                val freshTriples = buildMoveItems(retryIds)
+                val retryIds = resolvedEmailIds.filter { emailDao.getEmail(it) != null }
+                val freshTriples = buildMoveItems(retryIds, srcFolderServerIdByEmailId)
                 if (freshTriples.isNotEmpty()) {
                     val freshItems = freshTriples.map { it.second to it.third }
                     result = client.moveItems(freshItems, targetFolder.serverId)
@@ -850,8 +882,8 @@ class EmailOperationsService(
             val allResults = mutableMapOf<String, String>() // srcServerId → dstServerId
             val ghostEmailIds = mutableListOf<String>()     // emailIds для локальной очистки (только status=1)
             val ghostFolderIds = mutableSetOf<String>()     // folderIds для обновления счётчиков
-            val fallbackIds = resolveEmailIds(allEmails, sourceFolderId)
-            val freshTriples = buildMoveItems(fallbackIds)
+            val fallbackIds = resolvedEmailIds.filter { emailDao.getEmail(it) != null }
+            val freshTriples = buildMoveItems(fallbackIds, srcFolderServerIdByEmailId)
 
             for ((emailId, serverId, srcFldId) in freshTriples) {
                 val singleResult = client.moveItems(listOf(serverId to srcFldId), targetFolder.serverId)
@@ -904,13 +936,10 @@ class EmailOperationsService(
         return when (result) {
             is EasResult.Success -> {
                 val movedMap = result.data
-                val sourceFolderIds = mutableSetOf<String>()
                 var movedCount = 0
 
                 for (emailId in resolvedEmailIds) {
                     val email = emailDao.getEmail(emailId) ?: continue
-                    sourceFolderIds.add(email.folderId)
-
                     val newServerId = movedMap[email.serverId]
                     if (newServerId != null) {
                         val newEmailId = "${firstEmail.accountId}_$newServerId"
@@ -931,19 +960,56 @@ class EmailOperationsService(
                                     it.copy(id = 0, emailId = newEmailId)
                                 })
                             }
+                            pendingChanges.rename(emailId, newEmailId)
+                            pendingChanges.clearMove(newEmailId)
                         }
                         movedCount++
+                    } else {
+                        pendingChanges.clearMove(emailId)
                     }
                 }
 
-                for (srcId in sourceFolderIds) {
-                    updateFolderCounts(srcId)
-                }
-
+                originalFolderById.values.toSet().forEach { updateFolderCounts(it) }
                 updateFolderCounts(targetFolderId)
                 EasResult.Success(movedCount + ghostDeletedCount)
             }
-            is EasResult.Error -> result
+            is EasResult.Error -> {
+                if (isOfflineMailError(result.message)) {
+                    com.dedovmosol.iwomail.sync.PendingMailChangesWorker.enqueue(context)
+                    EasResult.Success(resolvedEmailIds.size)
+                } else {
+                    for (id in resolvedEmailIds) {
+                        originalFolderById[id]?.let { emailDao.updateFolderId(id, it) }
+                        pendingChanges.clearMove(id)
+                    }
+                    originalFolderById.values.toSet().forEach { updateFolderCounts(it) }
+                    updateFolderCounts(targetFolderId)
+                    result
+                }
+            }
+        }
+    }
+
+    /**
+     * Повтор переноса из очереди: письмо уже в целевой папке локально, SrcFldId — исходная папка на сервере.
+     */
+    suspend fun retryPendingMove(emailId: String): EasResult<Boolean> {
+        val pending = pendingChanges.get(emailId)
+        if (pending == null || !pending.move) return EasResult.Success(true)
+        val email = emailDao.getEmail(emailId)
+        if (email == null) {
+            pendingChanges.clearMove(emailId)
+            return EasResult.Success(true)
+        }
+        val targetId = pending.targetFolderId
+        if (targetId.isBlank()) {
+            pendingChanges.clearMove(emailId)
+            return EasResult.Success(true)
+        }
+        val result = moveEmails(listOf(emailId), targetId, updateOriginalFolder = false)
+        return when (result) {
+            is EasResult.Success -> EasResult.Success(true)
+            is EasResult.Error -> if (isOfflineMailError(result.message)) EasResult.Success(true) else result
         }
     }
 
@@ -1333,3 +1399,5 @@ internal fun isChangeRejected(message: String): Boolean {
     val status = COLLECTION_STATUS.find(message)?.groupValues?.get(1)?.toIntOrNull() ?: return false
     return status in REJECTING_COLLECTION_STATUSES
 }
+
+internal fun isOfflineMailError(message: String): Boolean = message.contains("[NET:")
