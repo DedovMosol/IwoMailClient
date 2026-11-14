@@ -50,6 +50,8 @@ class MainActivity : FragmentActivity() {
         const val EXTRA_OPEN_EMAIL_ID = "open_email_id"
         const val EXTRA_SWITCH_ACCOUNT_ID = "switch_account_id"
         const val EXTRA_OPEN_UPDATES = "open_updates"
+        const val EXTRA_OPEN_CALENDAR = "open_calendar"
+        const val EXTRA_CALENDAR_EVENT_ID = "calendar_event_id"
         
         // App Shortcuts actions
         const val ACTION_SHORTCUT_COMPOSE = "com.dedovmosol.iwomail.SHORTCUT_COMPOSE"
@@ -92,6 +94,7 @@ class MainActivity : FragmentActivity() {
     private var shortcutInbox = mutableStateOf(false)
     private var shortcutSearch = mutableStateOf(false)
     private var shortcutCalendar = mutableStateOf(false)
+    private var openCalendarEventId = mutableStateOf<String?>(null)
     private var shortcutTasks = mutableStateOf(false)
     private var shortcutNotes = mutableStateOf(false)
     
@@ -295,6 +298,8 @@ class MainActivity : FragmentActivity() {
                                 shortcutInbox = shouldShortcutInbox,
                                 shortcutSearch = shouldShortcutSearch,
                                 shortcutCalendar = shortcutCalendar.value,
+                                openCalendarEventId = openCalendarEventId.value,
+                                onCalendarEventHandled = { openCalendarEventId.value = null },
                                 shortcutTasks = shortcutTasks.value,
                                 shortcutNotes = shortcutNotes.value,
                                 onShortcutHandled = {
@@ -419,6 +424,14 @@ class MainActivity : FragmentActivity() {
         if (intent.getBooleanExtra(EXTRA_OPEN_UPDATES, false)) {
             openUpdates.value = true
             intent.removeExtra(EXTRA_OPEN_UPDATES)
+            return
+        }
+
+        if (intent.getBooleanExtra(EXTRA_OPEN_CALENDAR, false)) {
+            shortcutCalendar.value = true
+            intent.getStringExtra(EXTRA_CALENDAR_EVENT_ID)?.let { openCalendarEventId.value = it }
+            intent.removeExtra(EXTRA_OPEN_CALENDAR)
+            intent.removeExtra(EXTRA_CALENDAR_EVENT_ID)
             return
         }
         

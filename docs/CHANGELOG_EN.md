@@ -4,6 +4,9 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Calendar: reminder tap opens that event; list gesture settings (2026-11-14)
+- Reminders were already scheduled for every account. The tap extra `open_calendar` was never read, so you stayed on the last screen. Now: switch to the event’s account, open Calendar, open the event. Navigation waits until the account switch finishes
+- Mail settings: two rows “Swipe right” / “Swipe left” with the current action, the whole row is tappable (no truncated “Swipes in…” and no extra buttons under the list)
 ### Sent: empty To uses Cc; Back clears selection (2026-11-14)
 - In Sent and Drafts, if To is empty the row and avatar use the first Cc (as in Outlook)
 - System Back / the back gesture in selection mode clears the marks (mail, search, tasks, notes, contacts) instead of leaving for Home. Calendar and user folders already did this

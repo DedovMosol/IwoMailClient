@@ -367,6 +367,8 @@ fun AppNavigation(
     shortcutInbox: Boolean = false,
     shortcutSearch: Boolean = false,
     shortcutCalendar: Boolean = false,
+    openCalendarEventId: String? = null,
+    onCalendarEventHandled: () -> Unit = {},
     shortcutTasks: Boolean = false,
     shortcutNotes: Boolean = false,
     onShortcutHandled: () -> Unit = {},
@@ -579,8 +581,8 @@ fun AppNavigation(
     // Обработка App Shortcuts / Widget actions
     val hasAnyShortcut = shortcutCompose || shortcutInbox || shortcutSearch || shortcutCalendar || shortcutTasks || shortcutNotes
     
-    LaunchedEffect(shortcutCompose, shortcutInbox, shortcutSearch, shortcutCalendar, shortcutTasks, shortcutNotes, hasCheckedAccounts, startDestination) {
-        if (hasAnyShortcut && hasCheckedAccounts && startDestination == Screen.Main.route) {
+    LaunchedEffect(shortcutCompose, shortcutInbox, shortcutSearch, shortcutCalendar, shortcutTasks, shortcutNotes, hasCheckedAccounts, startDestination, accountSwitchCompleted) {
+        if (hasAnyShortcut && hasCheckedAccounts && accountSwitchCompleted && startDestination == Screen.Main.route) {
             withTimeoutOrNull(2000L) {
                 snapshotFlow { navController.currentBackStackEntry }.first { it != null }
             }
@@ -1250,7 +1252,9 @@ fun AppNavigation(
                 onComposeClick = { email ->
                     navController.navigate(Screen.Compose.createRoute(toEmail = email))
                 },
-                initialDateFilter = initialDateFilter
+                initialDateFilter = initialDateFilter,
+                initialEventId = openCalendarEventId,
+                onInitialEventConsumed = onCalendarEventHandled
             )
         }
         

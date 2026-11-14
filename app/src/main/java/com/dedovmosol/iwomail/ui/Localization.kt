@@ -666,9 +666,9 @@ object Strings {
     fun sendingIn(seconds: Int): String = if (isRussian()) "Отправка через $seconds с" else "Sending in $seconds s"
 
     // Свайпы
-    val swipeSetting: String @Composable get() = if (isRussian()) "Свайпы в списке писем" else "Swipes in the message list"
-    val swipeStart: String @Composable get() = if (isRussian()) "Слева направо" else "Left to right"
-    val swipeEnd: String @Composable get() = if (isRussian()) "Справа налево" else "Right to left"
+    val swipeSetting: String @Composable get() = if (isRussian()) "Жесты в списке" else "List gestures"
+    val swipeStart: String @Composable get() = if (isRussian()) "Свайп вправо" else "Swipe right"
+    val swipeEnd: String @Composable get() = if (isRussian()) "Свайп влево" else "Swipe left"
     @Composable
     fun swipeActionName(action: com.dedovmosol.iwomail.domain.SwipeAction): String = when (action) {
         com.dedovmosol.iwomail.domain.SwipeAction.NONE -> if (isRussian()) "Нет" else "None"
