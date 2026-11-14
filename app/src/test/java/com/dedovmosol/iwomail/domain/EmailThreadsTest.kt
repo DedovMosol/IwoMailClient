@@ -19,9 +19,10 @@ class EmailThreadsTest {
         flagged: Boolean = false,
         attachments: Boolean = false,
         internetMessageId: String? = null,
-        inReplyTo: String? = null
+        inReplyTo: String? = null,
+        folderId: String? = null
     ) = EmailEntity(
-        id = id, accountId = accountId, folderId = "${accountId}_2", serverId = id, from = "a@corp.example", to = "b@corp.example",
+        id = id, accountId = accountId, folderId = folderId ?: "${accountId}_2", serverId = id, from = "a@corp.example", to = "b@corp.example",
         subject = subject, body = "", dateReceived = time--, read = read, flagged = flagged, hasAttachments = attachments,
         conversationId = conversationId, internetMessageId = internetMessageId, inReplyTo = inReplyTo
     )
@@ -137,6 +138,29 @@ class EmailThreadsTest {
             )
         )
         assertThat(threads.ids()).containsExactly(listOf("3"), listOf("2"), listOf("1")).inOrder()
+    }
+
+    @Test
+    fun `Inbox reply joins the only Sent original with the same subject`() {
+        val threads = EmailThreads.group(
+            listOf(
+                email("2", "RE: Встреча", folderId = "inbox"),
+                email("1", "Встреча", folderId = "sent")
+            )
+        )
+        assertThat(threads.ids()).containsExactly(listOf("2", "1"))
+    }
+
+    @Test
+    fun `Inbox original and Sent original with the same subject do not steal each others replies`() {
+        val threads = EmailThreads.group(
+            listOf(
+                email("3", "RE: Встреча", folderId = "inbox"),
+                email("2", "Встреча", folderId = "inbox"),
+                email("1", "Встреча", folderId = "sent")
+            )
+        )
+        assertThat(threads.ids()).containsExactly(listOf("3", "2"), listOf("1")).inOrder()
     }
 
     @Test
