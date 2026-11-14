@@ -1702,7 +1702,7 @@ class CalendarRepository(private val context: Context) {
         val account = accountRepo.getAccount(accountId)
             ?: return EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
 
-        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+        if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
             return EasResult.Error(exchangeOnlyError)
         }
 

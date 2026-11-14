@@ -10,25 +10,26 @@ class SettingsCopyTest {
 
     @Test
     fun `empty accounts offer to add one`() {
-        assertThat(settingsAccountsSubtitle(emptyList(), "Add account", "2 accounts"))
+        assertThat(settingsAccountsSubtitle(0, "", "Add account", "2 accounts"))
             .isEqualTo("Add account")
     }
 
     @Test
     fun `one account shows its address`() {
-        assertThat(settingsAccountsSubtitle(listOf("a@corp.ru"), "Add account", "2 accounts"))
+        assertThat(settingsAccountsSubtitle(1, "a@corp.ru", "Add account", "2 accounts"))
             .isEqualTo("a@corp.ru")
     }
 
     @Test
     fun `several accounts show the count not the first address`() {
         assertThat(
-            settingsAccountsSubtitle(
-                listOf("a@corp.ru", "b@corp.ru"),
-                "Add account",
-                "2 accounts"
-            )
+            settingsAccountsSubtitle(2, "a@corp.ru", "Add account", "2 accounts")
         ).isEqualTo("2 accounts")
+    }
+
+    @Test
+    fun `color without alpha still gets a contrasting glyph`() {
+        assertThat(contrastingContentArgb(0x1976D2)).isEqualTo(0xFFFFFFFF.toInt())
     }
 
     @Test

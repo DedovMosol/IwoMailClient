@@ -442,7 +442,7 @@ fun SetupScreen(
                 domain = account.domain
                 acceptAllCerts = account.acceptAllCerts
                 selectedColor = account.color
-                accountType = AccountType.valueOf(account.accountType)
+                accountType = AccountType.fromStored(account.accountType)
                 incomingPort = account.incomingPort.toString()
                 outgoingServer = account.outgoingServer
                 outgoingPort = account.outgoingPort.toString()

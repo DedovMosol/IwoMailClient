@@ -1,6 +1,5 @@
 package com.dedovmosol.iwomail.ui.screens
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -8,7 +7,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,8 +32,7 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun MailAlertsSettingsSection(
     settingsRepo: SettingsRepository,
-    accounts: List<AccountEntity>,
-    showHeader: Boolean = true
+    accounts: List<AccountEntity>
 ) {
     val context = LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
@@ -53,15 +50,6 @@ internal fun MailAlertsSettingsSection(
     val sameTimeText = Strings.quietHoursSameTime
 
     Column {
-        if (showHeader) {
-            Text(
-                text = Strings.mailAlertsSection,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(16.dp)
-            )
-        }
-
         val quiet = prefs?.quietHours ?: QuietHours(false, QuietHours.DEFAULT_START, QuietHours.DEFAULT_END)
         SettingsSwitchRow(
             title = Strings.quietHours,
@@ -98,11 +86,11 @@ internal fun MailAlertsSettingsSection(
 
         // Звук, вибрация и важность — у каждого аккаунта свои, в настройках системы (канал аккаунта)
         for (account in accounts) {
-            ListItem(
-                headlineContent = { Text(Strings.accountNotificationSettings) },
-                supportingContent = { Text(account.email) },
-                leadingContent = { Icon(AppIcons.Email, null) },
-                modifier = Modifier.clickable {
+            SettingsNavRow(
+                title = Strings.accountNotificationSettings,
+                subtitle = account.email,
+                icon = AppIcons.Email,
+                onClick = {
                     MailNotificationChannels.ensure(context, account.id, account.email, ru)
                     try {
                         context.startActivity(MailNotificationChannels.settingsIntent(context, account.id))

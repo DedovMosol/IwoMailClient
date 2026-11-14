@@ -21,6 +21,7 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -111,10 +112,10 @@ internal fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun SettingsLeadingIcon(icon: ImageVector, title: String) {
+private fun SettingsLeadingIcon(icon: ImageVector, boxSize: Dp = 48.dp) {
     Box(
         modifier = Modifier
-            .size(48.dp)
+            .size(boxSize)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.primaryContainer),
         contentAlignment = Alignment.Center
@@ -143,7 +144,7 @@ internal fun SettingsHubRow(
             supportingContent = if (subtitle.isNullOrBlank()) null else ({
                 Text(subtitle, style = MaterialTheme.typography.bodyMedium)
             }),
-            leadingContent = { SettingsLeadingIcon(icon, title) },
+            leadingContent = { SettingsLeadingIcon(icon) },
             trailingContent = { Icon(AppIcons.ChevronRight, contentDescription = null) },
             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
             modifier = Modifier
@@ -213,7 +214,7 @@ internal fun SettingsNavRow(
             Text(subtitle, style = MaterialTheme.typography.bodyMedium)
         }),
         leadingContent = icon?.let { vector ->
-            { Icon(vector, contentDescription = null) }
+            { SettingsLeadingIcon(vector, boxSize = 40.dp) }
         },
         trailingContent = { Icon(AppIcons.ChevronRight, contentDescription = null) },
         modifier = Modifier

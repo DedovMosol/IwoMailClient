@@ -60,7 +60,7 @@ class EmailOperationsService(
         val email = emailDao.getEmail(emailId) ?: return EasResult.Error("Письмо не найдено")
         val account = accountRepo.getAccount(email.accountId) ?: return EasResult.Error("Аккаунт не найден")
 
-        if (AccountType.valueOf(account.accountType) == AccountType.EXCHANGE) {
+        if (AccountType.fromStored(account.accountType) == AccountType.EXCHANGE) {
             val client = accountRepo.createEasClient(email.accountId) ?: return EasResult.Error("Не удалось создать клиент")
             val folder = folderDao.getFolder(email.folderId) ?: return EasResult.Error("Папка не найдена")
 
@@ -233,7 +233,7 @@ class EmailOperationsService(
         val account = accountRepo.getAccount(email.accountId)
             ?: return EasResult.Error("Аккаунт не найден")
 
-        if (AccountType.valueOf(account.accountType) == AccountType.EXCHANGE) {
+        if (AccountType.fromStored(account.accountType) == AccountType.EXCHANGE) {
             val client = accountRepo.createEasClient(email.accountId)
                 ?: return EasResult.Error("Не удалось создать клиент")
 
@@ -450,7 +450,7 @@ class EmailOperationsService(
         val folder = folderDao.getFolder(email.folderId) ?: return
         if (!com.dedovmosol.iwomail.eas.ListUnsubscribe.offeredIn(folder.type)) return
         val account = accountRepo.getAccount(email.accountId) ?: return
-        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) return
+        if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) return
         val client = accountRepo.createEasClient(email.accountId) ?: return
         val headers = client.fetchTopLevelHeaders(folder.serverId, email.serverId) as? EasResult.Success ?: return
         val (value, oneClick) = com.dedovmosol.iwomail.eas.ListUnsubscribe.fromHeaders(headers.data) ?: ("" to false)
@@ -509,7 +509,7 @@ class EmailOperationsService(
         try {
             val email = emailDao.getEmail(emailId) ?: return
             val account = accountRepo.getAccount(email.accountId) ?: return
-            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) return
+            if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) return
 
             val sid = email.serverId
             if (sid.startsWith("local_draft_") || sid.isBlank()) return
@@ -543,7 +543,7 @@ class EmailOperationsService(
             if (emails.isEmpty()) return
 
             val account = accountRepo.getAccount(accountId) ?: return
-            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) return
+            if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) return
 
             val client = accountRepo.createEasClient(accountId) ?: return
             val folderServerId = inboxFolder.serverId
@@ -637,7 +637,7 @@ class EmailOperationsService(
         return kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
             var outcome: FlagWriteTracker.Outcome = FlagWriteTracker.Outcome.KeptLocal
             try {
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
                     outcome = FlagWriteTracker.Outcome.Applied(started.target)
                     return@withContext EasResult.Success(true)
                 }
@@ -801,7 +801,7 @@ class EmailOperationsService(
         val account = accountRepo.getAccount(firstEmail.accountId)
             ?: return EasResult.Error("Account not found")
 
-        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+        if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
             return EasResult.Error("Move is only supported for Exchange")
         }
 
@@ -1203,7 +1203,7 @@ class EmailOperationsService(
             val account = accountRepo.getAccount(accountId)
                 ?: return EasResult.Error("Account not found")
 
-            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+            if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
                 val existing = emailInfos.map { it.id }.toSet()
                 emailIds.forEach { emailId ->
                     attachmentDao.deleteByEmail(emailId)

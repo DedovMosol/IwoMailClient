@@ -42,11 +42,7 @@ fun SyncCleanupScreen(
     val downloadsDays = uiState.downloadsDays
     val rollbackDays = uiState.rollbackDays
     
-    val accountType = try {
-        AccountType.valueOf(currentAccount.accountType)
-    } catch (_: Exception) {
-        AccountType.EXCHANGE
-    }
+    val accountType = AccountType.fromStored(currentAccount.accountType)
     
     val syncMode = try {
         SyncMode.valueOf(currentAccount.syncMode)

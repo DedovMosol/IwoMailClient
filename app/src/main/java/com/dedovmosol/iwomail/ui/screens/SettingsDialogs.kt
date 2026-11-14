@@ -760,10 +760,8 @@ internal enum class LockDialogType { SetPassword, ChangePassword, Disable }
  *  - [requireNewPassword] = новый пароль + подтверждение, длина ≥
  *    [com.dedovmosol.iwomail.data.security.AppLockManager.MIN_PASSWORD_LENGTH].
  *
- * Производительность: все тяжёлые операции (проверка текущего пароля и коммит
- * нового — 600k итераций PBKDF2, ~0.5–1 с) выполняются на [Dispatchers.IO],
- * а не на главном потоке (защита от джанка). Запись в Compose-state из
- * колбэка на IO безопасна (снапшот-система потокобезопасна).
+ * Производительность: проверка текущего пароля и [onSubmit] (PBKDF2) идут на
+ * [Dispatchers.IO]. [onSuccess] вызывается уже на главном потоке.
  */
 @Composable
 internal fun LockPasswordDialog(
@@ -772,7 +770,8 @@ internal fun LockPasswordDialog(
     requireNewPassword: Boolean,
     hint: String? = null,
     onCancel: () -> Unit,
-    onSubmit: (currentPassword: String, newPassword: String) -> Unit
+    onSubmit: (currentPassword: String, newPassword: String) -> Boolean,
+    onSuccess: () -> Unit
 ) {
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     // Строки — захватываем из композабельного контекста в замыкания:
@@ -819,11 +818,11 @@ internal fun LockPasswordDialog(
                     return@launch
                 }
             }
-            // Коммит (установка/смена/удаление пароля — тоже PBKDF2) на IO.
-            withContext(Dispatchers.IO) {
+            val committed = withContext(Dispatchers.IO) {
                 onSubmit(currentPassword, newPassword)
             }
             isChecking = false
+            if (committed) onSuccess()
         }
     }
 

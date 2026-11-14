@@ -39,11 +39,12 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
             requireNewPassword = true,
             onCancel = { lockDialog = null },
             onSubmit = { _, newPassword ->
-                if (com.dedovmosol.iwomail.data.security.AppLockManager.setPassword(newPassword)) {
-                    lockPasswordSet = true
-                    lockDialog = null
-                    scope.launch { settingsRepo.setAppLockEnabled(true) }
-                }
+                com.dedovmosol.iwomail.data.security.AppLockManager.setPassword(newPassword)
+            },
+            onSuccess = {
+                lockPasswordSet = true
+                lockDialog = null
+                scope.launch { settingsRepo.setAppLockEnabled(true) }
             }
         )
         LockDialogType.ChangePassword -> LockPasswordDialog(
@@ -53,8 +54,8 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
             onCancel = { lockDialog = null },
             onSubmit = { _, newPassword ->
                 com.dedovmosol.iwomail.data.security.AppLockManager.setPassword(newPassword)
-                lockDialog = null
-            }
+            },
+            onSuccess = { lockDialog = null }
         )
         LockDialogType.Disable -> LockPasswordDialog(
             title = Strings.appLockDisable,
@@ -64,6 +65,9 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
             onCancel = { lockDialog = null },
             onSubmit = { _, _ ->
                 com.dedovmosol.iwomail.data.security.AppLockManager.removePassword()
+                true
+            },
+            onSuccess = {
                 lockPasswordSet = false
                 lockDialog = null
                 scope.launch {
@@ -107,8 +111,9 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
                         else Strings.appLockBiometricUnavailable,
                         icon = { Icon(AppIcons.Fingerprint, null) },
                         checked = appLockBiometricEnabled,
-                        enabled = biometricAvailable,
+                        enabled = biometricAvailable || appLockBiometricEnabled,
                         onChange = { enabled ->
+                            if (enabled && !biometricAvailable) return@SettingsSwitchRow
                             scope.launch { settingsRepo.setAppLockBiometricEnabled(enabled) }
                         }
                     )

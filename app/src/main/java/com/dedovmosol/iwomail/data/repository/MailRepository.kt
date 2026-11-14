@@ -410,7 +410,7 @@ class MailRepository(private val context: Context) {
         // иначе строку не прочитать. Крупное — с cid:, картинки — файлы вложений (attachmentFiles).
         val storedBody = if (localBody.length <= DraftUpload.MAX_LOCAL_BODY_CHARS) localBody else serverBody
         
-        if (AccountType.valueOf(account.accountType) == AccountType.EXCHANGE) {
+        if (AccountType.fromStored(account.accountType) == AccountType.EXCHANGE) {
             // Режим черновиков: LOCAL — сохраняем только в БД, SERVER — на сервер Exchange
             val draftMode = try {
                 DraftMode.valueOf(account.draftMode)
@@ -714,7 +714,7 @@ if (result is EasResult.Success) {
         val account = accountRepo.getAccount(accountId)
             ?: return EasResult.Error("Аккаунт не найден")
 
-        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+        if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
             return EasResult.Error("Не поддерживается")
         }
 
@@ -793,7 +793,7 @@ if (result is EasResult.Success) {
         val account = accountRepo.getAccount(accountId)
             ?: return EasResult.Error("Аккаунт не найден")
         
-        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+        if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
             return EasResult.Error("Не поддерживается")
         }
         

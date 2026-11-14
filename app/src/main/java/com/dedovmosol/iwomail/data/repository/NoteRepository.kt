@@ -626,7 +626,7 @@ class NoteRepository internal constructor(
 
             for ((accountId, accountNotes) in byAccount) {
                 val account = accountRepo.getAccount(accountId)
-                if (account == null || AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                if (account == null || AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
                     totalFailed += accountNotes.size
                     onProgress(totalDeleted, total)
                     continue
@@ -718,7 +718,7 @@ class NoteRepository internal constructor(
 
             for ((accountId, accountNotes) in byAccount) {
                 val account = accountRepo.getAccount(accountId)
-                if (account == null || AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                if (account == null || AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
                     totalFailed += accountNotes.size
                     onProgress(totalRestored, total)
                     continue
@@ -805,7 +805,7 @@ class NoteRepository internal constructor(
 
             for ((accountId, accountNotes) in byAccount) {
                 val account = accountRepo.getAccount(accountId)
-                if (account == null || AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                if (account == null || AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
                     totalFailed += accountNotes.size
                     onProgress(totalDeleted, total)
                     continue
@@ -891,7 +891,7 @@ class NoteRepository internal constructor(
                     ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
 
                 // Только для Exchange аккаунтов
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
                     return@withContext EasResult.Error(RepositoryErrors.NOTES_EXCHANGE_ONLY)
                 }
 
