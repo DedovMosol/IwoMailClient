@@ -207,17 +207,17 @@ class EmailListViewModel(
                 draftsSynced = true
             }
             FolderType.INBOX, FolderType.SENT_ITEMS -> {
-                val now = android.os.SystemClock.elapsedRealtime()
+                val now = System.currentTimeMillis()
                 if (now - lastOpenedFolderSyncElapsed < 30_000L) return
                 lastOpenedFolderSyncElapsed = now
             }
             else -> return
         }
-        viewModelScope.launch { runSync(folder.accountId, setError = false) }
+        viewModelScope.launch { runSync(folder.accountId, setError = false, showRefresh = false) }
     }
 
-    private suspend fun runSync(accountId: Long, setError: Boolean) {
-        _uiState.update { it.copy(isRefreshing = true, errorMessage = null) }
+    private suspend fun runSync(accountId: Long, setError: Boolean, showRefresh: Boolean = true) {
+        if (showRefresh) _uiState.update { it.copy(isRefreshing = true, errorMessage = null) }
         try {
             // Инкрементальный sync (forceFullSync=false): при невалидном SyncKey сервер вернёт
             // status 3/12 и репозиторий сам выполнит полный ресинк — критично для больших ящиков.
@@ -230,7 +230,7 @@ class EmailListViewModel(
         } catch (e: Exception) {
             Log.e("EmailListViewModel", "Sync failed", e)
         } finally {
-            _uiState.update { it.copy(isRefreshing = false) }
+            if (showRefresh) _uiState.update { it.copy(isRefreshing = false) }
         }
     }
 
