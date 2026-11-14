@@ -25,4 +25,4 @@ What you expected to happen.
 **Logs / screenshots**
 If applicable, add screenshots or logcat output (redact credentials!).
 
-> For security-sensitive reports, do NOT use this template — see SECURITY.md.
+> For security-sensitive reports, do NOT use this template — see docs/SECURITY.md.

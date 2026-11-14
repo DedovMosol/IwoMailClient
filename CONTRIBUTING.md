@@ -41,4 +41,4 @@ By submitting a contribution you agree that it is licensed under the same terms.
 ## Reporting bugs
 
 Use the issue templates. For security-sensitive reports, follow
-[SECURITY.md](SECURITY.md) instead of opening a public issue.
+[docs/SECURITY.md](docs/SECURITY.md) instead of opening a public issue.

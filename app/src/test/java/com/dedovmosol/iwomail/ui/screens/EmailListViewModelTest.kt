@@ -99,6 +99,14 @@ class EmailListViewModelTest {
     }
 
     @Test
+    fun `generic user folder type 1 auto-syncs incrementally`() = runTest(dispatcher) {
+        every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(listOf(folderMock("misc", 1)))
+        createViewModel(folderId = "misc")
+        advanceUntilIdle()
+        coVerify { mailRepo.syncEmails(ACCOUNT_ID, "misc", false) }
+    }
+
+    @Test
     fun `deleted items folder does not auto-sync`() = runTest(dispatcher) {
         every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(listOf(folderMock("del", FolderType.DELETED_ITEMS)))
         createViewModel(folderId = "del")

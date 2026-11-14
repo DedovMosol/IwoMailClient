@@ -1,9 +1,34 @@
-# Security Model
+# Security
 
-This document describes **how the app protects data and what it does not
-protect against** (the threat model). For **reporting a vulnerability**, see
-the repository-root [`SECURITY.md`](../SECURITY.md) — that file is the
-disclosure policy; this one is the security design.
+This document is the project's security policy and threat model: **how to report
+a vulnerability** and **how the app protects data** (Exchange 2007 SP1 … 2013,
+EAS and EWS).
+
+## Supported versions
+
+Only the latest released version receives security fixes. Please update before
+reporting an issue.
+
+| Version | Supported |
+|---------|-----------|
+| 1.6.x   | yes       |
+| < 1.6   | no        |
+
+## Reporting a vulnerability
+
+**Do not open a public GitHub issue for security problems.**
+
+The app handles mail credentials, EAS/EWS traffic and local messages. Report
+privately:
+
+- **Email:** andreyid@outlook.com
+- **Telegram:** [@i_wantout](https://t.me/i_wantout)
+
+Include affected app and Android versions, steps to reproduce, and impact
+(what data or account is exposed). Initial response within a few days. Fixes
+ship in the next patch, with credit if you wish.
+
+## Threat model
 
 The app is an Exchange client for **Exchange 2007 SP1 … 2013** speaking
 Exchange ActiveSync (EAS, WBXML) and Exchange Web Services (EWS, SOAP).
