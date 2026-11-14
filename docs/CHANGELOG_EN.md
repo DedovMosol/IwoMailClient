@@ -4,6 +4,15 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Tasks and notes: offline edits and trash (2026-11-13)
+- **Before**: editing a task (done, subject, dates) or note and moving it to trash without a connection showed an error and saved nothing; the request also waited for a timeout
+- **Now**: the edit is saved on the device and queued (`pending_pim_changes`, DB v51, migration 50→51); a toast says "Saved on the device. It will be sent to the server when the connection is back" and the dialog closes. Without a network the server is not called at all. `PendingMailChangesWorker` (network constraint, exponential backoff) sends it the same way as online: EAS on Exchange 2010+, EWS on Exchange 2007 (the task is found by its subject before the edit)
+- **What is deferred**: no network, a connection-level `[NET:…]` tag, HTTP 5xx, or the network dropped during the request. A server rejection is an error, as before. Task assignment (an email to the assignee) offline is an error
+- **No losses or races**: several edits go out as one result; an edit made during the send is not lost (row version); an online edit behind a queued one is queued too (order on the server); sync does not overwrite a queued edit and does not restore the item from trash
+- **Trash**: restoring before the send is device-only. Permanent delete, empty trash and reset send the queue first (otherwise the item would stay on the server and come back); offline they show a clear error and nothing is wiped
+- **Battery**: after sending, one sync per account, not per item
+- **Not done yet**: creating tasks and notes offline
+- **Tests**: `OfflineTaskChangesTest` (18), `OfflineNoteChangesTest` (9), `PendingPimChangesTest` (6), migration 50→51, `SavedOffline` ViewModel events; mutants (sync without the queue guard, clearing without the version check) are caught
 ### Sent Items after sending: no separate full sync bypassing the folder gate (2026-11-13)
 - **SyncKey race**: when the regular Sent sync after sending failed, a separate full sync (`syncSentFull`) ran: `Sync` with key `0` and paging outside `FolderSyncGate`. A star or read change sent meanwhile used the old key and waited for the next attempt, and its own `Sync(0)` (`ensureValidSyncKey`) reset the server state again in the middle of the paging. The key was saved only at the end, overwriting the key saved under the gate, and the response Status was not checked
 - **Fix**: `syncSentFull` is removed (about 170 lines duplicating the regular sync). The regular sync already recovers from a stale key (Status 3/12) with a full resync under the gate and the `reconcileSentAfterFullResync` reconcile. On any other error (no connection, server failure) `refreshSentFolder` stops: a full sync without a connection would only reset the key

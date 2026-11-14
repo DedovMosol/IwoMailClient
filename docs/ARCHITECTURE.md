@@ -23,7 +23,7 @@
 | AGP | `8.7.3` |
 | Инструменты сборки | Gradle `8.12`, KSP `1.9.22-1.0.17`, Kover `0.7.6` |
 | UI | Jetpack Compose (BOM `2024.06.00`) + Material 3, Navigation Compose `2.7.6`, Coil `2.5.0` |
-| БД | Room `2.6.1`, `MailDatabase` версии `50` (12 entity), экспорт схем включён (`app/schemas`) |
+| БД | Room `2.6.1`, `MailDatabase` версии `51` (13 entity), экспорт схем включён (`app/schemas`) |
 | Сеть и фон | OkHttp `4.12.0`, Conscrypt `2.5.2`, WorkManager `2.9.0`, DataStore `1.1.1`, Glance `1.1.1`, JavaMail (`android-mail`) `1.6.7` |
 | Безопасность | `security-crypto` `1.1.0-alpha06` (EncryptedSharedPreferences), `biometric` `1.1.0` |
 | Архитектуры APK | `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64` + универсальный APK |
@@ -163,7 +163,8 @@ com.dedovmosol.iwomail/
 │
 ├── data/
 │   ├── database/ — MailDatabase (Room, entity, миграции), DAO (Daos.kt, *Dao.kt), EmailFlags.kt,
-│   │               PendingEmailChangeEntity.kt (очередь правок писем без связи), NotificationEmailSummary.kt
+│   │               PendingEmailChangeEntity.kt (очередь правок писем без связи), PendingPimChangeEntity.kt (очередь правок
+│   │               задач и заметок без связи), NotificationEmailSummary.kt
 │   ├── model/ — AccountServerHealth.kt (состояние здоровья сервера)
 │   ├── security/ — PasswordStorage, EncryptedStoreProvider, AppLockManager, SecurityTelemetry
 │   └── repository/ — репозитории, сервисы синхронизации и операций, RepositoryProvider, кэши, хелперы
@@ -192,7 +193,7 @@ com.dedovmosol.iwomail/
 
 ### Room
 
-`MailDatabase` содержит 12 entity-классов и 13 абстрактных DAO-аксессоров (`accountDao`, `emailDao`, `folderDao`, `signatureDao`, `attachmentDao`, `contactDao`, `contactGroupDao`, `noteDao`, `calendarEventDao`, `taskDao`, `syncDao`, `categoryColorDao`, `pendingEmailChangeDao`):
+`MailDatabase` содержит 13 entity-классов и 14 абстрактных DAO-аксессоров (`accountDao`, `emailDao`, `folderDao`, `signatureDao`, `attachmentDao`, `contactDao`, `contactGroupDao`, `noteDao`, `calendarEventDao`, `taskDao`, `syncDao`, `categoryColorDao`, `pendingEmailChangeDao`, `pendingPimChangeDao`):
 
 - **AccountEntity:** тип аккаунта, URL и альтернативный URL, режим синхронизации, метаданные сертификатов (отдельный пин для альтернативного URL), режим черновиков, интервалы синхронизации и очистки на уровне аккаунта.
 - **FolderEntity:** папки Exchange/IMAP/POP3 и SyncKey каждой папки.
@@ -204,9 +205,10 @@ com.dedovmosol.iwomail/
 - **CalendarEventEntity:** события календаря, встречи, поля повторения, исключения, JSON вложений, онлайн-ссылки, идентификаторы запросов на встречу.
 - **TaskEntity:** поля задачи, сроки, приоритет, напоминания, владелец/исполнитель, локальный флаг корзины.
 - **CategoryColorEntity** (`category_colors`, первичный ключ `accountId` + `nameKey`): цвета категорий Outlook для каждого аккаунта (`serverColor` из Master Category List на Exchange 2010+, `userColor` задаётся в приложении).
+- **PendingPimChangeEntity** (`pending_pim_changes`, версия БД 51): правки задач и заметок без связи — `pendingUpdate` и/или `pendingTrash`, `kind` (TASK/NOTE), `serverSubject`, `version`. Внешний ключ только на `accounts` (каскад), по той же причине, что и у очереди писем.
 - **PendingEmailChangeEntity** (`pending_email_changes`, версия БД 50): изменения писем, сделанные без связи и ещё не принятые сервером, — `flag` и/или `read`. Само значение не хранится: отправляется текущее из `emails`, поэтому несколько правок без связи уходят одним итогом. Внешнего ключа на `emails` нет намеренно: часть путей перезаписывает письма через REPLACE (DELETE + INSERT), и каскад стёр бы ожидающую правку. Внешний ключ на `accounts` — с каскадным удалением. Вместо UPSERT используется `INSERT OR REPLACE … COALESCE`, потому что SQLite на Android 8 — версии 3.18 и UPSERT не знает.
 
-Текущая версия БД — **50**. Зарегистрированные миграции покрывают `23→50` (`MailDatabase.ALL_MIGRATIONS`, 27 миграций, по одной на версию). При отсутствии миграции для обновления БД пересоздаётся только в **debug**-сборках (`fallbackToDestructiveMigration()` под `BuildConfig.DEBUG`); в release это даёт явный сбой при открытии БД. Понижение версии (установка более старого APK) всегда пересоздаёт БД (`fallbackToDestructiveMigrationOnDowngrade()`), серверные данные синхронизируются заново.
+Текущая версия БД — **51**. Зарегистрированные миграции покрывают `23→51` (`MailDatabase.ALL_MIGRATIONS`, 28 миграций, по одной на версию). При отсутствии миграции для обновления БД пересоздаётся только в **debug**-сборках (`fallbackToDestructiveMigration()` под `BuildConfig.DEBUG`); в release это даёт явный сбой при открытии БД. Понижение версии (установка более старого APK) всегда пересоздаёт БД (`fallbackToDestructiveMigrationOnDowngrade()`), серверные данные синхронизируются заново.
 
 Горячие пути виджета используют отдельные лёгкие проекции вместо полных entity:
 
@@ -353,6 +355,20 @@ SyncKey ([MS-ASCMD] Sync) образует цепочку: каждый отве
 6. Серии повторяющихся событий хранят метаданные вложений в мастер-событии/исключении, а виртуальные вхождения используют их повторно, не дублируя данные.
 7. Окончательное удаление события календаря требует успеха на сервере: локальное удаление и очистка корзины выполняются только после подтверждённого удаления через EAS/EWS.
 8. Удаление встречи участником отправляет `MeetingResponse` или EWS `DeclineItem` до удаления, чтобы Calendar Repair Assistant не вернул встречу.
+
+#### Правки задач и заметок без связи (`pending_pim_changes`)
+
+Изменение задачи («выполнено», тема, сроки) или заметки и перенос в корзину без связи сохраняются на устройстве и ставятся в очередь `pending_pim_changes`; отправляет их тот же `PendingMailChangesWorker` (одна уникальная работа, `NetworkType.CONNECTED`, экспоненциальная пауза).
+
+- **Когда откладывать** (`OfflineWrites`): сети нет — к серверу не обращаемся вовсе (без таймаута и лишней батареи); запрос не дошёл — метка `[NET:…]` уровня соединения, HTTP 5xx (`isConnectionLevelError`) или сеть пропала во время запроса (путь EWS на Exchange 2007 при обрыве возвращает ошибку без метки). Отказ сервера — ошибка, как раньше.
+- **Значение не хранится**: отправляется текущее состояние задачи или заметки, несколько правок уходят одним итогом. `serverSubject` — тема до первой правки без связи: EWS на Exchange 2007 находит задачу по теме. `version` растёт с каждой правкой, отметка снимается только при той же версии — правка во время отправки не теряется.
+- **Порядок**: правка со связью за правкой той же записи, ждущей отправки, тоже встаёт в очередь — иначе сервер получил бы старую версию последней.
+- **Протокол выбирается при отправке**: те же `EasClient.updateTask`/`deleteTask`/`updateNote`/`deleteNote`, что и со связью (EAS 14+, EWS на Exchange 2007).
+- **Синхронизация** не перетирает запись с ожидающей правкой, не считает её дублем и не возвращает из корзины. Удаление на сервере по-прежнему сильнее. После отправки — одна синхронизация на аккаунт и вид, а не на каждую запись: она подтягивает новые ServerId (перенос в Deleted Items, UpdateItem на Exchange 2007).
+- **Корзина**: восстановление до отправки — только на устройстве, сервер не трогается. Окончательное удаление, очистка корзины и сброс («Сбросить и синхронизировать») сначала отправляют очередь; без связи — ошибка `PENDING_CHANGES_NOT_SENT`, данные не теряются.
+- Назначение задачи (письмо исполнителю) без связи не откладывается — это ошибка.
+- UI: событие `SavedOffline` закрывает диалог и показывает «Сохранено на устройстве. Отправится на сервер, когда появится связь».
+- Создание задач и заметок без связи пока не поддержано.
 
 ### Уведомления
 

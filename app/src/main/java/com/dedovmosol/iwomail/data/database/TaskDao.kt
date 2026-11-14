@@ -71,6 +71,10 @@ interface TaskDao {
     // Мягкое удаление (в корзину)
     @Query("UPDATE tasks SET isDeleted = 1, lastModified = :timestamp WHERE id = :id")
     suspend fun softDelete(id: String, timestamp: Long = System.currentTimeMillis())
+
+    /** Только время правки — остальные поля, возможно уже изменённые параллельно, не трогаются. */
+    @Query("UPDATE tasks SET lastModified = :timestamp WHERE id = :id")
+    suspend fun touch(id: String, timestamp: Long)
     
     // Восстановление из корзины
     @Query("UPDATE tasks SET isDeleted = 0, lastModified = :timestamp WHERE id = :id")

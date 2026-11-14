@@ -8,8 +8,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
-    entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class, PendingEmailChangeEntity::class],
-    version = 50,
+    entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class, PendingEmailChangeEntity::class, PendingPimChangeEntity::class],
+    version = 51,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -27,6 +27,7 @@ abstract class MailDatabase : RoomDatabase() {
     abstract fun syncDao(): SyncDao
     abstract fun categoryColorDao(): CategoryColorDao
     abstract fun pendingEmailChangeDao(): PendingEmailChangeDao
+    abstract fun pendingPimChangeDao(): PendingPimChangeDao
 
     companion object {
         private const val TAG = "MailDatabase"
@@ -286,6 +287,18 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_pending_email_changes_accountId` ON `pending_email_changes` (`accountId`)")
             }
         }
+        /** Очередь правок задач и заметок без связи (изменение, корзина), ждущих отправки. SQL — из schemas/51.json. */
+        private val MIGRATION_50_51 = object : Migration(50, 51) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `pending_pim_changes` (`itemId` TEXT NOT NULL, `accountId` INTEGER NOT NULL, " +
+                        "`kind` TEXT NOT NULL, `pendingUpdate` INTEGER NOT NULL DEFAULT 0, `pendingTrash` INTEGER NOT NULL DEFAULT 0, " +
+                        "`serverSubject` TEXT NOT NULL DEFAULT '', `version` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`itemId`), " +
+                        "FOREIGN KEY(`accountId`) REFERENCES `accounts`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_pending_pim_changes_accountId` ON `pending_pim_changes` (`accountId`)")
+            }
+        }
         internal val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -313,7 +326,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_46_47,
             MIGRATION_47_48,
             MIGRATION_48_49,
-            MIGRATION_49_50
+            MIGRATION_49_50,
+            MIGRATION_50_51
         )
 
         fun getInstance(context: Context): MailDatabase {

@@ -10,12 +10,15 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.dedovmosol.iwomail.data.database.MailDatabase
+import com.dedovmosol.iwomail.data.database.PimKind
+import com.dedovmosol.iwomail.data.repository.PendingPimChanges
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import java.util.concurrent.TimeUnit
 
 /**
- * Отправляет правки писем, сделанные без связи (флаг, «прочитано»), когда связь появится: WorkManager с условием сети
- * переживает перезапуск процесса и устройства.
+ * Отправляет правки, сделанные без связи, когда связь появится: писем (флаг, «прочитано») и задач и заметок (изменение,
+ * корзина). WorkManager с условием сети переживает перезапуск процесса и устройства. Имя класса и работы прежние: уже
+ * запланированная работа после обновления приложения продолжит отправку.
  *
  * Уникальная работа с [ExistingWorkPolicy.KEEP]: правка во время отправки не перезапускает работу (иначе новый сбой
  * связи внутри самой работы зациклил бы её без паузы) — отправка подхватывает такие правки сама
@@ -29,7 +32,9 @@ class PendingMailChangesWorker(
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result = try {
-        val done = RepositoryProvider.getMailRepository(applicationContext).flushPendingChanges()
+        val mailDone = RepositoryProvider.getMailRepository(applicationContext).flushPendingChanges()
+        val pimDone = flushPendingPim(applicationContext)
+        val done = mailDone && pimDone
         when {
             done -> Result.success()
             runAttemptCount + 1 >= MAX_ATTEMPTS -> {
@@ -62,7 +67,31 @@ class PendingMailChangesWorker(
 
         /** Запланировать отправку, если в очереди что-то есть (запуск приложения, периодическая синхронизация). */
         suspend fun enqueueIfPending(context: Context) {
-            if (MailDatabase.getInstance(context).pendingEmailChangeDao().count() > 0) enqueue(context)
+            val db = MailDatabase.getInstance(context)
+            if (db.pendingEmailChangeDao().count() > 0 || db.pendingPimChangeDao().count() > 0) enqueue(context)
+        }
+
+        /** Правки задач и заметок без связи — каждая своим репозиторием (EAS или EWS по версии Exchange). */
+        private suspend fun flushPendingPim(context: Context): Boolean {
+            val queue = MailDatabase.getInstance(context).pendingPimChangeDao()
+            if (queue.count() == 0) return true
+            val tasks = RepositoryProvider.getTaskRepository(context)
+            val notes = RepositoryProvider.getNoteRepository(context)
+            return PendingPimChanges(
+                queue,
+                send = { change ->
+                    when (change.kind) {
+                        PimKind.TASK -> tasks.sendPendingTask(change, resync = false)
+                        PimKind.NOTE -> notes.sendPendingNote(change, resync = false)
+                    }
+                },
+                afterSent = { accountId, kind ->
+                    when (kind) {
+                        PimKind.TASK -> tasks.syncAfterPendingSent(accountId)
+                        PimKind.NOTE -> notes.syncAfterPendingSent(accountId)
+                    }
+                }
+            ).flush()
         }
     }
 }

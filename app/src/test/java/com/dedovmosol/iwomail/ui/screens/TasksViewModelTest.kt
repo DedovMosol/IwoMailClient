@@ -235,6 +235,43 @@ class TasksViewModelTest {
     }
 
     @Test
+    fun `saveTask update kept without a connection emits SavedOffline`() = runTest(dispatcher) {
+        val existing = task("a")
+        coEvery {
+            taskRepo.updateTask(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+        } returns EasResult.Success(existing)
+        // id — литералом: обращение к другому моку внутри coEvery MockK записал бы в цепочку
+        coEvery { taskRepo.hasPendingChange("a") } returns true
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.saveTask(existing, "S2", "B", 0, 0, 1, false, 0, null)
+        advanceUntilIdle()
+
+        assertThat(events).contains(TasksEvent.SavedOffline)
+        assertThat(events).doesNotContain(TasksEvent.TaskUpdated)
+    }
+
+    @Test
+    fun `toggleComplete and trash kept without a connection emit SavedOffline`() = runTest(dispatcher) {
+        val target = task("a")
+        coEvery { taskRepo.toggleTaskComplete(target) } returns EasResult.Success(task("a", complete = true))
+        coEvery { taskRepo.deleteTask(target) } returns EasResult.Success(true)
+        coEvery { taskRepo.hasPendingChange("a") } returns true
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.toggleComplete(target)
+        vm.deleteToTrash(target)
+        advanceUntilIdle()
+
+        assertThat(events.count { it == TasksEvent.SavedOffline }).isEqualTo(2)
+        assertThat(events.none { it is TasksEvent.CompleteToggled || it is TasksEvent.MovedToTrash }).isTrue()
+    }
+
+    @Test
     fun `saveTask guards against double-tap`() = runTest(dispatcher) {
         coEvery {
             taskRepo.createTask(any(), any(), any(), any(), any(), any(), any(), any(), any())

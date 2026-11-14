@@ -69,6 +69,8 @@ sealed interface TasksEvent {
     data object TaskUpdated : TasksEvent
     data class MovedToTrash(val count: Int) : TasksEvent
     data class CompleteToggled(val completed: Boolean) : TasksEvent
+    /** Правка (изменение, «выполнено», корзина) сохранена без связи и ждёт отправки; диалог правки закрывается. */
+    data object SavedOffline : TasksEvent
     data class Error(val message: String) : TasksEvent
 }
 
@@ -310,9 +312,11 @@ class TasksViewModel(
                         )
                     }
                 }
-                when (result) {
-                    is EasResult.Success -> sendEvent(if (existing != null) TasksEvent.TaskUpdated else TasksEvent.TaskCreated)
-                    is EasResult.Error -> sendEvent(TasksEvent.Error(result.message))
+                when {
+                    result is EasResult.Error -> sendEvent(TasksEvent.Error(result.message))
+                    existing == null -> sendEvent(TasksEvent.TaskCreated)
+                    isQueued(existing) -> sendEvent(TasksEvent.SavedOffline)
+                    else -> sendEvent(TasksEvent.TaskUpdated)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -329,7 +333,9 @@ class TasksViewModel(
         viewModelScope.launch {
             try {
                 when (val result = withContext(ioDispatcher) { taskRepo.toggleTaskComplete(task) }) {
-                    is EasResult.Success -> sendEvent(TasksEvent.CompleteToggled(result.data.complete))
+                    is EasResult.Success -> sendEvent(
+                        if (isQueued(task)) TasksEvent.SavedOffline else TasksEvent.CompleteToggled(result.data.complete)
+                    )
                     is EasResult.Error -> sendEvent(TasksEvent.Error(result.message))
                 }
             } catch (e: CancellationException) {
@@ -347,7 +353,7 @@ class TasksViewModel(
         viewModelScope.launch {
             try {
                 when (val result = withContext(ioDispatcher) { taskRepo.deleteTask(task) }) {
-                    is EasResult.Success -> sendEvent(TasksEvent.MovedToTrash(1))
+                    is EasResult.Success -> sendEvent(if (isQueued(task)) TasksEvent.SavedOffline else TasksEvent.MovedToTrash(1))
                     is EasResult.Error -> sendEvent(TasksEvent.Error(result.message))
                 }
             } catch (e: CancellationException) {
@@ -367,14 +373,18 @@ class TasksViewModel(
         removeFromSelection(tasks.map { it.id }.toSet())
         viewModelScope.launch {
             try {
+                var queued = false
                 val deleted = withContext(ioDispatcher) {
                     var count = 0
                     for (task in tasks) {
-                        if (taskRepo.deleteTask(task) is EasResult.Success) count++
+                        if (taskRepo.deleteTask(task) is EasResult.Success) {
+                            count++
+                            if (!queued && taskRepo.hasPendingChange(task.id)) queued = true
+                        }
                     }
                     count
                 }
-                if (deleted > 0) sendEvent(TasksEvent.MovedToTrash(deleted))
+                if (deleted > 0) sendEvent(if (queued) TasksEvent.SavedOffline else TasksEvent.MovedToTrash(deleted))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -428,6 +438,9 @@ class TasksViewModel(
     private fun sendEvent(event: TasksEvent) {
         viewModelScope.launch { _events.send(event) }
     }
+
+    /** Правка задачи сохранена без связи и ждёт отправки на сервер. */
+    private suspend fun isQueued(task: TaskEntity): Boolean = withContext(ioDispatcher) { taskRepo.hasPendingChange(task.id) }
 
     companion object {
         fun provideFactory(

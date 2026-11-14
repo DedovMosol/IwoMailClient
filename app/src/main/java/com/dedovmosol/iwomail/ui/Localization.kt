@@ -873,6 +873,8 @@ object Strings {
     val priorityHigh: String @Composable get() = if (isRussian()) "Выс." else "High"
     val taskCreated: String @Composable get() = if (isRussian()) "Задача создана" else "Task created"
     val taskUpdated: String @Composable get() = if (isRussian()) "Задача обновлена" else "Task updated"
+    /** Правка задачи или заметки без связи: сохранена на устройстве, на сервер уйдёт позже. */
+    val savedOffline: String @Composable get() = if (isRussian()) "Сохранено на устройстве. Отправится на сервер, когда появится связь" else "Saved on the device. It will be sent to the server when the connection is back"
     val taskDeleted: String @Composable get() = if (isRussian()) "Задача удалена" else "Task deleted"
     val taskCompleted: String @Composable get() = if (isRussian()) "Задача выполнена" else "Task completed"
     val taskNotCompleted: String @Composable get() = if (isRussian()) "Задача не выполнена" else "Task not completed"
@@ -1838,6 +1840,9 @@ object NotificationStrings {
             errorCode == "Письма не найдены" -> if (isRussian) errorCode else "No emails found"
             errorCode == com.dedovmosol.iwomail.data.repository.RepositoryErrors.FLAG_REJECTED ->
                 if (isRussian) "Сервер не принял флаг — оставлено как на сервере" else "The server did not accept the flag — kept as on the server"
+            errorCode == com.dedovmosol.iwomail.data.repository.RepositoryErrors.PENDING_CHANGES_NOT_SENT ->
+                if (isRussian) "Изменения, сделанные без связи, ещё не отправлены на сервер. Повторите, когда появится связь"
+                else "Changes made offline have not been sent to the server yet. Try again when the connection is back"
             errorCode == "Не удалось получить SyncKey" -> if (isRussian) errorCode else "Failed to obtain SyncKey"
             errorCode == "Не удалось получить ChangeKey" -> if (isRussian) errorCode else "Failed to obtain ChangeKey"
             errorCode == "Не удалось создать клиент" -> if (isRussian) errorCode else "Failed to create client"
