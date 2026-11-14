@@ -52,6 +52,7 @@ class FlagReminderReceiver : BroadcastReceiver() {
         val open = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(MainActivity.EXTRA_OPEN_EMAIL_ID, row.id)
+            putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, row.accountId)
         }
         val contentIntent = PendingIntent.getActivity(
             context, requestCode(row.id), open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
