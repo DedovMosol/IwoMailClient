@@ -194,6 +194,26 @@ class NotesViewModelTest {
     }
 
     @Test
+    fun `saveNote and trash kept without a connection emit SavedOffline`() = runTest(dispatcher) {
+        val existing = note("a")
+        coEvery { noteRepo.updateNote(existing, "s", "b") } returns EasResult.Success(existing)
+        coEvery { noteRepo.deleteNote(existing) } returns EasResult.Success(true)
+        // id — литералом: обращение к другому моку внутри coEvery MockK записал бы в цепочку
+        coEvery { noteRepo.hasPendingChange("a") } returns true
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.saveNote(existing, "s", "b")
+        advanceUntilIdle()
+        vm.deleteNoteToTrash(existing)
+        advanceUntilIdle()
+
+        assertThat(events.count { it == NotesEvent.SavedOffline }).isEqualTo(2)
+        assertThat(events.none { it == NotesEvent.NoteUpdated || it is NotesEvent.MovedToTrash }).isTrue()
+    }
+
+    @Test
     fun `saveNote guards against double-tap`() = runTest(dispatcher) {
         coEvery { noteRepo.createNote(ACCOUNT_ID, "s", "b") } returns EasResult.Success(note("new"))
         val vm = createViewModel()

@@ -61,6 +61,8 @@ sealed interface NotesEvent {
     data class MovedToTrash(val count: Int) : NotesEvent
     data object NoteCreated : NotesEvent
     data object NoteUpdated : NotesEvent
+    /** Правка (изменение, корзина) сохранена без связи и ждёт отправки; диалог правки закрывается. */
+    data object SavedOffline : NotesEvent
     data object ScrollToTop : NotesEvent
     data class Error(val message: String) : NotesEvent
 }
@@ -239,12 +241,14 @@ class NotesViewModel(
                     if (existing != null) noteRepo.updateNote(existing, subject, body)
                     else noteRepo.createNote(id, subject, body)
                 }
-                when (result) {
-                    is EasResult.Success -> {
-                        sendEvent(if (existing != null) NotesEvent.NoteUpdated else NotesEvent.NoteCreated)
-                        if (existing == null) sendEvent(NotesEvent.ScrollToTop)
+                when {
+                    result is EasResult.Error -> sendEvent(NotesEvent.Error(result.message))
+                    existing == null -> {
+                        sendEvent(NotesEvent.NoteCreated)
+                        sendEvent(NotesEvent.ScrollToTop)
                     }
-                    is EasResult.Error -> sendEvent(NotesEvent.Error(result.message))
+                    isQueued(existing.id) -> sendEvent(NotesEvent.SavedOffline)
+                    else -> sendEvent(NotesEvent.NoteUpdated)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -262,7 +266,7 @@ class NotesViewModel(
         viewModelScope.launch {
             try {
                 when (val result = withContext(ioDispatcher) { noteRepo.deleteNote(note) }) {
-                    is EasResult.Success -> sendEvent(NotesEvent.MovedToTrash(1))
+                    is EasResult.Success -> sendEvent(if (isQueued(note.id)) NotesEvent.SavedOffline else NotesEvent.MovedToTrash(1))
                     is EasResult.Error -> sendEvent(NotesEvent.Error(result.message))
                 }
             } catch (e: CancellationException) {
@@ -285,7 +289,9 @@ class NotesViewModel(
             try {
                 val result = withContext(ioDispatcher) { noteRepo.deleteNotes(toDelete) }
                 when (result) {
-                    is EasResult.Success -> sendEvent(NotesEvent.MovedToTrash(toDelete.size))
+                    is EasResult.Success -> sendEvent(
+                        if (toDelete.any { isQueued(it.id) }) NotesEvent.SavedOffline else NotesEvent.MovedToTrash(toDelete.size)
+                    )
                     is EasResult.Error -> sendEvent(NotesEvent.Error(result.message))
                 }
             } catch (e: CancellationException) {
@@ -330,6 +336,9 @@ class NotesViewModel(
     /** Локальный сброс заметок + полный ресинк с сервера (чистит «зависшие» локальные записи). */
     suspend fun resetAndResync(): EasResult<Int> =
         withContext(ioDispatcher) { noteRepo.resetAndResync(_uiState.value.accountId) }
+
+    /** Правка заметки сохранена без связи и ждёт отправки на сервер. */
+    private suspend fun isQueued(noteId: String): Boolean = withContext(ioDispatcher) { noteRepo.hasPendingChange(noteId) }
 
     private fun sendEvent(event: NotesEvent) {
         viewModelScope.launch { _events.send(event) }

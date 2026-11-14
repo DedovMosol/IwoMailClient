@@ -17,16 +17,24 @@ import kotlinx.coroutines.withContext
 class TaskRepository internal constructor(
     private val context: Context,
     private val database: MailDatabase,
-    private val accountRepo: AccountRepository
+    private val accountRepo: AccountRepository,
+    private val offline: OfflineWrites = OfflineWrites.ALWAYS_ONLINE
 ) {
 
     constructor(context: Context) : this(
         context,
         MailDatabase.getInstance(context),
-        RepositoryProvider.getAccountRepository(context)
+        RepositoryProvider.getAccountRepository(context),
+        OfflineWrites.of(context)
     )
     
     private val taskDao = database.taskDao()
+
+    /** Правки задач без связи, ждущие отправки ([PendingPimChangeEntity]). */
+    private val pendingDao = database.pendingPimChangeDao()
+
+    /** Правка задачи ждёт отправки на сервер (сделана без связи). */
+    suspend fun hasPendingChange(taskId: String): Boolean = pendingDao.get(taskId) != null
     private val consecutiveEmptySyncs = java.util.concurrent.ConcurrentHashMap<Long, Int>()
     
     companion object {
@@ -198,6 +206,29 @@ class TaskRepository internal constructor(
     ): EasResult<TaskEntity> {
         return accountRepo.withEasClient(task.accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
+                val now = System.currentTimeMillis()
+                val updatedTask = task.copy(
+                    subject = subject,
+                    body = body,
+                    startDate = startDate,
+                    dueDate = dueDate,
+                    complete = complete,
+                    dateCompleted = if (complete && task.dateCompleted == 0L) now else task.dateCompleted,
+                    importance = importance,
+                    reminderSet = reminderSet,
+                    reminderTime = reminderTime,
+                    lastModified = now,
+                    assignTo = assignTo?.trim() ?: task.assignTo
+                )
+                // Назначение — письмо исполнителю: без связи его не отправить, такая правка не откладывается.
+                val deferrable = assignTo.isNullOrBlank()
+                val serverSubject = oldSubject ?: task.subject
+                // Правка той же задачи уже ждёт отправки — новая встаёт за ней: прямой запрос мог бы обогнать
+                // очередь, и сервер получил бы старую версию последней.
+                if (deferrable && (offline.offline() || pendingDao.get(task.id) != null)) {
+                    return@withEasClient EasResult.Success(keepTaskUpdate(task, updatedTask, serverSubject))
+                }
+
                 val result = withEasRetry {
                     easClient.updateTask(
                         serverId = task.serverId,
@@ -209,34 +240,13 @@ class TaskRepository internal constructor(
                         importance = importance,
                         reminderSet = reminderSet,
                         reminderTime = reminderTime,
-                        oldSubject = oldSubject ?: task.subject
+                        oldSubject = serverSubject
                     )
                 }
                 
                 when (result) {
                     is EasResult.Success -> {
-                        val newLastModified = System.currentTimeMillis()
-                        val updatedTask = task.copy(
-                            subject = subject,
-                            body = body,
-                            startDate = startDate,
-                            dueDate = dueDate,
-                            complete = complete,
-                            dateCompleted = if (complete && task.dateCompleted == 0L) System.currentTimeMillis() else task.dateCompleted,
-                            importance = importance,
-                            reminderSet = reminderSet,
-                            reminderTime = reminderTime,
-                            lastModified = newLastModified,
-                            assignTo = assignTo?.trim() ?: task.assignTo
-                        )
-                        
-                        taskDao.update(updatedTask)
-                        
-                        // Перепланируем напоминание
-                        TaskReminderReceiver.cancelReminder(context, task.id)
-                        if (reminderSet && reminderTime > 0 && !complete) {
-                            TaskReminderReceiver.scheduleReminder(context, updatedTask)
-                        }
+                        saveTaskLocally(task, updatedTask)
                         
                         // NonCancellable: sync должен завершиться даже при повороте экрана
                         kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
@@ -261,9 +271,12 @@ class TaskRepository internal constructor(
                         
                         EasResult.Success(updatedTask)
                     }
-                    is EasResult.Error -> {
-                        result
-                    }
+                    is EasResult.Error ->
+                        if (deferrable && offline.canDefer(result.message)) {
+                            EasResult.Success(keepTaskUpdate(task, updatedTask, serverSubject))
+                        } else {
+                            result
+                        }
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -271,6 +284,98 @@ class TaskRepository internal constructor(
             }
         }
     }
+
+    /** Правка — в БД, напоминание — по новым данным. */
+    private suspend fun saveTaskLocally(task: TaskEntity, updatedTask: TaskEntity) {
+        taskDao.update(updatedTask)
+        TaskReminderReceiver.cancelReminder(context, task.id)
+        if (updatedTask.reminderSet && updatedTask.reminderTime > 0 && !updatedTask.complete) {
+            TaskReminderReceiver.scheduleReminder(context, updatedTask)
+        }
+    }
+
+    /** Правка без связи: на устройстве — сразу, на сервер — когда появится связь. */
+    private suspend fun keepTaskUpdate(task: TaskEntity, updatedTask: TaskEntity, serverSubject: String): TaskEntity {
+        saveTaskLocally(task, updatedTask)
+        pendingDao.markUpdate(task.id, task.accountId, PimKind.TASK, serverSubject)
+        offline.schedule()
+        return updatedTask
+    }
+
+    /** Перенос в корзину без связи: на устройстве — сразу, на сервер — когда появится связь. */
+    private suspend fun keepTaskTrash(task: TaskEntity) {
+        taskDao.softDelete(task.id)
+        TaskReminderReceiver.cancelReminder(context, task.id)
+        pendingDao.markTrash(task.id, task.accountId, PimKind.TASK, task.subject)
+        offline.schedule()
+    }
+
+    /**
+     * Отправка правки из очереди: текущее состояние задачи — тем же путём (EAS или EWS по версии Exchange), что и
+     * правка со связью. Сервер отказал — запись снимается, и синхронизация вернёт его версию; связи нет — остаётся.
+     */
+    internal suspend fun sendPendingTask(change: PendingPimChangeEntity, resync: Boolean = true): PimSendOutcome {
+        val task = taskDao.getTask(change.itemId) ?: run {
+            pendingDao.delete(change.itemId) // задачи уже нет (удалена на сервере) — отправлять нечего
+            return PimSendOutcome.DONE
+        }
+        if (offline.offline()) return PimSendOutcome.KEPT
+        val client = accountRepo.createEasClient(task.accountId) ?: return PimSendOutcome.KEPT
+        if (change.pendingUpdate) {
+            val result = client.updateTask(
+                serverId = task.serverId,
+                subject = task.subject,
+                body = task.body,
+                startDate = task.startDate,
+                dueDate = task.dueDate,
+                complete = task.complete,
+                importance = task.importance,
+                reminderSet = task.reminderSet,
+                reminderTime = task.reminderTime,
+                oldSubject = change.serverSubject.ifBlank { null }
+            )
+            if (result is EasResult.Error) {
+                if (offline.canDefer(result.message)) return PimSendOutcome.KEPT
+                android.util.Log.w("TaskRepository", "Pending task update rejected: ${result.message}")
+            }
+            pendingDao.clearUpdate(task.id, change.version)
+        }
+        if (change.pendingTrash) {
+            val first = client.deleteTask(task.serverId)
+            val result = if (first is EasResult.Error && !offline.canDefer(first.message)) {
+                // Exchange 2007: после UpdateItem у задачи мог смениться ServerId — как и без очереди (deleteTask),
+                // синхронизация и поиск по теме и сроку
+                syncTasks(task.accountId, skipRecentDeleteCheck = true)
+                val fresh = taskDao.getTasksByAccountList(task.accountId)
+                    .find { it.id != task.id && it.subject == task.subject && it.dueDate == task.dueDate }
+                if (fresh != null) client.deleteTask(fresh.serverId) else first
+            } else {
+                first
+            }
+            if (result is EasResult.Error) {
+                if (offline.canDefer(result.message)) return PimSendOutcome.KEPT
+                android.util.Log.w("TaskRepository", "Pending task trash rejected: ${result.message}")
+            }
+            pendingDao.clearTrash(task.id, change.version)
+        }
+        // Exchange 2007 после UpdateItem может выдать задаче новый ServerId: синхронизация находит её по теме в окне
+        // свежей правки, поэтому время правки — сейчас. Только это поле: правку, сделанную во время отправки, не трогаем.
+        taskDao.touch(task.id, System.currentTimeMillis())
+        if (resync) syncTasks(task.accountId, skipRecentDeleteCheck = true)
+        return PimSendOutcome.DONE
+    }
+
+    /** Синхронизация после отправки очереди: один раз на аккаунт, а не на каждую задачу. */
+    internal suspend fun syncAfterPendingSent(accountId: Long) {
+        syncTasks(accountId, skipRecentDeleteCheck = true)
+    }
+
+    /** Отправить правки задач аккаунта, ждущие отправки. true — не осталось ни одной. */
+    private suspend fun flushPending(accountId: Long): Boolean = PendingPimChanges(
+        pendingDao,
+        send = { sendPendingTask(it, resync = false) },
+        afterSent = { account, _ -> syncAfterPendingSent(account) }
+    ).flush(accountId, PimKind.TASK)
     
     /**
      * Отметить задачу как выполненную/невыполненную
@@ -295,10 +400,19 @@ class TaskRepository internal constructor(
     suspend fun deleteTask(task: TaskEntity): EasResult<Boolean> {
         return accountRepo.withEasClient(task.accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
+                // Без связи или за правкой, ждущей отправки, — в очередь (порядок правок на сервере сохраняется)
+                if (offline.offline() || pendingDao.get(task.id) != null) {
+                    keepTaskTrash(task)
+                    return@withEasClient EasResult.Success(true)
+                }
                 var actualTask: TaskEntity? = task
                 var actualServerId = task.serverId
                 
                 var result = withEasRetry { easClient.deleteTask(actualServerId) }
+                if (result is EasResult.Error && offline.canDefer(result.message)) {
+                    keepTaskTrash(task)
+                    return@withEasClient EasResult.Success(true)
+                }
                 
                 if (result is EasResult.Error) {
                     syncTasks(task.accountId, skipRecentDeleteCheck = true)
@@ -344,6 +458,14 @@ class TaskRepository internal constructor(
      * Перемещает задачу из Deleted Items обратно в Tasks на сервере
      */
     suspend fun restoreTask(task: TaskEntity): EasResult<Boolean> {
+        // Перенос в корзину ещё не отправлен — на сервере задача не в корзине: восстанавливаем только на устройстве
+        if (pendingDao.cancelTrash(task.id)) {
+            taskDao.restore(task.id)
+            if (task.reminderSet && task.reminderTime > System.currentTimeMillis() && !task.complete) {
+                TaskReminderReceiver.scheduleReminder(context, task.copy(isDeleted = false))
+            }
+            return EasResult.Success(true)
+        }
         return accountRepo.withEasClient(task.accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
                 // КРИТИЧНО: Восстанавливаем на сервере (MoveItem из Deleted Items в Tasks)
@@ -399,21 +521,32 @@ class TaskRepository internal constructor(
     suspend fun deleteTaskPermanently(task: TaskEntity): EasResult<Boolean> {
         return accountRepo.withEasClient(task.accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
+                // Перенос в корзину ещё не на сервере: EAS ищет копию в Deleted Items, а её там нет — задача осталась бы
+                // на сервере и вернулась синхронизацией. Сначала — очередь.
+                // После переноса синхронизация могла пересоздать запись с новым ServerId — задача находится заново.
+                val target = pendingDao.get(task.id)?.let { change ->
+                    sendPendingTask(change)
+                    if (pendingDao.get(task.id) != null) {
+                        return@withEasClient EasResult.Error(RepositoryErrors.PENDING_CHANGES_NOT_SENT)
+                    }
+                    taskDao.getTask(task.id) ?: taskDao.getDeletedTasksList(task.accountId)
+                        .find { it.subject == task.subject && it.dueDate == task.dueDate }
+                } ?: task
                 // Окончательно удаляем на сервере (HardDelete). Тема нужна EAS-синку: копию в
                 // Deleted Items адресует только поиск по теме (см. EasTasksService).
-                val result = withEasRetry { easClient.deleteTaskPermanently(task.serverId, task.subject) }
+                val result = withEasRetry { easClient.deleteTaskPermanently(target.serverId, target.subject) }
                 
                 when (result) {
                     is EasResult.Success -> {
                         // Удаляем локально
-                        taskDao.delete(task.id)
+                        taskDao.delete(target.id)
                         EasResult.Success(true)
                     }
                     is EasResult.Error -> {
                         // Если на сервере уже нет — удаляем локально
                         if (result.message.contains("not found", ignoreCase = true) ||
                             result.message.contains("ErrorItemNotFound", ignoreCase = true)) {
-                            taskDao.delete(task.id)
+                            taskDao.delete(target.id)
                             EasResult.Success(true)
                         } else {
                             result
@@ -433,6 +566,10 @@ class TaskRepository internal constructor(
     suspend fun emptyTasksTrash(accountId: Long): EasResult<Int> {
         return accountRepo.withEasClient(accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
+                // Корзина, ещё не отправленная на сервер, — сначала очередь (см. deleteTaskPermanently)
+                if (!flushPending(accountId)) {
+                    return@withEasClient EasResult.Error(RepositoryErrors.PENDING_CHANGES_NOT_SENT)
+                }
                 val deletedTasks = taskDao.getDeletedTasksList(accountId)
                 if (deletedTasks.isEmpty()) {
                     return@withEasClient EasResult.Success(0)
@@ -499,6 +636,8 @@ class TaskRepository internal constructor(
      * поэтому wipe — в отдельной критической секции, затем ресинк.
      */
     suspend fun resetAndResync(accountId: Long): EasResult<Int> {
+        // Сброс стёр бы правки, сделанные без связи и ещё не отправленные: сначала — очередь
+        if (!flushPending(accountId)) return EasResult.Error(RepositoryErrors.PENDING_CHANGES_NOT_SENT)
         getSyncMutex(accountId).withLock {
             withContext(Dispatchers.IO) {
                 val tasks = taskDao.getTasksByAccountList(accountId)
@@ -606,6 +745,10 @@ class TaskRepository internal constructor(
                         // КРИТИЧНО: Фильтруем дубликаты по serverId (защита от повторной вставки)
                         val uniqueTasks = serverTasks.distinctBy { it.serverId }
                         
+                        // Правки без связи, ещё не отправленные: сервер их не видел, его версия старше — не перетираем
+                        // (и не возвращаем из корзины). Удаление на сервере (диф выше) по-прежнему сильнее.
+                        val pendingIds = pendingDao.getItemIds(accountId, PimKind.TASK).toHashSet()
+
                         // Создаём map для сохранения данных о существующих задачах
                         val existingTasksMap = currentExistingTasks.associateBy { it.serverId }
                         
@@ -629,7 +772,7 @@ class TaskRepository internal constructor(
                             // ищем по subject (serverId мог измениться после UpdateItem)
                             if (existingTask == null && skipRecentDeleteCheck) {
                                 val taskBySubject = existingTasksBySubject[task.subject.lowercase()]
-                                if (taskBySubject != null) {
+                                if (taskBySubject != null && taskBySubject.id !in pendingIds) {
                                     val timeSinceEdit = syncTime - taskBySubject.lastModified
                                     if (timeSinceEdit < RECENT_EDIT_THRESHOLD) {
                                         // Помечаем старую запись на удаление
@@ -639,6 +782,8 @@ class TaskRepository internal constructor(
                                 }
                             }
                             
+                            if (existingTask != null && existingTask.id in pendingIds) return@mapNotNull null
+
                             // Защита от race condition - НЕ перезаписываем свежие локальные изменения
                             if (existingTask != null) {
                                 val timeSinceLocalEdit = syncTime - existingTask.lastModified

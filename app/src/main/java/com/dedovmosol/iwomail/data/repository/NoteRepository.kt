@@ -14,15 +14,124 @@ import kotlinx.coroutines.withContext
  */
 class NoteRepository internal constructor(
     database: MailDatabase,
-    private val accountRepo: AccountRepository
+    private val accountRepo: AccountRepository,
+    private val offline: OfflineWrites = OfflineWrites.ALWAYS_ONLINE
 ) {
 
     constructor(context: Context) : this(
         MailDatabase.getInstance(context),
-        RepositoryProvider.getAccountRepository(context)
+        RepositoryProvider.getAccountRepository(context),
+        OfflineWrites.of(context)
     )
 
     private val noteDao = database.noteDao()
+
+    /** Правки заметок без связи, ждущие отправки ([PendingPimChangeEntity]). */
+    private val pendingDao = database.pendingPimChangeDao()
+
+    /** Правка заметки ждёт отправки на сервер (сделана без связи). */
+    suspend fun hasPendingChange(noteId: String): Boolean = pendingDao.get(noteId) != null
+
+    /** Правка без связи: на устройстве — сразу, на сервер — когда появится связь. */
+    private suspend fun keepNoteUpdate(note: NoteEntity, updatedNote: NoteEntity): NoteEntity {
+        noteDao.update(updatedNote)
+        pendingDao.markUpdate(note.id, note.accountId, PimKind.NOTE, note.subject)
+        offline.schedule()
+        return updatedNote
+    }
+
+    /** Перенос в корзину без связи: на устройстве — сразу, на сервер — когда появится связь. */
+    private suspend fun keepNoteTrash(note: NoteEntity) {
+        markNoteAsDeleted(note.id)
+        pendingDao.markTrash(note.id, note.accountId, PimKind.NOTE, note.subject)
+        offline.schedule()
+    }
+
+    /** Без связи или за правкой этой заметки, ждущей отправки, — в очередь: порядок правок на сервере сохраняется. */
+    private suspend fun mustQueue(noteId: String): Boolean = offline.offline() || pendingDao.get(noteId) != null
+
+    /**
+     * Перенос в корзину ещё не отправлен — на сервере заметка не в корзине: восстанавливаем только на устройстве.
+     * @return true — восстановлено так.
+     */
+    private suspend fun restoreUnsentTrash(note: NoteEntity): Boolean {
+        if (!pendingDao.cancelTrash(note.id)) return false
+        noteDao.restore(note.id)
+        return true
+    }
+
+    /**
+     * Отправка правки из очереди: текущее состояние заметки — тем же путём (EAS 14+ или EWS на Exchange 2007), что и
+     * правка со связью. Сервер отказал — запись снимается, и синхронизация вернёт его версию; связи нет — остаётся.
+     */
+    internal suspend fun sendPendingNote(change: PendingPimChangeEntity, resync: Boolean = true): PimSendOutcome {
+        val note = noteDao.getNote(change.itemId) ?: run {
+            pendingDao.delete(change.itemId) // заметки уже нет (удалена на сервере) — отправлять нечего
+            return PimSendOutcome.DONE
+        }
+        if (offline.offline()) return PimSendOutcome.KEPT
+        val client = accountRepo.createEasClient(note.accountId) ?: return PimSendOutcome.KEPT
+        if (change.pendingUpdate) {
+            val result = client.updateNote(note.serverId, note.subject, note.body)
+            if (result is EasResult.Error) {
+                if (offline.canDefer(result.message)) return PimSendOutcome.KEPT
+                android.util.Log.w("NoteRepository", "Pending note update rejected: ${result.message}")
+            }
+            pendingDao.clearUpdate(note.id, change.version)
+        }
+        if (change.pendingTrash) {
+            val first = client.deleteNote(note.serverId)
+            val result = if (first is EasResult.Error && !offline.canDefer(first.message)) {
+                // Сервер мог выдать заметке новый ServerId (UpdateItem на Exchange 2007) — как и без очереди
+                // (deleteNote), синхронизация и поиск по содержимому среди активных
+                syncNotes(note.accountId, skipRecentDeleteCheck = true)
+                val fresh = noteDao.getAllNotesByAccountList(note.accountId)
+                    .find { it.id != note.id && !it.isDeleted && noteContentMatches(it.subject, it.body, note.subject, note.body) }
+                if (fresh != null) client.deleteNote(fresh.serverId) else first
+            } else {
+                first
+            }
+            if (result is EasResult.Error) {
+                if (offline.canDefer(result.message)) return PimSendOutcome.KEPT
+                android.util.Log.w("NoteRepository", "Pending note trash rejected: ${result.message}")
+            }
+            pendingDao.clearTrash(note.id, change.version)
+        }
+        // Сервер мог выдать заметке новый ServerId (перенос в Deleted Items, UpdateItem на Exchange 2007):
+        // синхронизация сопоставит её с локальной записью.
+        if (resync) syncNotes(note.accountId, skipRecentDeleteCheck = true)
+        return PimSendOutcome.DONE
+    }
+
+    /** Синхронизация после отправки очереди: один раз на аккаунт, а не на каждую заметку. */
+    internal suspend fun syncAfterPendingSent(accountId: Long) {
+        syncNotes(accountId, skipRecentDeleteCheck = true)
+    }
+
+    /** Отправить правки заметок аккаунта, ждущие отправки. true — не осталось ни одной. */
+    private suspend fun flushPending(accountId: Long): Boolean = PendingPimChanges(
+        pendingDao,
+        send = { sendPendingNote(it, resync = false) },
+        afterSent = { account, _ -> syncAfterPendingSent(account) }
+    ).flush(accountId, PimKind.NOTE)
+
+    /**
+     * Перед окончательным удалением: перенос в корзину, ещё не отправленный, — сначала на сервер. Иначе удаление по
+     * ServerId корзины не нашло бы заметку (она ещё в «Заметках»), и синхронизация вернула бы её.
+     *
+     * После переноса сервер выдаёт заметке новый ServerId, и синхронизация пересоздаёт запись с новым id — заметки
+     * находятся заново: по id, иначе по содержимому среди удалённых (как в [deleteNote]).
+     * @return заметки с актуальными ServerId; null — связи нет, отправить не удалось.
+     */
+    private suspend fun sendTrashFirst(accountId: Long, notes: List<NoteEntity>): List<NoteEntity>? {
+        if (notes.none { pendingDao.get(it.id) != null }) return notes
+        if (!flushPending(accountId)) return null
+        val current = noteDao.getAllNotesByAccountList(accountId)
+        return notes.mapNotNull { note ->
+            current.find { it.id == note.id }
+                ?: current.find { it.isDeleted && noteContentMatches(it.subject, it.body, note.subject, note.body) }
+        }
+    }
 
     companion object {
         private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
@@ -94,6 +203,7 @@ class NoteRepository internal constructor(
     }
 
     suspend fun restoreNote(note: NoteEntity): EasResult<Boolean> {
+        if (restoreUnsentTrash(note)) return EasResult.Success(true)
         return accountRepo.withEasClient(note.accountId, RepositoryErrors.NOTES_EXCHANGE_ONLY) { easClient ->
             try {
                 android.util.Log.d("NotesDebug", "=== RESTORE NOTE START: subject='${note.subject.take(30)}', serverId=${note.serverId}")
@@ -173,11 +283,21 @@ class NoteRepository internal constructor(
     ): EasResult<Int> {
         if (serverIds.isEmpty()) return EasResult.Success(0)
         return accountRepo.withEasClient(accountId, RepositoryErrors.NOTES_EXCHANGE_ONLY) { easClient ->
+            // Корзина, ещё не отправленная на сервер, — сначала очередь; ServerId после неё другие — корзина
+            // перечитывается (очищается вся корзина, как и просили).
+            val targetIds = if (pendingDao.getItemIds(accountId, PimKind.NOTE).isEmpty()) {
+                serverIds
+            } else {
+                if (!flushPending(accountId)) {
+                    return@withEasClient EasResult.Error(RepositoryErrors.PENDING_CHANGES_NOT_SENT)
+                }
+                noteDao.getDeletedNotesByAccountList(accountId).map { it.serverId }
+            }
             var deletedCount = 0
             var failedCount = 0
-            val total = serverIds.size
+            val total = targetIds.size
 
-            for (serverId in serverIds) {
+            for (serverId in targetIds) {
                 val result = easClient.deleteNotePermanently(serverId)
                 when (result) {
                     is EasResult.Success -> {
@@ -297,17 +417,16 @@ class NoteRepository internal constructor(
     ): EasResult<NoteEntity> {
         return accountRepo.withEasClient(note.accountId, RepositoryErrors.NOTES_EXCHANGE_ONLY) { easClient ->
             try {
+                val updatedNote = note.copy(subject = subject, body = body, lastModified = System.currentTimeMillis())
+                if (mustQueue(note.id)) return@withEasClient EasResult.Success(keepNoteUpdate(note, updatedNote))
+
                 val result = withEasRetry { easClient.updateNote(note.serverId, subject, body) }
+                if (result is EasResult.Error && offline.canDefer(result.message)) {
+                    return@withEasClient EasResult.Success(keepNoteUpdate(note, updatedNote))
+                }
 
                 when (result) {
                     is EasResult.Success -> {
-                        val newLastModified = System.currentTimeMillis()
-                        val updatedNote = note.copy(
-                            subject = subject,
-                            body = body,
-                            lastModified = newLastModified
-                        )
-
                         noteDao.update(updatedNote)
 
                         // КРИТИЧНО: Синхронизируем заметки для получения актуального serverId с сервера
@@ -335,8 +454,16 @@ class NoteRepository internal constructor(
     suspend fun deleteNote(note: NoteEntity): EasResult<Boolean> {
         return accountRepo.withEasClient(note.accountId, RepositoryErrors.NOTES_EXCHANGE_ONLY) { easClient ->
             try {
+                if (mustQueue(note.id)) {
+                    keepNoteTrash(note)
+                    return@withEasClient EasResult.Success(true)
+                }
                 var updatedNote = note
                 var result = easClient.deleteNote(note.serverId)
+                if (result is EasResult.Error && offline.canDefer(result.message)) {
+                    keepNoteTrash(note)
+                    return@withEasClient EasResult.Success(true)
+                }
 
                 if (result is EasResult.Error) {
                     val syncResult = syncNotes(note.accountId, skipRecentDeleteCheck = true)
@@ -412,11 +539,13 @@ class NoteRepository internal constructor(
     suspend fun deleteNotePermanently(note: NoteEntity): EasResult<Boolean> {
         return accountRepo.withEasClient(note.accountId, RepositoryErrors.NOTES_EXCHANGE_ONLY) { easClient ->
             try {
-                val result = withEasRetry { easClient.deleteNotePermanently(note.serverId) }
+                val target = sendTrashFirst(note.accountId, listOf(note))?.singleOrNull()
+                    ?: return@withEasClient EasResult.Error(RepositoryErrors.PENDING_CHANGES_NOT_SENT)
+                val result = withEasRetry { easClient.deleteNotePermanently(target.serverId) }
 
                 when (result) {
                     is EasResult.Success -> {
-                        noteDao.delete(note.id)
+                        noteDao.delete(target.id)
                         EasResult.Success(true)
                     }
                     is EasResult.Error -> result
@@ -469,27 +598,44 @@ class NoteRepository internal constructor(
                     continue
                 }
 
-                val batchResult = easClient.deleteNotesBatch(accountNotes.map { it.serverId })
+                // Без связи или за правками, ждущими отправки, — в очередь (порядок правок на сервере сохраняется)
+                val isOffline = offline.offline()
+                val (queued, toSend) = accountNotes.partition { isOffline || pendingDao.get(it.id) != null }
+                for (note in queued) keepNoteTrash(note)
+                totalDeleted += queued.size
+                onProgress(totalDeleted, total)
+                if (toSend.isEmpty()) continue
+
+                val batchResult = easClient.deleteNotesBatch(toSend.map { it.serverId })
                 val batchOk = batchResult is EasResult.Success && batchResult.data > 0
 
                 if (batchOk) {
-                    for (note in accountNotes) {
+                    for (note in toSend) {
                         markNoteAsDeleted(note.id)
                     }
                     totalDeleted += (batchResult as EasResult.Success).data
                     onProgress(totalDeleted, total)
+                } else if (batchResult is EasResult.Error && offline.canDefer(batchResult.message)) {
+                    for (note in toSend) keepNoteTrash(note)
+                    totalDeleted += toSend.size
+                    onProgress(totalDeleted, total)
+                    continue
                 } else {
                     val errMsg = (batchResult as? EasResult.Error)?.message ?: "batch returned 0"
                     android.util.Log.w("NotesDebug",
                         "deleteNotesWithProgress: batch failed ($errMsg), falling back to sequential")
-                    for (note in accountNotes) {
+                    for (note in toSend) {
                         val result = easClient.deleteNote(note.serverId)
-                        when (result) {
-                            is EasResult.Success -> {
+                        when {
+                            result is EasResult.Success -> {
                                 markNoteAsDeleted(note.id)
                                 totalDeleted++
                             }
-                            is EasResult.Error -> totalFailed++
+                            result is EasResult.Error && offline.canDefer(result.message) -> {
+                                keepNoteTrash(note)
+                                totalDeleted++
+                            }
+                            else -> totalFailed++
                         }
                         onProgress(totalDeleted, total)
                     }
@@ -545,6 +691,11 @@ class NoteRepository internal constructor(
                 }
 
                 for (note in accountNotes) {
+                    if (restoreUnsentTrash(note)) {
+                        totalRestored++
+                        onProgress(totalRestored, total)
+                        continue
+                    }
                     android.util.Log.d("NotesDebug", "=== RESTORE (batch): subject='${note.subject.take(30)}', serverId=${note.serverId}, isDeleted=${note.isDeleted}")
                     val result = easClient.restoreNote(note.serverId)
                     when (result) {
@@ -626,11 +777,17 @@ class NoteRepository internal constructor(
                     continue
                 }
 
-                val batchResult = easClient.deleteNotesPermanentlyBatch(accountNotes.map { it.serverId })
+                val targets = sendTrashFirst(accountId, accountNotes)
+                if (targets == null) {
+                    totalFailed += accountNotes.size
+                    onProgress(totalDeleted, total)
+                    continue
+                }
+                val batchResult = easClient.deleteNotesPermanentlyBatch(targets.map { it.serverId })
                 val batchOk = batchResult is EasResult.Success && batchResult.data > 0
 
                 if (batchOk) {
-                    for (note in accountNotes) {
+                    for (note in targets) {
                         noteDao.delete(note.id)
                     }
                     totalDeleted += (batchResult as EasResult.Success).data
@@ -639,7 +796,7 @@ class NoteRepository internal constructor(
                     val errMsg = (batchResult as? EasResult.Error)?.message ?: "batch returned 0"
                     android.util.Log.w("NotesDebug",
                         "deleteNotesPermanentlyWithProgress: batch failed ($errMsg), falling back to sequential")
-                    for (note in accountNotes) {
+                    for (note in targets) {
                         val result = easClient.deleteNotePermanently(note.serverId)
                         when (result) {
                             is EasResult.Success -> {
@@ -674,6 +831,8 @@ class NoteRepository internal constructor(
      * sync-мьютекс (ожидает), поэтому wipe — в отдельной критической секции, затем ресинк.
      */
     suspend fun resetAndResync(accountId: Long): EasResult<Int> {
+        // Сброс стёр бы правки, сделанные без связи и ещё не отправленные: сначала — очередь
+        if (!flushPending(accountId)) return EasResult.Error(RepositoryErrors.PENDING_CHANGES_NOT_SENT)
         getSyncMutex(accountId).withLock {
             withContext(Dispatchers.IO) {
                 noteDao.deleteByAccount(accountId)
@@ -751,10 +910,15 @@ class NoteRepository internal constructor(
                         // Дубль = локальная копия с другим serverId (сервер сменил id при перемещении).
                         // Вывод «старого id больше нет» верен только при полном снимке: в неполном
                         // отсутствовать может и отдельная заметка с тем же текстом.
+                        // Правки без связи, ещё не отправленные: сервер их не видел — запись не перетираем, не считаем
+                        // дублем и не возвращаем из корзины. Удаление на сервере по-прежнему сильнее.
+                        val pendingIds = pendingDao.getItemIds(accountId, PimKind.NOTE).toHashSet()
+
                         val activeDuplicateIdsToDelete = mutableSetOf<String>()
                         if (snapshot.isActiveAuthoritative) {
                             for (note in activeServerNotes) {
                                 val duplicate = existingNotes.find {
+                                    it.id !in pendingIds &&
                                     it.serverId != note.serverId &&
                                         it.serverId !in unresolvedServerIds &&
                                         noteContentMatches(it.subject, it.body, note.subject, note.body)
@@ -777,6 +941,7 @@ class NoteRepository internal constructor(
                         // Phase 3: Map to entities
                         val activeNoteEntities = activeServerNotes.mapNotNull { note ->
                             val noteId = "${accountId}_${note.serverId}"
+                            if (noteId in pendingIds) return@mapNotNull null
                             val existingNote = freshExistingNotes.find { it.id == noteId }
 
                             if (existingNote != null) {
@@ -862,6 +1027,7 @@ class NoteRepository internal constructor(
                             )
                             val duplicate = freshNotesForDeletedPhase.find {
                                 it.isDeleted &&
+                                    it.id !in pendingIds &&
                                     it.serverId != note.serverId &&
                                     it.serverId !in deletedServerIds &&
                                     it.serverId !in unresolvedServerIds &&

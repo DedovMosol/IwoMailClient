@@ -23,7 +23,7 @@
 | AGP | `8.7.3` |
 | Build tooling | Gradle `8.12`, KSP `1.9.22-1.0.17`, Kover `0.7.6` |
 | UI | Jetpack Compose (BOM `2024.06.00`) + Material 3, Navigation Compose `2.7.6`, Coil `2.5.0` |
-| DB | Room `2.6.1`, `MailDatabase` version `50` (12 entities), schema export enabled (`app/schemas`) |
+| DB | Room `2.6.1`, `MailDatabase` version `51` (13 entities), schema export enabled (`app/schemas`) |
 | Network and background | OkHttp `4.12.0`, Conscrypt `2.5.2`, WorkManager `2.9.0`, DataStore `1.1.1`, Glance `1.1.1`, JavaMail (`android-mail`) `1.6.7` |
 | Security | `security-crypto` `1.1.0-alpha06` (EncryptedSharedPreferences), `biometric` `1.1.0` |
 | APK architectures | `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64` + universal APK |
@@ -163,7 +163,8 @@ com.dedovmosol.iwomail/
 │
 ├── data/
 │   ├── database/ — MailDatabase (Room, entities, migrations), DAOs (Daos.kt, *Dao.kt), EmailFlags.kt,
-│   │               PendingEmailChangeEntity.kt (offline email change queue), NotificationEmailSummary.kt
+│   │               PendingEmailChangeEntity.kt (offline email change queue), PendingPimChangeEntity.kt (offline task and
+│   │               note change queue), NotificationEmailSummary.kt
 │   ├── model/ — AccountServerHealth.kt (server health state)
 │   ├── security/ — PasswordStorage, EncryptedStoreProvider, AppLockManager, SecurityTelemetry
 │   └── repository/ — repositories, sync and operation services, RepositoryProvider, caches, helpers
@@ -192,7 +193,7 @@ com.dedovmosol.iwomail/
 
 ### Room
 
-`MailDatabase` contains 12 entity classes and 13 abstract DAO accessors (`accountDao`, `emailDao`, `folderDao`, `signatureDao`, `attachmentDao`, `contactDao`, `contactGroupDao`, `noteDao`, `calendarEventDao`, `taskDao`, `syncDao`, `categoryColorDao`, `pendingEmailChangeDao`):
+`MailDatabase` contains 13 entity classes and 14 abstract DAO accessors (`accountDao`, `emailDao`, `folderDao`, `signatureDao`, `attachmentDao`, `contactDao`, `contactGroupDao`, `noteDao`, `calendarEventDao`, `taskDao`, `syncDao`, `categoryColorDao`, `pendingEmailChangeDao`, `pendingPimChangeDao`):
 
 - **AccountEntity:** account type, URL and alternate URL, sync mode, certificate metadata (a separate pin for the alternate URL), draft mode, per-account sync and cleanup intervals.
 - **FolderEntity:** Exchange/IMAP/POP3 folders and the SyncKey of each folder.
@@ -204,9 +205,10 @@ com.dedovmosol.iwomail/
 - **CalendarEventEntity:** calendar events, meetings, recurrence fields, exceptions, attachments JSON, online links, meeting request IDs.
 - **TaskEntity:** task fields, deadlines, priority, reminders, owner/assignee, local trash flag.
 - **CategoryColorEntity** (`category_colors`, primary key `accountId` + `nameKey`): per-account Outlook category colors (`serverColor` from the Master Category List on Exchange 2010+, `userColor` set in the app).
+- **PendingPimChangeEntity** (`pending_pim_changes`, DB version 51): offline task and note changes — `pendingUpdate` and/or `pendingTrash`, `kind` (TASK/NOTE), `serverSubject`, `version`. The only foreign key is to `accounts` (cascade), for the same reason as the email queue.
 - **PendingEmailChangeEntity** (`pending_email_changes`, DB version 50): email changes made without a connection that the server has not accepted yet — `flag` and/or `read`. The value itself is not stored: the current one from `emails` is sent, so several offline edits go out as one result. There is deliberately no foreign key to `emails`: some paths rewrite messages with REPLACE (DELETE + INSERT), and a cascade would drop the pending edit. The foreign key to `accounts` uses CASCADE. `INSERT OR REPLACE … COALESCE` is used instead of UPSERT because SQLite on Android 8 is version 3.18 and has no UPSERT.
 
-The current DB version is **50**. The registered migrations cover `23→50` (`MailDatabase.ALL_MIGRATIONS`, 27 migrations, one per version). A missing upgrade migration recreates the DB only in **debug** builds (`fallbackToDestructiveMigration()` under `BuildConfig.DEBUG`); in release it fails explicitly when the DB is opened. A downgrade (installing an older APK) always recreates the DB (`fallbackToDestructiveMigrationOnDowngrade()`), and server data is resynced.
+The current DB version is **51**. The registered migrations cover `23→51` (`MailDatabase.ALL_MIGRATIONS`, 28 migrations, one per version). A missing upgrade migration recreates the DB only in **debug** builds (`fallbackToDestructiveMigration()` under `BuildConfig.DEBUG`); in release it fails explicitly when the DB is opened. A downgrade (installing an older APK) always recreates the DB (`fallbackToDestructiveMigrationOnDowngrade()`), and server data is resynced.
 
 Widget hot paths use dedicated lightweight projections instead of full entities:
 
@@ -353,6 +355,20 @@ The Drafts reconcile (`reconcileDraftsAfterFullResync`) keeps full `EmailEntity`
 6. Recurring series store attachment metadata on the master event or exception, and virtual occurrences reuse it instead of duplicating the data.
 7. Permanent calendar deletion requires server success first: local deletion and trash clearing happen only after a confirmed EAS/EWS delete.
 8. When an attendee deletes a meeting, `MeetingResponse` or EWS `DeclineItem` is sent before the delete so that the Calendar Repair Assistant does not bring the meeting back.
+
+#### Offline task and note changes (`pending_pim_changes`)
+
+An edit of a task (done, subject, dates) or note and a move to trash made without a connection are saved on the device and queued in `pending_pim_changes`; the same `PendingMailChangesWorker` sends them (one unique work, `NetworkType.CONNECTED`, exponential backoff).
+
+- **When to defer** (`OfflineWrites`): no network — the server is not contacted at all (no timeout, no wasted battery); the request did not get through — a connection-level `[NET:…]` tag, HTTP 5xx (`isConnectionLevelError`), or the network dropped during the request (the EWS path on Exchange 2007 returns an untagged error on a drop). A server rejection is an error, as before.
+- **No value is stored**: the current state of the task or note is sent, so several edits go out as one result. `serverSubject` is the subject before the first offline edit: EWS on Exchange 2007 finds a task by subject. `version` grows with each edit and the mark is cleared only for the same version, so an edit made during the send is not lost.
+- **Order**: an online edit behind a queued edit of the same item is queued too; otherwise the server would get the older version last.
+- **Protocol is chosen at send time**: the same `EasClient.updateTask`/`deleteTask`/`updateNote`/`deleteNote` as online (EAS 14+, EWS on Exchange 2007).
+- **Sync** does not overwrite an item with a pending edit, does not treat it as a duplicate and does not restore it from trash. A server-side delete still wins. After sending, one sync per account and kind, not per item: it picks up new ServerIds (move to Deleted Items, UpdateItem on Exchange 2007).
+- **Trash**: restoring before the send is device-only; the server is not touched. Permanent delete, empty trash and reset ("Reset and resync") send the queue first; without a connection they fail with `PENDING_CHANGES_NOT_SENT` and no data is lost.
+- Task assignment (an email to the assignee) is not deferred offline; it is an error.
+- UI: the `SavedOffline` event closes the dialog and shows "Saved on the device. It will be sent to the server when the connection is back".
+- Creating tasks and notes offline is not supported yet.
 
 ### Notifications
 

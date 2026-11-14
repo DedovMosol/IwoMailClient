@@ -138,6 +138,7 @@ fun TasksScreen(
     val tasksSyncedText = Strings.tasksSynced
     val taskCreatedText = Strings.taskCreated
     val taskUpdatedText = Strings.taskUpdated
+    val savedOfflineText = Strings.savedOffline
     val taskDeletedEventText = Strings.taskDeleted
     val taskCompletedEventText = Strings.taskCompleted
     val taskNotCompletedEventText = Strings.taskNotCompleted
@@ -154,6 +155,11 @@ fun TasksScreen(
                 }
                 TasksEvent.TaskUpdated -> {
                     SafeToast.short(context, taskUpdatedText)
+                    showCreateDialog = false
+                    editingTaskId = null
+                }
+                TasksEvent.SavedOffline -> {
+                    SafeToast.long(context, savedOfflineText)
                     showCreateDialog = false
                     editingTaskId = null
                 }

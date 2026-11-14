@@ -13,6 +13,8 @@ object RepositoryErrors {
     const val CLIENT_CREATE_FAILED = "Не удалось создать клиент"
     /** Exchange отклонил флаг письма (Sync Change Status ≠ 1): звезда вернулась к значению на сервере. */
     const val FLAG_REJECTED = "Сервер не принял флаг"
+    /** Правки без связи ещё не отправлены, а операции нужно, чтобы сервер их уже знал (корзина, сброс). */
+    const val PENDING_CHANGES_NOT_SENT = "Изменения, сделанные без связи, ещё не отправлены на сервер"
     
     // Exchange-only features
     const val TASKS_EXCHANGE_ONLY = "Задачи поддерживаются только для Exchange"

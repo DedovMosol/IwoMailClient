@@ -90,6 +90,7 @@ fun NotesScreen(
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
     val noteCreatedText = Strings.noteCreated
     val noteUpdatedText = Strings.noteUpdated
+    val savedOfflineText = Strings.savedOffline
     val noteRestoredText = Strings.noteRestored
     val notesRestoredText = Strings.notesRestored
 
@@ -144,6 +145,11 @@ fun NotesScreen(
                 }
                 NotesEvent.NoteUpdated -> {
                     SafeToast.short(context, noteUpdatedText)
+                    showCreateDialog = false
+                    editingNoteId = null
+                }
+                NotesEvent.SavedOffline -> {
+                    SafeToast.long(context, savedOfflineText)
                     showCreateDialog = false
                     editingNoteId = null
                 }
