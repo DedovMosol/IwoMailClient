@@ -1292,7 +1292,12 @@ private fun EmailListItem(
     ) {
         if (thread != null && expanded) {
             // Не дублировать latest: шапка только сворачивает, письма — строки Child, включая самое новое
-            ExpandedThreadBar(count = thread.emails.size, unread = thread.unreadCount > 0)
+            ExpandedThreadBar(
+                count = thread.emails.size,
+                unread = thread.unreadCount > 0,
+                isSelectionMode = isSelectionMode,
+                isSelected = isSelected
+            )
         } else {
         Row(
             modifier = Modifier.padding(start = if (nested) 16.dp + NESTED_INDENT else 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
@@ -1560,27 +1565,41 @@ private val NESTED_INDENT = 24.dp
 
 /** Раскрытая цепочка: шапка без превью latest — иначе то же письмо дважды. Нажатие — на Surface снаружи. */
 @Composable
-private fun ExpandedThreadBar(count: Int, unread: Boolean) {
+private fun ExpandedThreadBar(
+    count: Int,
+    unread: Boolean,
+    isSelectionMode: Boolean,
+    isSelected: Boolean
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        if (isSelectionMode) {
+            DragSelectionIndicator(selected = isSelected, modifier = Modifier.size(22.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+        }
         ThreadCountBadge(count = count, unread = unread, startPadding = 0.dp)
         Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = Strings.collapseThread,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f)
-        )
-        Icon(
-            imageVector = AppIcons.ExpandLess,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(24.dp)
-        )
+        if (isSelectionMode) {
+            // Нажатие выбирает всю цепочку, не сворачивает — не писать «Свернуть»
+            Spacer(modifier = Modifier.weight(1f))
+        } else {
+            Text(
+                text = Strings.collapseThread,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = AppIcons.ExpandLess,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp)
+            )
+        }
     }
 }
 

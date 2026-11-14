@@ -7,11 +7,11 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 ### Conversations: expand without a duplicate latest (2026-11-14)
 - **Before**: the header was a full preview of the newest message, then every message again, including that latest
 - **Why not drop latest from the children**: the header does not open a message — without a latest row it could not be read
-- **Now**: collapsed — header is the latest summary. Expanded — a slim “Collapse conversation” bar plus every message, newest first (`dateReceived`, not folder order)
-- **Tests**: `MailRowTest` — children include latest; date order even if the folder listed oldest first
+- **Now**: collapsed — header is the latest summary. Expanded — a slim “Collapse conversation” bar plus every message, newest first (`dateReceived`, then id). In selection mode the bar has the same indicator as a mail row and does not say “Collapse” (tap selects the thread)
+- **Tests**: `MailRowTest` — children include latest; date order with explicit timestamps (the `email()` helper must not be trusted for “newest”)
 ### Permission prompts match the rest of the UI (2026-11-14)
 - **Before**: a custom `Dialog`+`Card` with a gradient strip, first-line indent and justified copy; the battery icon was used for both background work and exact alarms
-- **Now**: `ScaledAlertDialog`, same as language/settings. Background work uses the battery icon, exact alarms use the clock. No first-line indent; body text is full width (not a narrow centered column). The once-per-install queue and the system notification prompt are unchanged: the Android 13+ system sheet cannot be restyled
+- **Now**: `ScaledAlertDialog`, same as language/settings. Background work uses the battery icon, exact alarms use the clock. No first-line indent; body text is full width (not a narrow centered column). The Android 13+ notification sheet no longer appears on onboarding: after onboarding, then background work, then exact alarms, one at a time. The system sheet cannot be restyled
 - **Tests**: `AppPermissionDialogTest` — different prompts get different icons
 ### Onboarding: page enter matches Mail & notifications (2026-11-14)
 - **Before**: the pager precomposed the next slide (`beyondBoundsPageCount = 1`). Enter (`fade`/`scale`/`slide`) started on first composition and finished off-screen — Organizer, Settings, and the language/theme slides after the first opened with no appearance
@@ -20,9 +20,9 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 - **Tests**: `OnboardingPageEnterTest` — idle/prefetch/gesture target, animations off, already shown
 ### Selection haptics (2026-11-14)
 - **Before**: dragging a list and toggling items in selection used Compose `HapticFeedbackType.TextHandleMove` (text-cursor feedback). On many OEMs that is silent. Auto-scroll during a drag never vibrated
-- **Now**: a short tick via `Vibrator` + `VibrationEffect` (`EFFECT_TICK` / `EFFECT_CLICK` on API 29+, a short one-shot on 26–28). Long-press is a slightly stronger pulse. No vibrator or system haptic feedback off — silence, no exception. The same tick when the row changes during auto-scroll. One instance per process: list rows do not call `getSystemService` on every composition
+- **Now**: a short tick via `VibrationEffect` (`EFFECT_TICK` / `EFFECT_CLICK` on API 29+, a short one-shot on 26–28). Long-press is a slightly stronger pulse. On API 33+ the pulse is `USAGE_TOUCH` so it is not treated as an alarm in Do Not Disturb. No haptic hardware or system haptic feedback off — silence, no exception. The same tick when the row changes during auto-scroll. One instance per process: list rows do not call `getSystemService` on every composition
 - **Where**: list drag-select, toggling selection, star, email swipe
-- **Tests**: `AppHapticsTest` — effect by API, no vibrator / system haptic off does not play, OEM failure is swallowed, `from` caches the instance
+- **Tests**: `AppHapticsTest` — effect by API, no hardware / system haptic off does not play, OEM failure is swallowed, `from` caches the instance
 ### Tasks and notes: offline edits and trash (2026-11-13)
 - **Before**: editing a task (done, subject, dates) or note and moving it to trash without a connection showed an error and saved nothing; the request also waited for a timeout
 - **Now**: the edit is saved on the device and queued (`pending_pim_changes`, DB v51, migration 50→51); a toast says "Saved on the device. It will be sent to the server when the connection is back" and the dialog closes. Without a network the server is not called at all. `PendingMailChangesWorker` (network constraint, exponential backoff) sends it the same way as online: EAS on Exchange 2010+, EWS on Exchange 2007 (the task is found by its subject before the edit)

@@ -68,17 +68,8 @@ class MailRowTest {
 
     @Test
     fun `expanded children are newest first even if the folder listed oldest first`() {
-        val oldestFirst = EmailThreads.group(listOf(emails[3], emails[2], emails[0], emails[1]))
-        val budgetOldest = oldestFirst.first { it.isThread }
-        val rows = MailRow.threaded(oldestFirst, expanded = setOf(budgetOldest.key))
-
-        assertThat(rows.filterIsInstance<MailRow.Child>().map { it.key }).containsExactly("4", "2", "1").inOrder()
-    }
-
-    @Test
-    fun `expanded children are newest first even if the folder listed oldest first`() {
-        val oldest = email("old", "x", "C9")
-        val newest = email("new", "RE: x", "C9")
+        val newest = email("new", "RE: x", "C9").copy(dateReceived = 2_000L)
+        val oldest = email("old", "x", "C9").copy(dateReceived = 1_000L)
         val thread = EmailThreads.group(listOf(oldest, newest)).single()
 
         val rows = MailRow.threaded(listOf(thread), expanded = setOf(thread.key))
