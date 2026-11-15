@@ -1632,7 +1632,6 @@ fun ComposeScreen(
                 flushEditorHtml()
                 val account = activeAccount
                 if (account == null) {
-                    work.sending = false
                     SafeToast.short(context, accountNotFoundMsg)
                     return@launch
                 }
@@ -1643,7 +1642,6 @@ fun ComposeScreen(
                 // readBytes/сборке MIME раньше серверного лимита EAS.
                 val totalAttachmentSize = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachments, body) }
                 if (totalAttachmentSize > MAX_TOTAL_ATTACHMENT_BYTES) {
-                    work.sending = false
                     SafeToast.short(context, attachmentLimitExceededMsg)
                     return@launch
                 }
@@ -1660,7 +1658,6 @@ fun ComposeScreen(
                 }
                 val unreadable = attachments.zip(readAttachments).firstOrNull { it.second == null }?.first
                 if (unreadable != null) {
-                    work.sending = false
                     SafeToast.long(context, "$attachmentUnreadableMsg: ${unreadable.name}")
                     return@launch
                 }

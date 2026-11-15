@@ -21,12 +21,7 @@ object BackgroundWork {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
             context.getSystemService(AlarmManager::class.java)?.canScheduleExactAlarms() == true
 
-    /**
-     * RTC_WAKEUP: точный alarm, если система даёт, иначе обычный.
-     * OEM-квота `setExact` бросает [SecurityException] даже после [canScheduleExactAlarms] —
-     * тогда тоже неточный [AlarmManager.set], чтобы воркер не считал весь проход успешным вхолостую.
-     */
-    /** @return true, если поставлен точный alarm (подстраховка WorkManager может быть позже). */
+    /** @return true, если поставлен точный alarm. [SecurityException] не пробрасывается: один отказ не рвёт цикл остальных напоминаний. */
     fun scheduleRtcWakeup(alarmManager: AlarmManager, triggerAtMillis: Long, pendingIntent: PendingIntent): Boolean {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
@@ -41,13 +36,19 @@ object BackgroundWork {
             return true
         } catch (e: SecurityException) {
             android.util.Log.w(TAG, "Exact alarm denied, inexact fallback: ${e.message}")
-            try {
+            return try {
                 alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                false
             } catch (e2: SecurityException) {
                 android.util.Log.w(TAG, "while-idle denied, using set(): ${e2.message}")
-                alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                try {
+                    alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                    false
+                } catch (e3: SecurityException) {
+                    android.util.Log.e(TAG, "All alarm APIs denied", e3)
+                    false
+                }
             }
-            return false
         }
     }
 
