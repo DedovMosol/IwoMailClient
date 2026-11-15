@@ -42,8 +42,8 @@ object BackgroundWork {
             try {
                 alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
             } catch (e2: SecurityException) {
-                android.util.Log.e(TAG, "Inexact alarm also denied", e2)
-                throw e2
+                android.util.Log.w(TAG, "while-idle denied, using set(): ${e2.message}")
+                alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
             }
         }
     }

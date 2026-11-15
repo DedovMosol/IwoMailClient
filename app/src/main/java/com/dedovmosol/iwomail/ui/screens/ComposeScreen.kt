@@ -1512,7 +1512,7 @@ fun ComposeScreen(
 
     // Функция сохранения черновика (на сервер для Exchange, локально для остальных)
     fun saveDraft() {
-        if (work.savingDraft) return
+        if (work.savingDraft || work.sending) return
         // Флаг — синхронно, до launch: корутина стартует не сразу, и двойное нажатие успевало
         // запустить два сохранения (два черновика на сервере).
         work.savingDraft = true
@@ -1626,7 +1626,7 @@ fun ComposeScreen(
     val sendErrorText = Strings.sendError // Захватываем в Composable scope
 
     fun sendEmail(scheduledTime: Long? = null) {
-        if (work.sending) return
+        if (work.sending || work.savingDraft) return
         work.sending = true
 
         work.launch {
