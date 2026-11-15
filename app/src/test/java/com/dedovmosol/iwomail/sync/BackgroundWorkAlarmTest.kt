@@ -25,7 +25,11 @@ class BackgroundWorkAlarmTest {
             Intent("com.dedovmosol.iwomail.TEST_ALARM"),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val exact = BackgroundWork.scheduleRtcWakeup(am, System.currentTimeMillis() + 60_000L, pi)
-        assertThat(exact).isTrue()
+        try {
+            val exact = BackgroundWork.scheduleRtcWakeup(am, System.currentTimeMillis() + 60_000L, pi)
+            assertThat(exact).isTrue()
+        } finally {
+            am.cancel(pi)
+        }
     }
 }

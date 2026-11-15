@@ -2164,16 +2164,15 @@ fun ComposeScreen(
     fun handleBackPress() {
         if (work.isBusy()) return
         scope.launch {
-            snapshotBody()
+            val html = snapshotBody()
             if (editDraftId != null) {
                 val hasDraftChanges = to != initialDraftTo || cc != initialDraftCc || bcc != initialDraftBcc ||
                     highPriority != initialDraftHighPriority || subject != initialDraftSubject ||
                     requestReadReceipt != initialDraftReadReceipt || requestDeliveryReceipt != initialDraftDeliveryReceipt ||
-                    body != initialDraftBody || attachmentStrings != initialDraftAttachments
+                    html != initialDraftBody || attachmentStrings != initialDraftAttachments
                 if (hasDraftChanges) showDiscardDialog = true else handleBackNavigation()
             } else {
-                // Проверяем есть ли реальный контент (body может содержать пустой HTML и подпись)
-                val bodyPlainText = body
+                val bodyPlainText = html
                     .replace(SIGNATURE_DIV_REGEX, "")
                     .replace(HTML_TAG_STRIP_REGEX, "")
                     .replace("&nbsp;", " ")
