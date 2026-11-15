@@ -167,13 +167,13 @@ object ScheduledSend {
     private fun arm(context: Context, dir: File, sendAt: Long, policy: ExistingWorkPolicy) {
         val now = System.currentTimeMillis()
         val exact = BackgroundWork.exactAlarmsAllowed(context) && sendAt > now
-        if (exact) {
-            try {
-                context.getSystemService(AlarmManager::class.java)
-                    ?.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, sendAt, alarmIntent(context, dir))
-            } catch (e: SecurityException) {
-                // Разрешение отозвали между проверкой и вызовом — сработает подстраховка
-                android.util.Log.w("ScheduledSend", "Exact alarm denied: ${e.message}")
+        if (sendAt > now) {
+            context.getSystemService(AlarmManager::class.java)?.let { alarms ->
+                try {
+                    BackgroundWork.scheduleRtcWakeup(alarms, sendAt, alarmIntent(context, dir))
+                } catch (e: SecurityException) {
+                    android.util.Log.w("ScheduledSend", "Alarm denied: ${e.message}")
+                }
             }
         }
         val delay = (sendAt - now).coerceAtLeast(0) + if (exact) BACKSTOP_DELAY_MS else 0

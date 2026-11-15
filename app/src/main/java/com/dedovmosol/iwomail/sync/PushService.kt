@@ -196,12 +196,7 @@ class PushService : Service() {
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                 )
                 val triggerTime = System.currentTimeMillis() + effectiveDelay * 1000L
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
-                    alarmManager.set(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-                } else {
-                    // minSdk 26 (>= M): точный alarm с учётом Doze.
-                    alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-                }
+                BackgroundWork.scheduleRtcWakeup(alarmManager, triggerTime, pendingIntent)
             } catch (e: Exception) {
                 android.util.Log.e(TAG, "Failed to schedule restart alarm", e)
             }

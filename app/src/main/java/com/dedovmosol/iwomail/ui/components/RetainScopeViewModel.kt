@@ -21,6 +21,25 @@ class RetainScopeViewModel : ViewModel() {
     var leaving by mutableStateOf(false)
     var hideEditor by mutableStateOf(false)
 
+    fun isBusy(): Boolean = sending || savingDraft || leaving
+
+    fun tryBeginSend(): Boolean {
+        if (isBusy()) return false
+        sending = true
+        return true
+    }
+
+    fun tryBeginSave(): Boolean {
+        if (isBusy()) return false
+        savingDraft = true
+        return true
+    }
+
+    fun markLeaving() {
+        leaving = true
+        hideEditor = true
+    }
+
     fun launch(block: suspend CoroutineScope.() -> Unit): Job =
         viewModelScope.launch(
             CoroutineExceptionHandler { _, e ->

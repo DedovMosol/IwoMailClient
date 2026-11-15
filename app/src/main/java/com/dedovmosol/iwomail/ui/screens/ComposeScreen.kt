@@ -536,8 +536,7 @@ fun ComposeScreen(
 
     fun handleBackNavigation() {
         if (work.leaving) return
-        work.leaving = true
-        work.hideEditor = true
+        work.markLeaving()
 
         work.launch {
             delay(100)
@@ -1515,10 +1514,7 @@ fun ComposeScreen(
 
     // Функция сохранения черновика (на сервер для Exchange, локально для остальных)
     fun saveDraft() {
-        if (work.savingDraft || work.sending) return
-        // Флаг — синхронно, до launch: корутина стартует не сразу, и двойное нажатие успевало
-        // запустить два сохранения (два черновика на сервере).
-        work.savingDraft = true
+        if (!work.tryBeginSave()) return
         work.launch {
             try {
                 flushEditorHtml()
@@ -1629,8 +1625,7 @@ fun ComposeScreen(
     val sendErrorText = Strings.sendError // Захватываем в Composable scope
 
     fun sendEmail(scheduledTime: Long? = null) {
-        if (work.sending || work.savingDraft) return
-        work.sending = true
+        if (!work.tryBeginSend()) return
 
         work.launch {
             try {
@@ -1701,6 +1696,7 @@ fun ComposeScreen(
                     // Тело и вложения пишутся в файлы — не на главном потоке.
                     withContext(Dispatchers.IO) { com.dedovmosol.iwomail.sync.ScheduledSend.schedule(context, job) }
                     SafeToast.short(context, sendScheduledMsg)
+                    work.markLeaving()
                     onSent()
                     return@launch
                 }
@@ -1741,7 +1737,7 @@ fun ComposeScreen(
                 // он дублировал onRelease (двойной destroy на одном инстансе). Задержка даёт
                 // композиции обработать disposal перед onSent(). Совпадает с паттерном teardown
                 // WebView в EmailDetailScreen (единственный путь освобождения).
-                work.hideEditor = true
+                work.markLeaving()
                 kotlinx.coroutines.delay(150)
                 try {
                     onSent()
@@ -1760,7 +1756,9 @@ fun ComposeScreen(
     // Диалог подтверждения выхода — сохранить или нет
     if (showDiscardDialog) {
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
-            onDismissRequest = { showDiscardDialog = false },
+            onDismissRequest = {
+                if (!work.sending && !work.savingDraft) showDiscardDialog = false
+            },
             icon = { Icon(AppIcons.Edit, null) },
             title = { Text(if (editDraftId != null) (if (currentLanguage == AppLanguage.RUSSIAN) "Сохранить изменения?" else "Save changes?") else Strings.discardDraftQuestion) },
             text = { Text(if (editDraftId != null) (if (currentLanguage == AppLanguage.RUSSIAN) "Черновик был изменён" else "Draft has been modified") else Strings.draftWillBeDeleted) },
@@ -2158,7 +2156,7 @@ fun ComposeScreen(
 
     // Единая логика проверки при выходе (DRY)
     fun handleBackPress() {
-        if (work.sending || work.savingDraft) return
+        if (work.isBusy()) return
         scope.launch {
             flushEditorHtml()
             if (editDraftId != null) {
@@ -2188,7 +2186,10 @@ fun ComposeScreen(
             TopAppBar(
                 title = { },
                 navigationIcon = {
-                    IconButton(onClick = { handleBackPress() }) {
+                    IconButton(
+                        onClick = { handleBackPress() },
+                        enabled = !work.isBusy()
+                    ) {
                         Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
                     }
                 },
