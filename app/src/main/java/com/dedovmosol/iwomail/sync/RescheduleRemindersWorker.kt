@@ -24,7 +24,10 @@ class RescheduleRemindersWorker(
             Result.success()
         } catch (e: SecurityException) {
             android.util.Log.e(TAG, "AlarmManager limit reached (MIUI/HyperOS/Samsung)", e)
-            if (runAttemptCount >= MAX_ALARM_RETRIES) Result.failure() else Result.retry()
+            if (runAttemptCount >= MAX_ALARM_RETRIES) {
+                android.util.Log.e(TAG, "Giving up after $MAX_ALARM_RETRIES tries, next enqueue can run (KEEP + finished)")
+                Result.success()
+            } else Result.retry()
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.w(TAG, "Failed to reschedule reminders", e)

@@ -204,10 +204,12 @@ fun ComposeScreen(
     // Rich Text Editor контроллер
     val richTextController = rememberRichTextEditorController()
 
-    suspend fun flushEditorHtml() {
-        // CS-9: flush не успел (WebView занят/медленный) — берётся свежий кэш ввода latestHtml;
-        // пусто → body не перезатирается (последние символы не теряются при отправке/сохранении).
-        richTextController.awaitCurrentHtml()?.let { body = it }
+    suspend fun snapshotBody(): String {
+        // CS-9: flush не успел — latestHtml. Снимок локально: Job после поворота не читает
+        // новый rememberSaveable `body` и не пишет в мёртвый state.
+        val html = richTextController.awaitCurrentHtml()
+        if (html != null) body = html
+        return html ?: body
     }
 
     // Сохраняем вложения как строки для переживания поворота экрана
@@ -1517,7 +1519,7 @@ fun ComposeScreen(
         if (!work.tryBeginSave()) return
         work.launch {
             try {
-                flushEditorHtml()
+                val bodyNow = snapshotBody()
 
                 val account = activeAccount
                 if (account == null) {
@@ -1527,7 +1529,7 @@ fun ComposeScreen(
 
                 // CS-1 / CS-2: та же защита от OOM, что и при отправке — суммарный бюджет
                 // (файловые вложения + inline-картинки в теле) проверяется ДО чтения байт в память.
-                val budgetBytes = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachments, body) }
+                val budgetBytes = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachments, bodyNow) }
                 // Вложения, которые не загрузились при открытии, сохранение скачает в память — тоже в бюджет.
                 val unloadedIds = draftUnloadedAttachmentIds.toSet()
                 val unloadedBytes = if (unloadedIds.isEmpty()) 0L else withContext(Dispatchers.IO) {
@@ -1539,7 +1541,6 @@ fun ComposeScreen(
                 }
 
                 // Файловые вложения — байты (потолок: не читаем файл целиком, если провайдер соврал size=0)
-                val bodyNow = body
                 val fileDraftAttachments = withContext(Dispatchers.IO) {
                     var remaining = MAX_TOTAL_ATTACHMENT_BYTES - inlineImageBytes(bodyNow)
                     attachments.mapNotNull { att ->
@@ -1629,7 +1630,7 @@ fun ComposeScreen(
 
         work.launch {
             try {
-                flushEditorHtml()
+                val bodyNow = snapshotBody()
                 val account = activeAccount
                 if (account == null) {
                     SafeToast.short(context, accountNotFoundMsg)
@@ -1640,7 +1641,7 @@ fun ComposeScreen(
                 // ДО чтения байт в память. Иначе крупное вложение ИЛИ тяжёлое тело с inline data:URL
                 // (которые уходят как HTML-тело, минуя список вложений) вызовет OutOfMemoryError на
                 // readBytes/сборке MIME раньше серверного лимита EAS.
-                val totalAttachmentSize = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachments, body) }
+                val totalAttachmentSize = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachments, bodyNow) }
                 if (totalAttachmentSize > MAX_TOTAL_ATTACHMENT_BYTES) {
                     SafeToast.short(context, attachmentLimitExceededMsg)
                     return@launch
@@ -1649,7 +1650,7 @@ fun ComposeScreen(
                 // Вложения — байты; не прочитать хоть одно (файл удалён, доступ отозван) — не отправляем: письмо ушло бы
                 // без него, а пользователь не узнал бы (раньше такое вложение молча пропадало).
                 val readAttachments = withContext(Dispatchers.IO) {
-                    var remaining = MAX_TOTAL_ATTACHMENT_BYTES - inlineImageBytes(body)
+                    var remaining = MAX_TOTAL_ATTACHMENT_BYTES - inlineImageBytes(bodyNow)
                     attachments.map { att ->
                         val bytes = readUriBytesLimited(context.contentResolver, att.uri, remaining)
                         if (bytes != null) remaining -= bytes.size
@@ -1662,7 +1663,7 @@ fun ComposeScreen(
                     return@launch
                 }
                 val outgoingAttachments = readAttachments.filterNotNull()
-                val cleanBody = cleanOutgoingBody(body)
+                val cleanBody = cleanOutgoingBody(bodyNow)
                 val expandedTo = expandGroupTokens(to, groupMappings)
                 val expandedCc = expandGroupTokens(cc, groupMappings)
                 val expandedBcc = expandGroupTokens(bcc, groupMappings)
@@ -2163,7 +2164,7 @@ fun ComposeScreen(
     fun handleBackPress() {
         if (work.isBusy()) return
         scope.launch {
-            flushEditorHtml()
+            snapshotBody()
             if (editDraftId != null) {
                 val hasDraftChanges = to != initialDraftTo || cc != initialDraftCc || bcc != initialDraftBcc ||
                     highPriority != initialDraftHighPriority || subject != initialDraftSubject ||
