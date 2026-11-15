@@ -1089,9 +1089,10 @@ fun AppNavigation(
                 initialSubject = subject,
                 initialBody = body,
                 onBackClick = { navController.popBackStack() },
-                onSent = { 
-                    // После отправки переходим на главную
+                onSent = {
+                    navController.popBackStack()
                     navController.navigate(Screen.Main.route) {
+                        launchSingleTop = true
                         popUpTo(Screen.Main.route) { inclusive = false }
                     }
                 }

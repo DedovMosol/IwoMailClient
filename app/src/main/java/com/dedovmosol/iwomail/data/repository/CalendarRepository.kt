@@ -1263,8 +1263,6 @@ class CalendarRepository(private val context: Context) {
     suspend fun resetAndResync(accountId: Long): EasResult<Int> {
         return getSyncMutex(accountId).withLock {
             withContext(Dispatchers.IO) {
-                val events = calendarEventDao.getEventsByAccountList(accountId)
-                for (event in events) CalendarReminderReceiver.cancelReminder(context, event.id)
                 calendarEventDao.deleteByAccount(accountId)
             }
             accountRepo.clearEasClientCache(accountId)
@@ -1631,7 +1629,7 @@ class CalendarRepository(private val context: Context) {
                         } // end withTransaction
 
                         if (reminderEventsForReschedule.isNotEmpty()) {
-                            RescheduleRemindersWorker.enqueue(context)
+                            RescheduleRemindersWorker.enqueue(context, replace = true)
                         }
 
                         if (recurringInfoListForSupplement.isNotEmpty()) {

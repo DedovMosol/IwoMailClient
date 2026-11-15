@@ -721,8 +721,6 @@ class TaskRepository internal constructor(
         if (!flushPending(accountId)) return EasResult.Error(RepositoryErrors.PENDING_CHANGES_NOT_SENT)
         getSyncMutex(accountId).withLock {
             withContext(Dispatchers.IO) {
-                val tasks = taskDao.getTasksByAccountList(accountId)
-                for (task in tasks) TaskReminderReceiver.cancelReminder(context, task.id)
                 taskDao.deleteByAccount(accountId)
             }
             accountRepo.clearEasClientCache(accountId)

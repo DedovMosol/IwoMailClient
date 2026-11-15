@@ -23,22 +23,39 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
         val exactAlarmGranted = action == AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED
+        val clockChanged = action == Intent.ACTION_TIME_CHANGED ||
+            action == Intent.ACTION_TIMEZONE_CHANGED
         val bootOrReplace = action == Intent.ACTION_BOOT_COMPLETED ||
             action == Intent.ACTION_MY_PACKAGE_REPLACED
-        if (!exactAlarmGranted && !bootOrReplace) return
+        if (!exactAlarmGranted && !clockChanged && !bootOrReplace) return
 
         val app = context.applicationContext
         val pendingResult = goAsync()
         val scope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.IO)
         scope.launch {
             try {
-                if (exactAlarmGranted) {
-                    // API 31+: после выдачи SCHEDULE_EXACT_ALARM система шлёт этот broadcast
-                    // (при отзыве — нет, exact alarm уже стёрты). canScheduleExactAlarms()
-                    // обязателен: к моменту доставки разрешение могли снова снять.
-                    if (BackgroundWork.exactAlarmsAllowed(app)) {
-                        RescheduleRemindersWorker.enqueue(app)
-                        ScheduledSend.rearm(app)
+                if (exactAlarmGranted || clockChanged) {
+                    // Грант exact: система стёрла setExact*; broadcast только при выдаче.
+                    // TIME_SET / timezone: RTC_WAKEUP в wall-clock — переставить ближайшие.
+                    // REPLACE: не ждать backoff KEEP. FGS с этого broadcast разрешён (API 31).
+                    if (exactAlarmGranted && !BackgroundWork.exactAlarmsAllowed(app)) {
+                        return@launch
+                    }
+                    RescheduleRemindersWorker.enqueue(app, replace = exactAlarmGranted)
+                    ScheduledSend.rearm(app)
+                    if (exactAlarmGranted) {
+                        val accounts = MailDatabase.getInstance(app).accountDao().getAllAccountsList()
+                        val hasExchangePush = accounts.any {
+                            it.accountType == AccountType.EXCHANGE.name &&
+                                it.syncMode == SyncMode.PUSH.name
+                        }
+                        if (hasExchangePush) {
+                            try {
+                                PushService.start(app)
+                            } catch (e: Exception) {
+                                android.util.Log.w(TAG, "Failed to start PushService after exact-alarm grant", e)
+                            }
+                        }
                     }
                     return@launch
                 }

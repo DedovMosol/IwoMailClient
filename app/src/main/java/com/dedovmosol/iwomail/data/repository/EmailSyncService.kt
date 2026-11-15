@@ -1655,7 +1655,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         }
         // Флаг поменяли в Outlook/OWA — напоминания на устройстве по новым срокам
         if (syncData.changedEmails.any { it.flag != null }) {
-            com.dedovmosol.iwomail.sync.RescheduleRemindersWorker.enqueue(context)
+            com.dedovmosol.iwomail.sync.RescheduleRemindersWorker.enqueue(context, replace = true)
         }
     }
 

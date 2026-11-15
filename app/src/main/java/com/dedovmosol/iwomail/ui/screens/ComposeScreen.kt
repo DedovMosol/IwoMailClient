@@ -1730,8 +1730,11 @@ fun ComposeScreen(
                         onSent()
                     } catch (e2: Exception) {
                         if (e2 is kotlinx.coroutines.CancellationException) throw e2
-                        work.leaving = false
-                        work.hideEditor = false
+                        work.unlockLeave()
+                    }
+                    if (work.leaving) {
+                        delay(400)
+                        if (work.leaving) work.unlockLeave()
                     }
                     return@launch
                 }
@@ -1778,8 +1781,11 @@ fun ComposeScreen(
                     onSent()
                 } catch (e2: Exception) {
                     if (e2 is kotlinx.coroutines.CancellationException) throw e2
-                    work.leaving = false
-                    work.hideEditor = false
+                    work.unlockLeave()
+                }
+                if (work.leaving) {
+                    delay(400)
+                    if (work.leaving) work.unlockLeave()
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e

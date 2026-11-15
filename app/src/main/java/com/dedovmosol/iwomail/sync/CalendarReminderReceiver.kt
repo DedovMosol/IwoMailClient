@@ -49,7 +49,6 @@ class CalendarReminderReceiver : BroadcastReceiver() {
                             if (event != null && event.startTime > System.currentTimeMillis()) {
                                 showNotification(context, event)
                             }
-                            RescheduleRemindersWorker.enqueue(context)
                         }
 
                         ACTION_CALENDAR_MARK_READ -> {
@@ -71,6 +70,9 @@ class CalendarReminderReceiver : BroadcastReceiver() {
                     }
                 }
             } finally {
+                if (action == ACTION_CALENDAR_REMINDER) {
+                    RescheduleRemindersWorker.enqueue(context.applicationContext)
+                }
                 localScope.cancel()
                 pendingResult.finish()
             }
@@ -87,10 +89,9 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, event.accountId)
             putExtra(MainActivity.EXTRA_CALENDAR_EVENT_ID, event.id)
         }
-        val safeHash = safeHashForId(event.id)
         val contentPendingIntent = PendingIntent.getActivity(
             context,
-            safeHash + REQUEST_CODE_CONTENT,
+            code(event.id, CODE_CONTENT),
             contentIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -101,7 +102,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
         }
         val markReadPendingIntent = PendingIntent.getBroadcast(
             context,
-            safeHash + REQUEST_CODE_MARK_READ,
+            code(event.id, CODE_MARK_READ),
             markReadIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -112,7 +113,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
         }
         val snoozePendingIntent = PendingIntent.getBroadcast(
             context,
-            safeHash + REQUEST_CODE_SNOOZE,
+            code(event.id, CODE_SNOOZE),
             snoozeIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -164,15 +165,15 @@ class CalendarReminderReceiver : BroadcastReceiver() {
         const val ACTION_CALENDAR_MARK_READ = "com.dedovmosol.iwomail.CALENDAR_MARK_READ"
         const val ACTION_CALENDAR_SNOOZE_5_MIN = "com.dedovmosol.iwomail.CALENDAR_SNOOZE_5_MIN"
         const val EXTRA_EVENT_ID = "event_id"
-        private const val NOTIFICATION_ID_BASE = 10_000_000
-        private const val REQUEST_CODE_CONTENT = 12_000_000
-        private const val REQUEST_CODE_MARK_READ = 14_000_000
-        private const val REQUEST_CODE_SNOOZE = 16_000_000
+        private const val CODE_ALARM = 0
+        private const val CODE_NOTIF = 1
+        private const val CODE_CONTENT = 2
+        private const val CODE_MARK_READ = 3
+        private const val CODE_SNOOZE = 4
         private const val SNOOZE_5_MIN_MS = 5 * 60 * 1000L
 
-        private fun safeHashForId(id: String): Int = (id.hashCode() and 0x7FFFFFFF) % 1_000_000
-
-        private fun notificationIdForEvent(eventId: String): Int = NOTIFICATION_ID_BASE + safeHashForId(eventId)
+        private fun code(id: String, slot: Int) = BackgroundWork.pendingCode(BackgroundWork.KIND_CALENDAR, id, slot)
+        private fun notificationIdForEvent(eventId: String): Int = code(eventId, CODE_NOTIF)
 
         private fun scheduleReminderAt(context: Context, eventId: String, triggerAtMillis: Long) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -180,9 +181,12 @@ class CalendarReminderReceiver : BroadcastReceiver() {
                 action = ACTION_CALENDAR_REMINDER
                 putExtra(EXTRA_EVENT_ID, eventId)
             }
+            val newCode = code(eventId, CODE_ALARM)
+            val legacy = BackgroundWork.legacyAlarmCode(eventId)
+            if (legacy != newCode) BackgroundWork.cancelBroadcast(context, legacy, intent)
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                safeHashForId(eventId),
+                newCode,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
@@ -211,24 +215,15 @@ class CalendarReminderReceiver : BroadcastReceiver() {
          * @param eventId ID события
          */
         fun cancelReminder(context: Context, eventId: String) {
-            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-
             val intent = Intent(context, CalendarReminderReceiver::class.java).apply {
                 action = ACTION_CALENDAR_REMINDER
                 putExtra(EXTRA_EVENT_ID, eventId)
             }
-
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                safeHashForId(eventId),
-                intent,
-                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            pendingIntent?.let { alarmManager.cancel(it) }
+            BackgroundWork.cancelBroadcast(context, code(eventId, CODE_ALARM), intent)
+            BackgroundWork.cancelBroadcast(context, BackgroundWork.legacyAlarmCode(eventId), intent)
         }
 
-        const val MAX_SCHEDULED_REMINDERS = 150
+        const val MAX_SCHEDULED_REMINDERS = BackgroundWork.MAX_REMINDER_ALARMS
 
         /**
          * Планирует напоминания для ближайших событий (до MAX_SCHEDULED_REMINDERS).

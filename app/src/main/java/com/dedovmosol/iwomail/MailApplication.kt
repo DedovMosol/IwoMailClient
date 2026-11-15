@@ -77,6 +77,7 @@ class MailApplication : Application() {
             // Правки писем без связи (флаг, «прочитано»), не отправленные до перезапуска
             try {
                 com.dedovmosol.iwomail.sync.PendingMailChangesWorker.enqueueIfPending(this@MailApplication)
+                com.dedovmosol.iwomail.sync.RescheduleRemindersWorker.enqueuePeriodic(this@MailApplication)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.w(TAG, "Pending mail changes check failed", e)

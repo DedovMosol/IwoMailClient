@@ -3,6 +3,7 @@ package com.dedovmosol.iwomail.sync
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
 
@@ -20,6 +21,38 @@ object BackgroundWork {
     fun exactAlarmsAllowed(context: Context): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
             context.getSystemService(AlarmManager::class.java)?.canScheduleExactAlarms() == true
+
+    /**
+     * Сколько ближайших напоминаний держим в AlarmManager (календарь, задачи, флаги — по столько).
+     * Тысячи будущих строк в БД не ставим: OEM-квота ~500 на UID, exact будит устройство.
+     * После срабатывания [RescheduleRemindersWorker] подтягивает следующие.
+     */
+    const val MAX_REMINDER_ALARMS = 50
+
+    /**
+     * requestCode / notificationId. Без % 1_000_000 — при тысячах id модуль давал коллизии.
+     * [kind] обязан быть разным у календаря / задач / флагов: NotificationManager общий на приложение,
+     * разные Receiver спасают только PendingIntent, не id уведомления.
+     * [slot] — alarm / content / snooze одного id.
+     */
+    fun pendingCode(kind: Int, id: String, slot: Int = 0): Int = id.hashCode() xor kind xor slot
+
+    /** requestCode до смены схемы (hash % 1_000_000) — снять, иначе дубль до первого срабатывания. */
+    fun legacyAlarmCode(id: String): Int = (id.hashCode() and 0x7FFFFFFF) % 1_000_000
+
+    fun cancelBroadcast(context: Context, requestCode: Int, intent: Intent) {
+        val pi = PendingIntent.getBroadcast(
+            context,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+        ) ?: return
+        context.getSystemService(AlarmManager::class.java)?.cancel(pi)
+    }
+
+    const val KIND_CALENDAR = 0x51C0C0
+    const val KIND_TASK = 0x7A5A00
+    const val KIND_FLAG = 0x41A600
 
     /** @return true, если поставлен точный alarm. [SecurityException] не пробрасывается: один отказ не рвёт цикл остальных напоминаний. */
     fun scheduleRtcWakeup(alarmManager: AlarmManager, triggerAtMillis: Long, pendingIntent: PendingIntent): Boolean {

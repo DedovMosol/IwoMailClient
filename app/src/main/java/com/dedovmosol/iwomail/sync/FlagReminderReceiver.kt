@@ -36,9 +36,9 @@ class FlagReminderReceiver : BroadcastReceiver() {
                 withTimeoutOrNull(8_000) {
                     val row = MailDatabase.getInstance(context).emailDao().getFlagReminder(emailId)
                     if (row != null && isDue(row.flagReminder, firedFor)) show(context, row)
-                    RescheduleRemindersWorker.enqueue(context)
                 }
             } finally {
+                RescheduleRemindersWorker.enqueue(context.applicationContext)
                 scope.cancel()
                 pendingResult.finish()
             }
@@ -54,7 +54,7 @@ class FlagReminderReceiver : BroadcastReceiver() {
             putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, row.accountId)
         }
         val contentIntent = PendingIntent.getActivity(
-            context, requestCode(row.id), open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            context, code(row.id, CODE_CONTENT), open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val sender = row.fromName.ifBlank { row.from }
         val notification = NotificationCompat.Builder(context, MailApplication.CHANNEL_TASKS)
@@ -67,19 +67,20 @@ class FlagReminderReceiver : BroadcastReceiver() {
             .setAutoCancel(true)
             .setContentIntent(contentIntent)
             .build()
-        context.getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_BASE + requestCode(row.id), notification)
+        context.getSystemService(NotificationManager::class.java)?.notify(code(row.id, CODE_NOTIF), notification)
     }
 
     companion object {
         private const val ACTION_FLAG_REMINDER = "com.dedovmosol.iwomail.FLAG_REMINDER"
         private const val EXTRA_EMAIL_ID = "email_id"
         private const val EXTRA_REMINDER_TIME = "reminder_time"
-        private const val NOTIFICATION_BASE = 30_000_000
-        internal const val MAX_SCHEDULED = 50
+        private const val CODE_ALARM = 0
+        private const val CODE_NOTIF = 1
+        private const val CODE_CONTENT = 2
+        private fun code(id: String, slot: Int) = BackgroundWork.pendingCode(BackgroundWork.KIND_FLAG, id, slot)
+        internal const val MAX_SCHEDULED = BackgroundWork.MAX_REMINDER_ALARMS
         /** Будильник мог сработать чуть раньше или позже, а флаг — смениться: напоминание то же, если время совпало. */
         private const val TOLERANCE_MS = 60_000L
-
-        private fun requestCode(emailId: String): Int = (emailId.hashCode() and 0x7FFFFFFF) % 1_000_000
 
         /** Напоминание [current] из базы — то, на которое ставился будильник [firedFor] (не перенесено и не снято). */
         internal fun isDue(current: Long?, firedFor: Long): Boolean =
@@ -95,8 +96,11 @@ class FlagReminderReceiver : BroadcastReceiver() {
                     .setAction(ACTION_FLAG_REMINDER)
                     .putExtra(EXTRA_EMAIL_ID, row.id)
                     .putExtra(EXTRA_REMINDER_TIME, time)
+                val newCode = code(row.id, CODE_ALARM)
+                val legacy = BackgroundWork.legacyAlarmCode(row.id)
+                if (legacy != newCode) BackgroundWork.cancelBroadcast(context, legacy, intent)
                 val pending = PendingIntent.getBroadcast(
-                    context, requestCode(row.id), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    context, newCode, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
                 BackgroundWork.scheduleRtcWakeup(alarms, time, pending)
             }

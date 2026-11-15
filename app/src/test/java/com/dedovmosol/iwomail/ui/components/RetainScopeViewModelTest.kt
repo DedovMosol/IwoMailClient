@@ -43,4 +43,14 @@ class RetainScopeViewModelTest {
         vm.askDiscard = false
         assertThat(vm.tryBeginSend()).isTrue()
     }
+
+    @Test
+    fun `unlockLeave allows send after a stuck leave`() {
+        val vm = RetainScopeViewModel()
+        vm.markLeaving()
+        vm.unlockLeave()
+        assertThat(vm.leaving).isFalse()
+        assertThat(vm.hideEditor).isFalse()
+        assertThat(vm.tryBeginSend()).isTrue()
+    }
 }

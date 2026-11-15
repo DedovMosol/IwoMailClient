@@ -35,7 +35,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
             ACTION_TASK_MARK_READ -> {
                 // Закрываем уведомление мгновенно (UI-операция, не требует goAsync)
                 val notificationManager = context.getSystemService(NotificationManager::class.java)
-                notificationManager.cancel(NOTIFICATION_ID_BASE + safeHashForId(taskId))
+                notificationManager.cancel(code(taskId, CODE_NOTIF))
                 
                 // Серверную работу делегируем WorkManager — надёжно на MIUI/HyperOS/EMUI
                 MarkTaskCompleteWorker.enqueue(context, taskId)
@@ -51,9 +51,9 @@ class TaskReminderReceiver : BroadcastReceiver() {
                             if (task != null && !task.complete) {
                                 showNotification(context, task)
                             }
-                            RescheduleRemindersWorker.enqueue(context)
                         }
                     } finally {
+                        RescheduleRemindersWorker.enqueue(context.applicationContext)
                         localScope.cancel()
                         pendingResult.finish()
                     }
@@ -72,10 +72,9 @@ class TaskReminderReceiver : BroadcastReceiver() {
             putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, task.accountId)
             putExtra(MainActivity.EXTRA_TASK_ID, task.id)
         }
-        val safeHash = safeHashForId(task.id)
         val contentPendingIntent = PendingIntent.getActivity(
             context,
-            safeHash + REQUEST_CODE_CONTENT,
+            code(task.id, CODE_CONTENT),
             contentIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -86,7 +85,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
         }
         val markReadPendingIntent = PendingIntent.getBroadcast(
             context,
-            safeHash + REQUEST_CODE_MARK_READ,
+            code(task.id, CODE_MARK_READ),
             markReadIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -129,7 +128,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
             .addAction(R.drawable.ic_check, context.getString(R.string.notification_mark_read), markReadPendingIntent)
             .build()
         
-        val notificationId = NOTIFICATION_ID_BASE + safeHashForId(task.id)
+        val notificationId = code(task.id, CODE_NOTIF)
         notificationManager.notify(notificationId, notification)
     }
     
@@ -137,11 +136,11 @@ class TaskReminderReceiver : BroadcastReceiver() {
         const val ACTION_TASK_REMINDER = "com.dedovmosol.iwomail.TASK_REMINDER"
         const val ACTION_TASK_MARK_READ = "com.dedovmosol.iwomail.TASK_MARK_READ"
         const val EXTRA_TASK_ID = "task_id"
-        private const val NOTIFICATION_ID_BASE = 20_000_000
-        private const val REQUEST_CODE_CONTENT = 22_000_000
-        private const val REQUEST_CODE_MARK_READ = 24_000_000
-        
-        private fun safeHashForId(id: String): Int = (id.hashCode() and 0x7FFFFFFF) % 1_000_000
+        private const val CODE_ALARM = 0
+        private const val CODE_NOTIF = 1
+        private const val CODE_CONTENT = 2
+        private const val CODE_MARK_READ = 3
+        private fun code(id: String, slot: Int) = BackgroundWork.pendingCode(BackgroundWork.KIND_TASK, id, slot)
         
         /**
          * Планирует напоминание для задачи.
@@ -159,13 +158,16 @@ class TaskReminderReceiver : BroadcastReceiver() {
                 putExtra(EXTRA_TASK_ID, task.id)
             }
             
+            val newCode = code(task.id, CODE_ALARM)
+            val legacy = BackgroundWork.legacyAlarmCode(task.id)
+            if (legacy != newCode) BackgroundWork.cancelBroadcast(context, legacy, intent)
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                safeHashForId(task.id),
+                newCode,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            
+
             BackgroundWork.scheduleRtcWakeup(alarmManager, task.reminderTime, pendingIntent)
         }
         
@@ -173,24 +175,15 @@ class TaskReminderReceiver : BroadcastReceiver() {
          * Отменяет напоминание для задачи.
          */
         fun cancelReminder(context: Context, taskId: String) {
-            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            
             val intent = Intent(context, TaskReminderReceiver::class.java).apply {
                 action = ACTION_TASK_REMINDER
                 putExtra(EXTRA_TASK_ID, taskId)
             }
-            
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                safeHashForId(taskId),
-                intent,
-                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
-            )
-            
-            pendingIntent?.let { alarmManager.cancel(it) }
+            BackgroundWork.cancelBroadcast(context, code(taskId, CODE_ALARM), intent)
+            BackgroundWork.cancelBroadcast(context, BackgroundWork.legacyAlarmCode(taskId), intent)
         }
         
-        const val MAX_SCHEDULED_REMINDERS = 50
+        const val MAX_SCHEDULED_REMINDERS = BackgroundWork.MAX_REMINDER_ALARMS
 
         /**
          * Планирует напоминания для ближайших задач (до MAX_SCHEDULED_REMINDERS).

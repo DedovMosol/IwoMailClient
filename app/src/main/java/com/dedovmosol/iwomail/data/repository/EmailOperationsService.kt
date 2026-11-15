@@ -631,7 +631,7 @@ class EmailOperationsService(
             unconfirmed = pendingChanges.get(emailId)?.flag == true
         ) ?: return EasResult.Error("Письмо не найдено")
         if (started.target.reminderTime != null || started.previous.reminderTime != null) {
-            com.dedovmosol.iwomail.sync.RescheduleRemindersWorker.enqueue(context)
+            com.dedovmosol.iwomail.sync.RescheduleRemindersWorker.enqueue(context, replace = true)
         }
 
         return kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {

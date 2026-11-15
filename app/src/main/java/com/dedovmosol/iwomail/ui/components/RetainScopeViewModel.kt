@@ -48,6 +48,11 @@ class RetainScopeViewModel : ViewModel() {
         hideEditor = true
     }
 
+    fun unlockLeave() {
+        leaving = false
+        hideEditor = false
+    }
+
     fun launch(block: suspend CoroutineScope.() -> Unit): Job =
         viewModelScope.launch(
             CoroutineExceptionHandler { _, e ->
