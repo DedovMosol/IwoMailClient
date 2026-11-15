@@ -91,8 +91,13 @@ interface TaskDao {
     @Query("DELETE FROM tasks WHERE accountId = :accountId")
     suspend fun deleteByAccount(accountId: Long)
     
-    @Query("SELECT * FROM tasks WHERE reminderSet = 1 AND reminderTime > :now AND complete = 0 AND isDeleted = 0")
-    suspend fun getTasksWithReminders(now: Long): List<TaskEntity>
+    @Query("""
+        SELECT * FROM tasks
+        WHERE reminderSet = 1 AND reminderTime > :now AND complete = 0 AND isDeleted = 0
+        ORDER BY reminderTime ASC
+        LIMIT :limit
+    """)
+    suspend fun getTasksWithReminders(now: Long, limit: Int): List<TaskEntity>
     
     /**
      * Подсчитывает задачи на сегодня (с дедлайном сегодня или просроченные)

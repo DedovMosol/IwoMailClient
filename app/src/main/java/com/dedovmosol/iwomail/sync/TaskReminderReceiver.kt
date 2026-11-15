@@ -190,20 +190,14 @@ class TaskReminderReceiver : BroadcastReceiver() {
             pendingIntent?.let { alarmManager.cancel(it) }
         }
         
-        private const val MAX_SCHEDULED_REMINDERS = 50
+        const val MAX_SCHEDULED_REMINDERS = 50
 
         /**
          * Планирует напоминания для ближайших задач (до MAX_SCHEDULED_REMINDERS).
          * Ограничение из-за лимита 500 AlarmManager на UID (MIUI/HyperOS, Samsung, OPPO).
          */
         fun rescheduleAllReminders(context: Context, tasks: List<TaskEntity>) {
-            val now = System.currentTimeMillis()
-            val eligible = tasks
-                .filter { it.reminderSet && it.reminderTime > now && !it.complete }
-                .sortedBy { it.reminderTime }
-                .take(MAX_SCHEDULED_REMINDERS)
-
-            eligible.forEach { task ->
+            for (task in tasks) {
                 try {
                     scheduleReminder(context, task)
                 } catch (e: Exception) {

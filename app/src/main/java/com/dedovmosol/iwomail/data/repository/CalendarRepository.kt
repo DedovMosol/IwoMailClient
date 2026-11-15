@@ -1631,9 +1631,6 @@ class CalendarRepository(private val context: Context) {
                         } // end withTransaction
 
                         if (reminderEventsForReschedule.isNotEmpty()) {
-                            for (event in reminderEventsForReschedule) {
-                                CalendarReminderReceiver.cancelReminder(context, event.id)
-                            }
                             RescheduleRemindersWorker.enqueue(context)
                         }
 

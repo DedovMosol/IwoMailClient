@@ -52,6 +52,7 @@ import com.dedovmosol.iwomail.ui.components.awaitCurrentHtml
 import com.dedovmosol.iwomail.ui.components.rememberRichTextEditorController
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import com.dedovmosol.iwomail.ui.screens.compose.AttachmentInfo
+import com.dedovmosol.iwomail.ui.screens.compose.ComposeFieldSnap
 import com.dedovmosol.iwomail.ui.screens.compose.EmailSuggestion
 import com.dedovmosol.iwomail.ui.screens.compose.ImageQuality
 import com.dedovmosol.iwomail.ui.screens.compose.SuggestionSource
@@ -205,10 +206,7 @@ fun ComposeScreen(
     val richTextController = rememberRichTextEditorController()
 
     suspend fun snapshotBody(): String {
-        // CS-9: flush не успел — latestHtml. Снимок локально: Job после поворота не читает
-        // новый rememberSaveable `body` и не пишет в мёртвый state.
-        val html = richTextController.awaitCurrentHtml()
-        if (html != null) body = html
+        val html = richTextController.awaitCurrentHtml()?.takeIf { it.isNotBlank() }
         return html ?: body
     }
 
@@ -228,6 +226,20 @@ fun ComposeScreen(
     // rememberSaveable чтобы не потерять при повороте (токены [GroupName] в полях переживают поворот)
     var groupMappingsJson by rememberSaveable { mutableStateOf("{}") }
     var groupMappings by remember { mutableStateOf<Map<String, List<String>>>(emptyMap()) }
+
+    fun snapFields() = ComposeFieldSnap(
+        to = to,
+        cc = cc,
+        bcc = bcc,
+        subject = subject,
+        attachments = attachments,
+        attachmentStrings = attachmentStrings,
+        highPriority = highPriority,
+        readReceipt = requestReadReceipt,
+        deliveryReceipt = requestDeliveryReceipt,
+        account = activeAccount,
+        groupMappings = groupMappings
+    )
     // Цвета групп контактов: имя группы → цвет (Int)
     var groupColorsJson by rememberSaveable { mutableStateOf("{}") }
     var groupColors by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
@@ -332,7 +344,6 @@ fun ComposeScreen(
     // Меню и диалоги
     var showMenu by rememberSaveable { mutableStateOf(false) }
     var showScheduleDialog by rememberSaveable { mutableStateOf(false) }
-    var showDiscardDialog by rememberSaveable { mutableStateOf(false) }
 
     // Предупреждение о дубликате email
     var duplicateEmail by rememberSaveable { mutableStateOf<String?>(null) }
@@ -539,12 +550,13 @@ fun ComposeScreen(
     fun handleBackNavigation() {
         if (work.leaving) return
         work.markLeaving()
+        val currentAccountId = activeAccount?.id
+        val startedFromAccountId = initialAccountId
 
         work.launch {
             delay(100)
 
-            val currentAccountId = activeAccount?.id
-            if (currentAccountId != null && initialAccountId != null && currentAccountId != initialAccountId) {
+            if (currentAccountId != null && startedFromAccountId != null && currentAccountId != startedFromAccountId) {
                 try {
                     accountRepo.setActiveAccount(currentAccountId)
                 } catch (e: Exception) {
@@ -1519,9 +1531,19 @@ fun ComposeScreen(
         if (!work.tryBeginSave()) return
         work.launch {
             try {
+                val fields = snapFields()
+                val account = fields.account
+                val toNow = fields.to
+                val ccNow = fields.cc
+                val bccNow = fields.bcc
+                val subjectNow = fields.subject
+                val attachmentsNow = fields.attachments
+                val attachmentStringsNow = fields.attachmentStrings
+                val highPriorityNow = fields.highPriority
+                val readReceiptNow = fields.readReceipt
+                val deliveryReceiptNow = fields.deliveryReceipt
                 val bodyNow = snapshotBody()
 
-                val account = activeAccount
                 if (account == null) {
                     SafeToast.short(context, accountNotFoundMsg)
                     return@launch
@@ -1529,7 +1551,7 @@ fun ComposeScreen(
 
                 // CS-1 / CS-2: та же защита от OOM, что и при отправке — суммарный бюджет
                 // (файловые вложения + inline-картинки в теле) проверяется ДО чтения байт в память.
-                val budgetBytes = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachments, bodyNow) }
+                val budgetBytes = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachmentsNow, bodyNow) }
                 // Вложения, которые не загрузились при открытии, сохранение скачает в память — тоже в бюджет.
                 val unloadedIds = draftUnloadedAttachmentIds.toSet()
                 val unloadedBytes = if (unloadedIds.isEmpty()) 0L else withContext(Dispatchers.IO) {
@@ -1543,7 +1565,7 @@ fun ComposeScreen(
                 // Файловые вложения — байты (потолок: не читаем файл целиком, если провайдер соврал size=0)
                 val fileDraftAttachments = withContext(Dispatchers.IO) {
                     var remaining = MAX_TOTAL_ATTACHMENT_BYTES - inlineImageBytes(bodyNow)
-                    attachments.mapNotNull { att ->
+                    attachmentsNow.mapNotNull { att ->
                         val bytes = readUriBytesLimited(context.contentResolver, att.uri, remaining)
                             ?: return@mapNotNull null
                         remaining -= bytes.size
@@ -1554,7 +1576,7 @@ fun ComposeScreen(
                         )
                     }
                 }
-                if (fileDraftAttachments.size != attachments.size) {
+                if (fileDraftAttachments.size != attachmentsNow.size) {
                     SafeToast.long(context, attachmentUnreadableMsg)
                     return@launch
                 }
@@ -1566,21 +1588,21 @@ fun ComposeScreen(
                     }.toMap()
                 }
                 val content = com.dedovmosol.iwomail.domain.DraftSaver.Content(
-                    to = normalizeRecipients(to),
-                    cc = normalizeRecipients(cc),
-                    bcc = normalizeRecipients(bcc),
+                    to = normalizeRecipients(toNow),
+                    cc = normalizeRecipients(ccNow),
+                    bcc = normalizeRecipients(bccNow),
                     bccKnown = draftBccKnown,
-                    subject = subject,
+                    subject = subjectNow,
                     body = bodyNow,
-                    importance = if (highPriority) 2 else 1,
+                    importance = if (highPriorityNow) 2 else 1,
                     fromEmail = account.email,
                     fromName = account.displayName,
                     files = fileDraftAttachments,
-                    filesUnchanged = attachmentStrings == initialDraftAttachments,
+                    filesUnchanged = attachmentStringsNow == initialDraftAttachments,
                     knownImageCids = knownImageCids,
                     unloadedAttachmentIds = draftUnloadedAttachmentIds.toSet(),
                     receipts = if (draftReceiptsKnown) {
-                        com.dedovmosol.iwomail.eas.ReceiptRequests(requestReadReceipt, requestDeliveryReceipt)
+                        com.dedovmosol.iwomail.eas.ReceiptRequests(readReceiptNow, deliveryReceiptNow)
                     } else null
                 )
                 val existingId = editDraftId?.takeIf { it != "synced" }
@@ -1630,8 +1652,17 @@ fun ComposeScreen(
 
         work.launch {
             try {
+                val fields = snapFields()
+                val account = fields.account
+                val toNow = fields.to
+                val ccNow = fields.cc
+                val bccNow = fields.bcc
+                val subjectNow = fields.subject
+                val attachmentsNow = fields.attachments
+                val highPriorityNow = fields.highPriority
+                val readReceiptNow = fields.readReceipt
+                val deliveryReceiptNow = fields.deliveryReceipt
                 val bodyNow = snapshotBody()
-                val account = activeAccount
                 if (account == null) {
                     SafeToast.short(context, accountNotFoundMsg)
                     return@launch
@@ -1641,7 +1672,7 @@ fun ComposeScreen(
                 // ДО чтения байт в память. Иначе крупное вложение ИЛИ тяжёлое тело с inline data:URL
                 // (которые уходят как HTML-тело, минуя список вложений) вызовет OutOfMemoryError на
                 // readBytes/сборке MIME раньше серверного лимита EAS.
-                val totalAttachmentSize = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachments, bodyNow) }
+                val totalAttachmentSize = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachmentsNow, bodyNow) }
                 if (totalAttachmentSize > MAX_TOTAL_ATTACHMENT_BYTES) {
                     SafeToast.short(context, attachmentLimitExceededMsg)
                     return@launch
@@ -1651,22 +1682,22 @@ fun ComposeScreen(
                 // без него, а пользователь не узнал бы (раньше такое вложение молча пропадало).
                 val readAttachments = withContext(Dispatchers.IO) {
                     var remaining = MAX_TOTAL_ATTACHMENT_BYTES - inlineImageBytes(bodyNow)
-                    attachments.map { att ->
+                    attachmentsNow.map { att ->
                         val bytes = readUriBytesLimited(context.contentResolver, att.uri, remaining)
                         if (bytes != null) remaining -= bytes.size
                         bytes?.let { Triple(att.name, att.mimeType, it) }
                     }
                 }
-                val unreadable = attachments.zip(readAttachments).firstOrNull { it.second == null }?.first
+                val unreadable = attachmentsNow.zip(readAttachments).firstOrNull { it.second == null }?.first
                 if (unreadable != null) {
                     SafeToast.long(context, "$attachmentUnreadableMsg: ${unreadable.name}")
                     return@launch
                 }
                 val outgoingAttachments = readAttachments.filterNotNull()
                 val cleanBody = cleanOutgoingBody(bodyNow)
-                val expandedTo = expandGroupTokens(to, groupMappings)
-                val expandedCc = expandGroupTokens(cc, groupMappings)
-                val expandedBcc = expandGroupTokens(bcc, groupMappings)
+                val expandedTo = expandGroupTokens(toNow, fields.groupMappings)
+                val expandedCc = expandGroupTokens(ccNow, fields.groupMappings)
+                val expandedBcc = expandGroupTokens(bccNow, fields.groupMappings)
                 if (scheduledTime != null && scheduledTime > System.currentTimeMillis()) {
                     // Отправляемый черновик удалится после отправки, если его с тех пор не меняли.
                     val scheduledDraftId = editDraftId?.takeIf { it != "synced" }
@@ -1677,11 +1708,11 @@ fun ComposeScreen(
                         accountId = account.id,
                         mail = com.dedovmosol.iwomail.domain.OutgoingMail(
                             to = expandedTo, cc = expandedCc, bcc = expandedBcc,
-                            subject = subject, body = cleanBody,
+                            subject = subjectNow, body = cleanBody,
                             attachments = outgoingAttachments,
-                            importance = if (highPriority) 2 else 1,
-                            requestReadReceipt = requestReadReceipt,
-                            requestDeliveryReceipt = requestDeliveryReceipt,
+                            importance = if (highPriorityNow) 2 else 1,
+                            requestReadReceipt = readReceiptNow,
+                            requestDeliveryReceipt = deliveryReceiptNow,
                             // Пересылка: сервер добавит исходное письмо с вложениями и при отложенной отправке
                             forwardFolderId = forwardSourceFolderServerId,
                             forwardItemId = forwardSourceEmailServerId
@@ -1692,7 +1723,7 @@ fun ComposeScreen(
                         draftStamp = draftStamp
                     )
                     // Тело и вложения пишутся в файлы — не на главном потоке.
-                    withContext(Dispatchers.IO) { com.dedovmosol.iwomail.sync.ScheduledSend.schedule(context, job) }
+                    withContext(Dispatchers.IO) { com.dedovmosol.iwomail.sync.ScheduledSend.schedule(context.applicationContext, job) }
                     SafeToast.short(context, sendScheduledMsg)
                     work.markLeaving()
                     try {
@@ -1712,12 +1743,12 @@ fun ComposeScreen(
                     to = expandedTo,
                     cc = expandedCc,
                     bcc = expandedBcc,
-                    subject = subject,
+                    subject = subjectNow,
                     body = cleanBody,
                     attachments = attachmentDataList,
-                    importance = if (highPriority) 2 else 1,
-                    requestReadReceipt = requestReadReceipt,
-                    requestDeliveryReceipt = requestDeliveryReceipt,
+                    importance = if (highPriorityNow) 2 else 1,
+                    requestReadReceipt = readReceiptNow,
+                    requestDeliveryReceipt = deliveryReceiptNow,
                     draftId = editDraftId,
                     forwardSourceFolderId = forwardSourceFolderServerId,
                     forwardSourceItemId = forwardSourceEmailServerId
@@ -1760,10 +1791,10 @@ fun ComposeScreen(
     }
 
     // Диалог подтверждения выхода — сохранить или нет
-    if (showDiscardDialog) {
+    if (work.askDiscard) {
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = {
-                if (!work.sending && !work.savingDraft) showDiscardDialog = false
+                if (!work.sending && !work.savingDraft) work.askDiscard = false
             },
             icon = { Icon(AppIcons.Edit, null) },
             title = { Text(if (editDraftId != null) (if (currentLanguage == AppLanguage.RUSSIAN) "Сохранить изменения?" else "Save changes?") else Strings.discardDraftQuestion) },
@@ -1771,7 +1802,7 @@ fun ComposeScreen(
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
-                        showDiscardDialog = false
+                        work.askDiscard = false
                         saveDraft()
                     },
                     text = Strings.saveDraft,
@@ -1781,7 +1812,7 @@ fun ComposeScreen(
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
-                        showDiscardDialog = false
+                        work.askDiscard = false
                         handleBackNavigation()
                     },
                     text = Strings.doNotSave,
@@ -2162,23 +2193,38 @@ fun ComposeScreen(
 
     // Единая логика проверки при выходе (DRY)
     fun handleBackPress() {
-        if (work.isBusy()) return
-        scope.launch {
-            val html = snapshotBody()
-            if (editDraftId != null) {
-                val hasDraftChanges = to != initialDraftTo || cc != initialDraftCc || bcc != initialDraftBcc ||
-                    highPriority != initialDraftHighPriority || subject != initialDraftSubject ||
-                    requestReadReceipt != initialDraftReadReceipt || requestDeliveryReceipt != initialDraftDeliveryReceipt ||
-                    html != initialDraftBody || attachmentStrings != initialDraftAttachments
-                if (hasDraftChanges) showDiscardDialog = true else handleBackNavigation()
-            } else {
-                val bodyPlainText = html
-                    .replace(SIGNATURE_DIV_REGEX, "")
-                    .replace(HTML_TAG_STRIP_REGEX, "")
-                    .replace("&nbsp;", " ")
-                    .trim()
-                val hasContent = to.isNotBlank() || subject.isNotBlank() || bodyPlainText.isNotBlank() || attachments.isNotEmpty() || (activeAccount?.id != initialAccountId && initialAccountId != null)
-                if (hasContent) showDiscardDialog = true else handleBackNavigation()
+        if (!work.tryBeginCheck()) return
+        work.launch {
+            try {
+                val fields = snapFields()
+                val toNow = fields.to
+                val ccNow = fields.cc
+                val bccNow = fields.bcc
+                val subjectNow = fields.subject
+                val attachmentsNow = fields.attachments
+                val attachmentStringsNow = fields.attachmentStrings
+                val highPriorityNow = fields.highPriority
+                val readReceiptNow = fields.readReceipt
+                val deliveryReceiptNow = fields.deliveryReceipt
+                val accountIdNow = fields.account?.id
+                val html = snapshotBody()
+                if (editDraftId != null) {
+                    val hasDraftChanges = toNow != initialDraftTo || ccNow != initialDraftCc || bccNow != initialDraftBcc ||
+                        highPriorityNow != initialDraftHighPriority || subjectNow != initialDraftSubject ||
+                        readReceiptNow != initialDraftReadReceipt || deliveryReceiptNow != initialDraftDeliveryReceipt ||
+                        html != initialDraftBody || attachmentStringsNow != initialDraftAttachments
+                    if (hasDraftChanges) work.askDiscard = true else handleBackNavigation()
+                } else {
+                    val bodyPlainText = html
+                        .replace(SIGNATURE_DIV_REGEX, "")
+                        .replace(HTML_TAG_STRIP_REGEX, "")
+                        .replace("&nbsp;", " ")
+                        .trim()
+                    val hasContent = toNow.isNotBlank() || subjectNow.isNotBlank() || bodyPlainText.isNotBlank() || attachmentsNow.isNotEmpty() || (accountIdNow != initialAccountId && initialAccountId != null)
+                    if (hasContent) work.askDiscard = true else handleBackNavigation()
+                }
+            } finally {
+                work.checkingBack = false
             }
         }
     }
@@ -2203,20 +2249,20 @@ fun ComposeScreen(
                     if (signatures.size > 1) {
                         IconButton(
                             onClick = { showSignaturePicker = true },
-                            enabled = !work.sending && !work.savingDraft
+                            enabled = !work.isBusy()
                         ) {
                             Icon(AppIcons.Draw, contentDescription = if (currentLanguage == AppLanguage.RUSSIAN) "Подпись" else "Signature", tint = Color.White)
                         }
                     }
                     IconButton(
                         onClick = { filePickerLauncher.launchLeavingApp(arrayOf("*/*")) },
-                        enabled = !work.sending && !work.savingDraft
+                        enabled = !work.isBusy()
                     ) {
                         Icon(AppIcons.Attachment, Strings.attach, tint = Color.White)
                     }
                     IconButton(
                         onClick = { sendEmail() },
-                        enabled = !work.sending && !work.savingDraft && areRecipientsValid
+                        enabled = !work.isBusy() && areRecipientsValid
                     ) {
                         if (work.sending) {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = Color.White)
@@ -2227,7 +2273,7 @@ fun ComposeScreen(
                     Box {
                         IconButton(
                             onClick = { showMenu = true },
-                            enabled = !work.sending && !work.savingDraft
+                            enabled = !work.isBusy()
                         ) {
                             Icon(AppIcons.MoreVert, Strings.more, tint = Color.White)
                         }

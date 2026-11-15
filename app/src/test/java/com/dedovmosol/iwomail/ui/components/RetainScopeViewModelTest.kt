@@ -30,4 +30,17 @@ class RetainScopeViewModelTest {
         assertThat(vm.tryBeginSend()).isFalse()
         assertThat(vm.tryBeginSave()).isFalse()
     }
+
+    @Test
+    fun `check back blocks send until released`() {
+        val vm = RetainScopeViewModel()
+        assertThat(vm.tryBeginCheck()).isTrue()
+        assertThat(vm.tryBeginSend()).isFalse()
+        assertThat(vm.tryBeginSave()).isFalse()
+        vm.checkingBack = false
+        vm.askDiscard = true
+        assertThat(vm.tryBeginSend()).isFalse()
+        vm.askDiscard = false
+        assertThat(vm.tryBeginSend()).isTrue()
+    }
 }

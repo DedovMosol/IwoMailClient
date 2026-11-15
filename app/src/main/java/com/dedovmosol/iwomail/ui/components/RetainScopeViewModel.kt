@@ -20,8 +20,10 @@ class RetainScopeViewModel : ViewModel() {
     var savingDraft by mutableStateOf(false)
     var leaving by mutableStateOf(false)
     var hideEditor by mutableStateOf(false)
+    var askDiscard by mutableStateOf(false)
+    var checkingBack by mutableStateOf(false)
 
-    fun isBusy(): Boolean = sending || savingDraft || leaving
+    fun isBusy(): Boolean = sending || savingDraft || leaving || checkingBack || askDiscard
 
     fun tryBeginSend(): Boolean {
         if (isBusy()) return false
@@ -32,6 +34,12 @@ class RetainScopeViewModel : ViewModel() {
     fun tryBeginSave(): Boolean {
         if (isBusy()) return false
         savingDraft = true
+        return true
+    }
+
+    fun tryBeginCheck(): Boolean {
+        if (isBusy()) return false
+        checkingBack = true
         return true
     }
 

@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.sync
 
+import android.app.AlarmManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -20,59 +21,73 @@ class BootReceiver : BroadcastReceiver() {
     }
     
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
-            intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
-            
-            val pendingResult = goAsync()
-            val scope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.IO)
-            scope.launch {
-                try {
-                    val database = MailDatabase.getInstance(context)
-                    val accounts = database.accountDao().getAllAccountsList()
-                    
-                    if (accounts.isEmpty()) {
-                        return@launch
+        val action = intent.action ?: return
+        val exactAlarmGranted = action == AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED
+        val bootOrReplace = action == Intent.ACTION_BOOT_COMPLETED ||
+            action == Intent.ACTION_MY_PACKAGE_REPLACED
+        if (!exactAlarmGranted && !bootOrReplace) return
+
+        val app = context.applicationContext
+        val pendingResult = goAsync()
+        val scope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.IO)
+        scope.launch {
+            try {
+                if (exactAlarmGranted) {
+                    // API 31+: после выдачи SCHEDULE_EXACT_ALARM система шлёт этот broadcast
+                    // (при отзыве — нет, exact alarm уже стёрты). canScheduleExactAlarms()
+                    // обязателен: к моменту доставки разрешение могли снова снять.
+                    if (BackgroundWork.exactAlarmsAllowed(app)) {
+                        RescheduleRemindersWorker.enqueue(app)
+                        ScheduledSend.rearm(app)
                     }
-                    
-                    // Используем эффективный интервал с учётом ночного режима
-                    SyncWorker.scheduleWithNightMode(context)
-                    
-                    // Планируем AlarmManager как fallback для всех аккаунтов
-                    val minInterval = SyncWorker.getMinSyncInterval(context)
-                    val intervalMinutes = if (minInterval > 0) minInterval else 15
-                    PushService.scheduleSyncAlarm(context, intervalMinutes)
-                    
-                    // Запускаем PushService только если есть Exchange аккаунты с режимом PUSH
-                    val hasExchangePushAccounts = accounts.any { 
-                        it.accountType == AccountType.EXCHANGE.name &&
+                    return@launch
+                }
+
+                val database = MailDatabase.getInstance(app)
+                val accounts = database.accountDao().getAllAccountsList()
+
+                if (accounts.isEmpty()) {
+                    return@launch
+                }
+
+                // Используем эффективный интервал с учётом ночного режима
+                SyncWorker.scheduleWithNightMode(app)
+
+                // Планируем AlarmManager как fallback для всех аккаунтов
+                val minInterval = SyncWorker.getMinSyncInterval(app)
+                val intervalMinutes = if (minInterval > 0) minInterval else 15
+                PushService.scheduleSyncAlarm(app, intervalMinutes)
+
+                // Запускаем PushService только если есть Exchange аккаунты с режимом PUSH
+                val hasExchangePushAccounts = accounts.any {
+                    it.accountType == AccountType.EXCHANGE.name &&
                         it.syncMode == SyncMode.PUSH.name
-                    }
-                    
-                    if (hasExchangePushAccounts) {
-                        try {
-                            PushService.start(context)
-                        } catch (e: Exception) {
-                            android.util.Log.w(TAG, "Failed to start PushService after boot", e)
-                        }
-                    }
-                    
-                    RescheduleRemindersWorker.enqueue(context)
-                    // Будильники отложенной отправки стёрты перезагрузкой (и обновлением) — заново
-                    ScheduledSend.rearm(context)
-                    
-                    // Обновляем виджет — на ряде устройств ACTION_APPWIDGET_UPDATE
-                    // не отправляется после MY_PACKAGE_REPLACED
-                    com.dedovmosol.iwomail.widget.updateMailWidget(context)
-                    
-                } catch (e: Exception) {
-                    android.util.Log.e(TAG, "Failed to handle boot completed", e)
-                } finally {
-                    scope.cancel()
+                }
+
+                if (hasExchangePushAccounts) {
                     try {
-                        pendingResult.finish()
+                        PushService.start(app)
                     } catch (e: Exception) {
-                        android.util.Log.w(TAG, "Failed to finish pending result", e)
+                        android.util.Log.w(TAG, "Failed to start PushService after boot", e)
                     }
+                }
+
+                RescheduleRemindersWorker.enqueue(app)
+                // Будильники отложенной отправки стёрты перезагрузкой (и обновлением) — заново
+                ScheduledSend.rearm(app)
+
+                // Обновляем виджет — на ряде устройств ACTION_APPWIDGET_UPDATE
+                // не отправляется после MY_PACKAGE_REPLACED
+                com.dedovmosol.iwomail.widget.updateMailWidget(app)
+
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "Failed to handle $action", e)
+            } finally {
+                scope.cancel()
+                try {
+                    pendingResult.finish()
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "Failed to finish pending result", e)
                 }
             }
         }

@@ -228,7 +228,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             pendingIntent?.let { alarmManager.cancel(it) }
         }
 
-        private const val MAX_SCHEDULED_REMINDERS = 150
+        const val MAX_SCHEDULED_REMINDERS = 150
 
         /**
          * Планирует напоминания для ближайших событий (до MAX_SCHEDULED_REMINDERS).
@@ -236,18 +236,9 @@ class CalendarReminderReceiver : BroadcastReceiver() {
          * (MIUI/HyperOS, Samsung, OPPO, RealMe).
          */
         fun rescheduleAllReminders(context: Context, events: List<CalendarEventEntity>) {
-            val now = System.currentTimeMillis()
-            events.forEach { cancelReminder(context, it.id) }
-            val eligible = events
-                .filter { it.reminder > 0 && it.startTime > now }
-                .map { it to (it.startTime - it.reminder * 60_000L) }
-                .filter { (_, reminderTime) -> reminderTime > now }
-                .sortedBy { (_, reminderTime) -> reminderTime }
-                .take(MAX_SCHEDULED_REMINDERS)
-
-            eligible.forEach { (event, reminderTime) ->
+            for (event in events) {
                 try {
-                    scheduleReminderAt(context, event.id, reminderTime)
+                    scheduleReminder(context, event)
                 } catch (e: Exception) {
                     android.util.Log.w("CalendarReminder", "Failed to schedule alarm for ${event.id}: ${e.message}")
                 }

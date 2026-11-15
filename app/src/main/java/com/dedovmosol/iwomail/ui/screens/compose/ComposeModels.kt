@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.ui.screens.compose
 
 import android.net.Uri
+import com.dedovmosol.iwomail.data.database.AccountEntity
 
 data class EmailSuggestion(
     val email: String,
@@ -71,6 +72,20 @@ enum class ImageQuality(val maxSize: Int, val jpegQuality: Int, val labelRu: Str
     LARGE(1600, 90, "Большое (~600 КБ)", "Large (~600 KB)"),
     ORIGINAL(4096, 95, "Оригинал (макс. качество)", "Original (max quality)")
 }
+
+internal data class ComposeFieldSnap(
+    val to: String,
+    val cc: String,
+    val bcc: String,
+    val subject: String,
+    val attachments: List<AttachmentInfo>,
+    val attachmentStrings: List<String>,
+    val highPriority: Boolean,
+    val readReceipt: Boolean,
+    val deliveryReceipt: Boolean,
+    val account: AccountEntity?,
+    val groupMappings: Map<String, List<String>>
+)
 
 data class AttachmentInfo(
     val uri: Uri,
