@@ -1767,7 +1767,7 @@ fun ComposeScreen(
                         saveDraft()
                     },
                     text = Strings.saveDraft,
-                    enabled = !work.savingDraft
+                    enabled = !work.savingDraft && !work.sending
                 )
             },
             dismissButton = {
@@ -1777,7 +1777,7 @@ fun ComposeScreen(
                         handleBackNavigation()
                     },
                     text = Strings.doNotSave,
-                    enabled = !work.savingDraft
+                    enabled = !work.savingDraft && !work.sending
                 )
             }
         )
@@ -2154,6 +2154,7 @@ fun ComposeScreen(
 
     // Единая логика проверки при выходе (DRY)
     fun handleBackPress() {
+        if (work.sending || work.savingDraft) return
         scope.launch {
             flushEditorHtml()
             if (editDraftId != null) {
@@ -2199,7 +2200,7 @@ fun ComposeScreen(
                     }
                     IconButton(
                         onClick = { sendEmail() },
-                        enabled = !work.sending && areRecipientsValid
+                        enabled = !work.sending && !work.savingDraft && areRecipientsValid
                     ) {
                         if (work.sending) {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = Color.White)

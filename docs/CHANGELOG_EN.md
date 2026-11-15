@@ -6,7 +6,7 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 ## v1.6.3b
 ### Compose send and reminder alarms (2026-11-15)
 - Send and draft save run in `RetainScopeViewModel` (scope plus sending/savingDraft flags), so a rotation neither cancels the Job nor sticks the Send button
-- Reminders: `scheduleRtcWakeup` uses exact, then while-idle, then `set`. Worker retries (not success), KEEP so enqueue does not reset the attempt counter, stops after 5. Send and draft save are mutually exclusive
+- Reminders: `scheduleRtcWakeup` uses exact, then while-idle, then `set`. Worker retries (not success), KEEP so enqueue does not reset the attempt counter, stops after 5. Send and draft save are mutually exclusive, Back does not leave the screen while they run
 ### README and XmlPullParser plan (2026-11-15)
 - Recommended OS: Android 13+ (API 33), minimum still 8.0 (API 26)
 - `docs/XMLPULLPARSER_MIGRATION_PLAN.md`: what already uses `EasXmlParser` (contacts, notes, mail XML, CalendarXmlParser, Provision, SyncStream) and what is still regex

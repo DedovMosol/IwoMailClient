@@ -6,7 +6,7 @@
 ## v1.6.3b
 ### Отправка письма и будильники напоминаний (15.11.2026)
 - Отправка и сохранение черновика живут в `RetainScopeViewModel` (scope и флаги sending/savingDraft), поворот не рвёт Job и не залипает кнопка «Отправка»
-- Напоминания: `BackgroundWork.scheduleRtcWakeup` — exact, иначе while-idle, иначе `set`. Воркер retry (не success), KEEP чтобы enqueue не сбрасывал счётчик, стоп после 5 попыток. Отправка и черновик не идут параллельно
+- Напоминания: `BackgroundWork.scheduleRtcWakeup` — exact, иначе while-idle, иначе `set`. Воркер retry (не success), KEEP чтобы enqueue не сбрасывал счётчик, стоп после 5 попыток. Отправка и черновик не параллельны, «Назад» во время них не закрывает экран
 ### README и план XmlPullParser (15.11.2026)
 - Рекомендуемая ОС: Android 13+ (API 33), минимум по-прежнему 8.0 (API 26). В README точки с запятой в прозе заменены на запятые
 - `docs/XMLPULLPARSER_MIGRATION_PLAN.md`: отмечено, что уже на `EasXmlParser` (контакты, заметки, почта XML, CalendarXmlParser, Provision, SyncStream), что ещё regex
