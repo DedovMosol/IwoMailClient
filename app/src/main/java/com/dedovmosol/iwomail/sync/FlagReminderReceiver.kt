@@ -6,7 +6,6 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.dedovmosol.iwomail.MailApplication
 import com.dedovmosol.iwomail.MainActivity
@@ -99,15 +98,7 @@ class FlagReminderReceiver : BroadcastReceiver() {
                 val pending = PendingIntent.getBroadcast(
                     context, requestCode(row.id), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
-                try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarms.canScheduleExactAlarms()) {
-                        alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, time, pending)
-                    } else {
-                        alarms.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, time, pending)
-                    }
-                } catch (e: SecurityException) {
-                    android.util.Log.w("FlagReminder", "Alarm denied: ${e.message}")
-                }
+                BackgroundWork.scheduleRtcWakeup(alarms, time, pending)
             }
         }
     }

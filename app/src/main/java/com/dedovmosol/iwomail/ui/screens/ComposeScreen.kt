@@ -170,6 +170,7 @@ fun ComposeScreen(
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
+    val work = androidx.lifecycle.viewmodel.compose.viewModel<com.dedovmosol.iwomail.ui.components.RetainScopeViewModel>()
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val currentLanguage = LocalLanguage.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
@@ -1517,7 +1518,7 @@ fun ComposeScreen(
         // Флаг — синхронно, до launch: корутина стартует не сразу, и двойное нажатие успевало
         // запустить два сохранения (два черновика на сервере).
         isSavingDraft = true
-        scope.launch {
+        work.launch {
             try {
                 flushEditorHtml()
 
@@ -1630,7 +1631,7 @@ fun ComposeScreen(
         if (isSending) return
         isSending = true
 
-        scope.launch {
+        work.launch {
             try {
                 flushEditorHtml()
                 val account = activeAccount

@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.sync
 
 import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.Context
 import android.os.Build
 import android.os.PowerManager
@@ -19,4 +20,33 @@ object BackgroundWork {
     fun exactAlarmsAllowed(context: Context): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
             context.getSystemService(AlarmManager::class.java)?.canScheduleExactAlarms() == true
+
+    /**
+     * RTC_WAKEUP: точный alarm, если система даёт, иначе обычный.
+     * OEM-квота `setExact` бросает [SecurityException] даже после [canScheduleExactAlarms] —
+     * тогда тоже неточный [AlarmManager.set], чтобы воркер не считал весь проход успешным вхолостую.
+     */
+    fun scheduleRtcWakeup(alarmManager: AlarmManager, triggerAtMillis: Long, pendingIntent: PendingIntent) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+            } else {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent
+                )
+            }
+        } catch (e: SecurityException) {
+            android.util.Log.w(TAG, "Exact alarm denied, inexact fallback: ${e.message}")
+            try {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+            } catch (e2: SecurityException) {
+                android.util.Log.e(TAG, "Inexact alarm also denied", e2)
+                throw e2
+            }
+        }
+    }
+
+    private const val TAG = "BackgroundWork"
 }
