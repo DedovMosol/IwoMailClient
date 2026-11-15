@@ -197,7 +197,6 @@ fun ComposeScreen(
     val areRecipientsValid by remember { derivedStateOf { to.isNotBlank() && isToValid && isCcValid && isBccValid } }
     val bodySaver = remember { createLargeStringSaver(context.cacheDir, "body") }
     var body by rememberSaveable(stateSaver = bodySaver) { mutableStateOf("") }
-    var isSending by rememberSaveable { mutableStateOf(false) }
     var showCcBcc by rememberSaveable { mutableStateOf(false) }
 
     // Флаг для скрытия WebView перед навигацией (избегаем краша RenderThread)
@@ -333,7 +332,6 @@ fun ComposeScreen(
     var showMenu by rememberSaveable { mutableStateOf(false) }
     var showScheduleDialog by rememberSaveable { mutableStateOf(false) }
     var showDiscardDialog by rememberSaveable { mutableStateOf(false) }
-    var isSavingDraft by remember { mutableStateOf(false) }
 
     // Предупреждение о дубликате email
     var duplicateEmail by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1514,10 +1512,10 @@ fun ComposeScreen(
 
     // Функция сохранения черновика (на сервер для Exchange, локально для остальных)
     fun saveDraft() {
-        if (isSavingDraft) return
+        if (work.savingDraft) return
         // Флаг — синхронно, до launch: корутина стартует не сразу, и двойное нажатие успевало
         // запустить два сохранения (два черновика на сервере).
-        isSavingDraft = true
+        work.savingDraft = true
         work.launch {
             try {
                 flushEditorHtml()
@@ -1618,7 +1616,7 @@ fun ComposeScreen(
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 SafeToast.long(context, "${draftSaveErrorMsg}: ${e.message}")
             } finally {
-                isSavingDraft = false
+                work.savingDraft = false
             }
         }
     }
@@ -1628,15 +1626,15 @@ fun ComposeScreen(
     val sendErrorText = Strings.sendError // Захватываем в Composable scope
 
     fun sendEmail(scheduledTime: Long? = null) {
-        if (isSending) return
-        isSending = true
+        if (work.sending) return
+        work.sending = true
 
         work.launch {
             try {
                 flushEditorHtml()
                 val account = activeAccount
                 if (account == null) {
-                    isSending = false
+                    work.sending = false
                     SafeToast.short(context, accountNotFoundMsg)
                     return@launch
                 }
@@ -1647,7 +1645,7 @@ fun ComposeScreen(
                 // readBytes/сборке MIME раньше серверного лимита EAS.
                 val totalAttachmentSize = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachments, body) }
                 if (totalAttachmentSize > MAX_TOTAL_ATTACHMENT_BYTES) {
-                    isSending = false
+                    work.sending = false
                     SafeToast.short(context, attachmentLimitExceededMsg)
                     return@launch
                 }
@@ -1664,7 +1662,7 @@ fun ComposeScreen(
                 }
                 val unreadable = attachments.zip(readAttachments).firstOrNull { it.second == null }?.first
                 if (unreadable != null) {
-                    isSending = false
+                    work.sending = false
                     SafeToast.long(context, "$attachmentUnreadableMsg: ${unreadable.name}")
                     return@launch
                 }
@@ -1749,7 +1747,7 @@ fun ComposeScreen(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                isSending = false
+                work.sending = false
                 SafeToast.long(context, "${sendErrorText}: ${e.message}")
             }
         }
@@ -1769,7 +1767,7 @@ fun ComposeScreen(
                         saveDraft()
                     },
                     text = Strings.saveDraft,
-                    enabled = !isSavingDraft
+                    enabled = !work.savingDraft
                 )
             },
             dismissButton = {
@@ -1779,7 +1777,7 @@ fun ComposeScreen(
                         handleBackNavigation()
                     },
                     text = Strings.doNotSave,
-                    enabled = !isSavingDraft
+                    enabled = !work.savingDraft
                 )
             }
         )
@@ -2201,9 +2199,9 @@ fun ComposeScreen(
                     }
                     IconButton(
                         onClick = { sendEmail() },
-                        enabled = !isSending && areRecipientsValid
+                        enabled = !work.sending && areRecipientsValid
                     ) {
-                        if (isSending) {
+                        if (work.sending) {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = Color.White)
                         } else {
                             Icon(AppIcons.Send, Strings.send, tint = Color.White)

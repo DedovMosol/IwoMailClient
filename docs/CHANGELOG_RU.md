@@ -5,7 +5,7 @@
 
 ## v1.6.3b
 ### Отправка письма и будильники напоминаний (15.11.2026)
-- Отправка и сохранение черновика живут в `RetainScopeViewModel.viewModelScope`, поворот экрана больше не рвёт Job композиции
+- Отправка и сохранение черновика живут в `RetainScopeViewModel` (scope и флаги sending/savingDraft), поворот не рвёт Job и не залипает кнопка «Отправка»
 - Напоминания: `BackgroundWork.scheduleRtcWakeup` — при отказе exact alarm ставится `setAndAllowWhileIdle`. Воркер при `SecurityException` делает retry с backoff, не success вхолостую
 ### README и план XmlPullParser (15.11.2026)
 - Рекомендуемая ОС: Android 13+ (API 33), минимум по-прежнему 8.0 (API 26). В README точки с запятой в прозе заменены на запятые
