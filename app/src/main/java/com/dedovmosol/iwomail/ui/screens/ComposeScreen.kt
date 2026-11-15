@@ -200,7 +200,6 @@ fun ComposeScreen(
     var showCcBcc by rememberSaveable { mutableStateOf(false) }
 
     // Флаг для скрытия WebView перед навигацией (избегаем краша RenderThread)
-    var hideWebView by remember { mutableStateOf(false) }
 
     // Rich Text Editor контроллер
     val richTextController = rememberRichTextEditorController()
@@ -535,14 +534,12 @@ fun ComposeScreen(
     // Отслеживание начального аккаунта для определения изменений
     var initialAccountId by rememberSaveable { mutableStateOf<Long?>(null) }
 
-    var backNavigationInProgress by remember { mutableStateOf(false) }
-
     fun handleBackNavigation() {
-        if (backNavigationInProgress) return
-        backNavigationInProgress = true
-        hideWebView = true
+        if (work.leaving) return
+        work.leaving = true
+        work.hideEditor = true
 
-        scope.launch {
+        work.launch {
             delay(100)
 
             val currentAccountId = activeAccount?.id
@@ -554,7 +551,13 @@ fun ComposeScreen(
                 }
             }
 
-            onBackClick()
+            try {
+                onBackClick()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                work.leaving = false
+                work.hideEditor = false
+            }
         }
     }
 
@@ -1732,13 +1735,13 @@ fun ComposeScreen(
                 )
 
                 // CS-6: единственный teardown WebView — через RichTextEditor.onRelease.
-                // hideWebView=true убирает редактор из композиции → onRelease делает полный и
+                // work.hideEditor=true убирает редактор из композиции → onRelease делает полный и
                 // корректный teardown (stopLoading / about:blank / removeView / destroy /
                 // webView=null / isLoaded=false) ДО навигации. Прежний ручной destroy здесь убран:
                 // он дублировал onRelease (двойной destroy на одном инстансе). Задержка даёт
                 // композиции обработать disposal перед onSent(). Совпадает с паттерном teardown
                 // WebView в EmailDetailScreen (единственный путь освобождения).
-                hideWebView = true
+                work.hideEditor = true
                 kotlinx.coroutines.delay(150)
                 try {
                     onSent()
@@ -1747,8 +1750,9 @@ fun ComposeScreen(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                work.sending = false
                 SafeToast.long(context, "${sendErrorText}: ${e.message}")
+            } finally {
+                if (!work.leaving) work.sending = false
             }
         }
     }
@@ -2191,11 +2195,17 @@ fun ComposeScreen(
                 actions = {
                     // Кнопка выбора подписи (только если больше 1 подписи)
                     if (signatures.size > 1) {
-                        IconButton(onClick = { showSignaturePicker = true }) {
+                        IconButton(
+                            onClick = { showSignaturePicker = true },
+                            enabled = !work.sending && !work.savingDraft
+                        ) {
                             Icon(AppIcons.Draw, contentDescription = if (currentLanguage == AppLanguage.RUSSIAN) "Подпись" else "Signature", tint = Color.White)
                         }
                     }
-                    IconButton(onClick = { filePickerLauncher.launchLeavingApp(arrayOf("*/*")) }) {
+                    IconButton(
+                        onClick = { filePickerLauncher.launchLeavingApp(arrayOf("*/*")) },
+                        enabled = !work.sending && !work.savingDraft
+                    ) {
                         Icon(AppIcons.Attachment, Strings.attach, tint = Color.White)
                     }
                     IconButton(
@@ -2209,7 +2219,10 @@ fun ComposeScreen(
                         }
                     }
                     Box {
-                        IconButton(onClick = { showMenu = true }) {
+                        IconButton(
+                            onClick = { showMenu = true },
+                            enabled = !work.sending && !work.savingDraft
+                        ) {
                             Icon(AppIcons.MoreVert, Strings.more, tint = Color.White)
                         }
                         DropdownMenu(
@@ -2274,7 +2287,7 @@ fun ComposeScreen(
         },
         bottomBar = {
             // Панель форматирования внизу (над клавиатурой) — только когда фокус в body
-            if (!hideWebView && !isHeaderFieldFocused) {
+            if (!work.hideEditor && !isHeaderFieldFocused) {
                 Column(
                     modifier = Modifier
                         .windowInsetsPadding(WindowInsets.navigationBars)
@@ -2636,7 +2649,7 @@ fun ComposeScreen(
             HorizontalDivider()
 
             // Тело письма - Rich Text Editor (скрываем перед навигацией чтобы избежать краша)
-            if (!hideWebView) {
+            if (!work.hideEditor) {
                 val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
                 val isTablet = configuration.screenWidthDp >= 600
                 val editorMinHeightDp = when {

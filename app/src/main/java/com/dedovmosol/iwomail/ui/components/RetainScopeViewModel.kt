@@ -18,6 +18,8 @@ import kotlinx.coroutines.launch
 class RetainScopeViewModel : ViewModel() {
     var sending by mutableStateOf(false)
     var savingDraft by mutableStateOf(false)
+    var leaving by mutableStateOf(false)
+    var hideEditor by mutableStateOf(false)
 
     fun launch(block: suspend CoroutineScope.() -> Unit): Job =
         viewModelScope.launch(
