@@ -166,17 +166,17 @@ object ScheduledSend {
     /** Будильник и подстраховка для письма [dir] (после планирования, переноса и перезагрузки). */
     private fun arm(context: Context, dir: File, sendAt: Long, policy: ExistingWorkPolicy) {
         val now = System.currentTimeMillis()
-        val exact = BackgroundWork.exactAlarmsAllowed(context) && sendAt > now
+        var usedExact = false
         if (sendAt > now) {
             context.getSystemService(AlarmManager::class.java)?.let { alarms ->
                 try {
-                    BackgroundWork.scheduleRtcWakeup(alarms, sendAt, alarmIntent(context, dir))
+                    usedExact = BackgroundWork.scheduleRtcWakeup(alarms, sendAt, alarmIntent(context, dir))
                 } catch (e: SecurityException) {
                     android.util.Log.w("ScheduledSend", "Alarm denied: ${e.message}")
                 }
             }
         }
-        val delay = (sendAt - now).coerceAtLeast(0) + if (exact) BACKSTOP_DELAY_MS else 0
+        val delay = (sendAt - now).coerceAtLeast(0) + if (usedExact) BACKSTOP_DELAY_MS else 0
         WorkManager.getInstance(context).enqueueUniqueWork(
             workName(dir), policy, request(dir) { setInitialDelay(delay, TimeUnit.MILLISECONDS) }
         )

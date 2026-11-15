@@ -26,17 +26,19 @@ object BackgroundWork {
      * OEM-квота `setExact` бросает [SecurityException] даже после [canScheduleExactAlarms] —
      * тогда тоже неточный [AlarmManager.set], чтобы воркер не считал весь проход успешным вхолостую.
      */
-    fun scheduleRtcWakeup(alarmManager: AlarmManager, triggerAtMillis: Long, pendingIntent: PendingIntent) {
+    /** @return true, если поставлен точный alarm (подстраховка WorkManager может быть позже). */
+    fun scheduleRtcWakeup(alarmManager: AlarmManager, triggerAtMillis: Long, pendingIntent: PendingIntent): Boolean {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
                 alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
-            } else {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerAtMillis,
-                    pendingIntent
-                )
+                return false
             }
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                triggerAtMillis,
+                pendingIntent
+            )
+            return true
         } catch (e: SecurityException) {
             android.util.Log.w(TAG, "Exact alarm denied, inexact fallback: ${e.message}")
             try {
@@ -45,6 +47,7 @@ object BackgroundWork {
                 android.util.Log.w(TAG, "while-idle denied, using set(): ${e2.message}")
                 alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
             }
+            return false
         }
     }
 

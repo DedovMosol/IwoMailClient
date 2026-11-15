@@ -1697,7 +1697,13 @@ fun ComposeScreen(
                     withContext(Dispatchers.IO) { com.dedovmosol.iwomail.sync.ScheduledSend.schedule(context, job) }
                     SafeToast.short(context, sendScheduledMsg)
                     work.markLeaving()
-                    onSent()
+                    try {
+                        onSent()
+                    } catch (e2: Exception) {
+                        if (e2 is kotlinx.coroutines.CancellationException) throw e2
+                        work.leaving = false
+                        work.hideEditor = false
+                    }
                     return@launch
                 }
                 val attachmentDataList = outgoingAttachments.map { (name, mimeType, bytes) ->
@@ -1743,6 +1749,8 @@ fun ComposeScreen(
                     onSent()
                 } catch (e2: Exception) {
                     if (e2 is kotlinx.coroutines.CancellationException) throw e2
+                    work.leaving = false
+                    work.hideEditor = false
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
