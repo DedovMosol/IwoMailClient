@@ -1437,6 +1437,8 @@ $deleteCommands
             // email2:ConversationId (EAS 14.0+, OPAQUE → base64 при разборе WBXML); на Exchange 2007 его нет
             conversationId = deps.extractValue(xml, "ConversationId")?.trim()?.takeIf { it.isNotEmpty() },
             conversationIndex = deps.extractValue(xml, "ConversationIndex")?.trim()?.takeIf { it.isNotEmpty() },
+            // [MS-ASWBXML] page 2 (Email, 12.1) и page 22 (Email2, 14.0) не содержат токена
+            // InternetMessageId — на 2007 сюда почти никогда не попадёт; ID приходит из MIME при открытии.
             internetMessageId = deps.extractValue(xml, "InternetMessageId")?.trim()?.takeIf { it.isNotEmpty() }
                 ?.let { XmlUtils.unescape(it) }
         )
