@@ -606,7 +606,7 @@ class EasEmailService internal constructor(
 
     /**
      * Полный MIME письма: ItemOperations Fetch с MIMESupport=2 и BodyPreference Type 4 ([MS-ASCMD], [MS-ASAIRS]),
-     * до 20 МБ. Пусто — письма нет (Status 8) или MIME обрезан (Truncated): неполный MIME хуже никакого. EAS 12.1+.
+     * до 20 МБ. Пусто — нет объекта (Fetch Status 6), Range (8) или MIME обрезан. EAS 12.1+.
      */
     suspend fun fetchMime(collectionId: String, serverId: String): EasResult<String> {
 
@@ -632,10 +632,13 @@ class EasEmailService internal constructor(
 </ItemOperations>""".trimIndent()
 
         return deps.executeEasCommand("ItemOperations", mimeXml) { responseXml ->
-            val status = deps.extractValue(responseXml, "Status")?.toIntOrNull()
-
-            if (status == 8) {
-                return@executeEasCommand "" // Object not found
+            val status = EasPatterns.ITEM_OPS_FETCH_STATUS
+                .find(responseXml)?.groupValues?.get(1)?.toIntOrNull()
+                ?: deps.extractValue(responseXml, "Status")?.toIntOrNull()
+            if (status == ItemOperationsStatus.NOT_FOUND ||
+                status == ItemOperationsStatus.INVALID_RANGE
+            ) {
+                return@executeEasCommand ""
             }
 
             // КРИТИЧНО: Проверяем Truncated флаг.
@@ -1433,7 +1436,9 @@ $deleteCommands
             bodyTruncated = bodySectionAdd?.let { deps.extractValue(it, "Truncated") == "1" } ?: false,
             // email2:ConversationId (EAS 14.0+, OPAQUE → base64 при разборе WBXML); на Exchange 2007 его нет
             conversationId = deps.extractValue(xml, "ConversationId")?.trim()?.takeIf { it.isNotEmpty() },
-            conversationIndex = deps.extractValue(xml, "ConversationIndex")?.trim()?.takeIf { it.isNotEmpty() }
+            conversationIndex = deps.extractValue(xml, "ConversationIndex")?.trim()?.takeIf { it.isNotEmpty() },
+            internetMessageId = deps.extractValue(xml, "InternetMessageId")?.trim()?.takeIf { it.isNotEmpty() }
+                ?.let { XmlUtils.unescape(it) }
         )
     }
 

@@ -31,7 +31,8 @@ object FlagPresets {
                 val monday = plusDays(today, 7 - weekday, zone)
                 MailFlag.due(monday, plusDays(monday, FRIDAY, zone), reminder)
             }
-            FlagPreset.NO_DATE -> MailFlag(MailFlag.STATUS_ACTIVE, reminderTime = reminder)
+            // 2007: флаг без четырёх дат → Sync Status 6. Как звезда и Outlook Today.
+            FlagPreset.NO_DATE -> MailFlag.due(today, today, reminder)
         }
     }
 

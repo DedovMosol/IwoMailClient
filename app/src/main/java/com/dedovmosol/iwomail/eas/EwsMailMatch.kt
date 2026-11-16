@@ -44,13 +44,6 @@ object EwsMailMatch {
         return listOf(withBrackets, bare).distinct()
     }
 
-    /** 2007 хранит ID и со скобками, и без — оба литерала для IsEqualTo, без перехода к теме. */
-    fun findItemIdLiterals(internetMessageId: String): List<String> {
-        val bracketed = forEwsRestriction(internetMessageId)
-        val bare = bracketed.trim('<', '>')
-        return if (bare.isEmpty() || bare == bracketed) listOf(bracketed) else listOf(bracketed, bare)
-    }
-
     /**
      * Тело GetItem можно писать в эту локальную запись.
      * [lookedUpByMessageId]: FindItem был по InternetMessageId.

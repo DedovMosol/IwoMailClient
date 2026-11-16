@@ -1118,7 +1118,9 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             hasAttachments = email.attachments.isNotEmpty(),
             messageClass = email.messageClass,
             conversationId = email.conversationId,
-            conversationIndex = email.conversationIndex
+            conversationIndex = email.conversationIndex,
+            internetMessageId = email.internetMessageId?.takeIf { it.isNotBlank() }
+                ?: existingEmail?.internetMessageId
         ).withFlag(email.flag)
     }
 

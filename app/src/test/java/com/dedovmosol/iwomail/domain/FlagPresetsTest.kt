@@ -60,7 +60,9 @@ class FlagPresetsTest {
 
     @Test
     fun `no date flag`() {
-        assertThat(flag(FlagPreset.NO_DATE, "2026-10-29 09:00")).isEqualTo(MailFlag(MailFlag.STATUS_ACTIVE))
+        assertThat(flag(FlagPreset.NO_DATE, "2026-10-29 09:00")).isEqualTo(
+            MailFlag(MailFlag.STATUS_ACTIVE, day("2026-10-29"), day("2026-10-29"), null)
+        )
     }
 
     @Test

@@ -1523,7 +1523,9 @@ $foldersXml
             body = body,
             bodyType = bodyType,
             attachments = attachments,
-            flag = flag
+            flag = flag,
+            internetMessageId = extractValue(xml, "InternetMessageId")?.trim()?.takeIf { it.isNotEmpty() }
+                ?.let { unescapeXml(it) }
         )
     }
 
@@ -2643,7 +2645,9 @@ data class EasEmail(
     /** [MS-ASAIRS] Truncated: тело в ответе обрезано — для черновика это не полное тело. */
     val bodyTruncated: Boolean = false,
     val conversationId: String? = null,
-    val conversationIndex: String? = null
+    val conversationIndex: String? = null,
+    /** RFC 5322 Message-ID, если сервер отдал в Sync ([MS-ASEMAIL] InternetMessageId, чаще EAS 14+). */
+    val internetMessageId: String? = null
 ) {
     /** Флаг избранного (Status=2 на сервере). */
     val flagged: Boolean get() = flag.active
