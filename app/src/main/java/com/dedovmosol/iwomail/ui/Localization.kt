@@ -170,6 +170,7 @@ object Strings {
     val settingsHubAlertsDesc: String @Composable get() = if (isRussian()) "Тихие часы, звук" else "Quiet hours, sound"
     val settingsHubAppearanceDesc: String @Composable get() = if (isRussian()) "Тема, размер текста" else "Theme, text size"
     val settingsHubAboutDesc: String @Composable get() = if (isRussian()) "Версия, политика конфиденциальности" else "Version, privacy policy"
+    val searchSettings: String @Composable get() = if (isRussian()) "Поиск настроек" else "Search settings"
     val syncSettings: String @Composable get() = if (isRussian()) "Синхронизация" else "Sync"
     val sync: String @Composable get() = if (isRussian()) "Синхронизация" else "Sync"
     val serverCertificate: String @Composable get() = if (isRussian()) "Сертификат сервера" else "Server certificate"
