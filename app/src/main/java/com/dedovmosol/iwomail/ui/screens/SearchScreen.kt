@@ -366,6 +366,8 @@ fun SearchScreen(
                                         query = query,
                                         showsRecipient = email.folderId in uiState.recipientFolderIds,
                                         isSelected = if (row is MailRow.Header) selectedIds.containsAll(row.thread.ids) else email.id in selectedIds,
+                                        threadExpanded = (row as? MailRow.Header)?.expanded,
+                                        threadCount = (row as? MailRow.Header)?.thread?.emails?.size,
                                         onClick = {
                                             if (isSelectionMode) {
                                                 if (row is MailRow.Header) {
@@ -466,7 +468,9 @@ private fun SearchResultItem(
     isSelected: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    threadExpanded: Boolean? = null,
+    threadCount: Int? = null
 ) {
     val haptic = rememberAppHaptics()
     val context = LocalContext.current
@@ -646,8 +650,15 @@ private fun SearchResultItem(
                 )
             }
 
-            // Звёздочка
-            if (email.flagged) {
+            if (threadCount != null && threadCount > 1) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Icon(
+                    if (threadExpanded == true) AppIcons.ExpandLess else AppIcons.ExpandMore,
+                    if (threadExpanded == true) Strings.collapseThread else Strings.expandThread,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp)
+                )
+            } else if (email.flagged) {
                 Spacer(modifier = Modifier.width(8.dp))
                 Icon(
                     AppIcons.Star, Strings.favorites,

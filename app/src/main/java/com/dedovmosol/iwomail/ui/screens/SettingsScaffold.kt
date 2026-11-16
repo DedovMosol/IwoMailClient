@@ -166,19 +166,24 @@ internal fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun SettingsLeadingIcon(icon: ImageVector, boxSize: Dp = 48.dp) {
+private fun SettingsLeadingIcon(
+    icon: ImageVector,
+    boxSize: Dp = 48.dp,
+    container: Color = MaterialTheme.colorScheme.primaryContainer,
+    content: Color = MaterialTheme.colorScheme.onPrimaryContainer
+) {
     Box(
         modifier = Modifier
             .size(boxSize)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
+            .clip(RoundedCornerShape(12.dp))
+            .background(container),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             icon,
             contentDescription = null,
             modifier = Modifier.size(24.dp),
-            tint = MaterialTheme.colorScheme.onPrimaryContainer
+            tint = content
         )
     }
 }
@@ -190,7 +195,9 @@ internal fun SettingsHubRow(
     subtitle: String?,
     icon: ImageVector,
     onClick: () -> Unit,
-    showDivider: Boolean = false
+    showDivider: Boolean = false,
+    iconContainer: Color = MaterialTheme.colorScheme.primaryContainer,
+    iconContent: Color = MaterialTheme.colorScheme.onPrimaryContainer
 ) {
     Column {
         ListItem(
@@ -198,7 +205,7 @@ internal fun SettingsHubRow(
             supportingContent = if (subtitle.isNullOrBlank()) null else ({
                 Text(subtitle, style = MaterialTheme.typography.bodyMedium)
             }),
-            leadingContent = { SettingsLeadingIcon(icon) },
+            leadingContent = { SettingsLeadingIcon(icon, container = iconContainer, content = iconContent) },
             trailingContent = { Icon(AppIcons.ChevronRight, contentDescription = null) },
             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
             modifier = Modifier

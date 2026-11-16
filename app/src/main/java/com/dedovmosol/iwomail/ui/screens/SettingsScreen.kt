@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -31,6 +32,7 @@ fun SettingsScreen(
         manyLabel = if (accountCount > 1) Strings.accountsCount(accountCount) else ""
     )
 
+    val colors = MaterialTheme.colorScheme
     SettingsPageScaffold(
         title = Strings.settings,
         onBackClick = {
@@ -43,6 +45,8 @@ fun SettingsScreen(
                     title = Strings.accounts,
                     subtitle = accountsSubtitle,
                     icon = AppIcons.Person,
+                    iconContainer = colors.primaryContainer,
+                    iconContent = colors.onPrimaryContainer,
                     onClick = onNavigateToAccounts
                 )
             }
@@ -53,6 +57,8 @@ fun SettingsScreen(
                     title = Strings.mailSection,
                     subtitle = Strings.settingsHubMailDesc,
                     icon = AppIcons.Email,
+                    iconContainer = colors.tertiaryContainer,
+                    iconContent = colors.onTertiaryContainer,
                     onClick = onNavigateToMail,
                     showDivider = true
                 )
@@ -60,6 +66,8 @@ fun SettingsScreen(
                     title = Strings.mailAlertsSection,
                     subtitle = Strings.settingsHubAlertsDesc,
                     icon = AppIcons.Notifications,
+                    iconContainer = colors.errorContainer,
+                    iconContent = colors.onErrorContainer,
                     onClick = onNavigateToNotifications
                 )
             }
@@ -70,6 +78,8 @@ fun SettingsScreen(
                     title = Strings.appearance,
                     subtitle = Strings.settingsHubAppearanceDesc,
                     icon = AppIcons.Palette,
+                    iconContainer = colors.secondaryContainer,
+                    iconContent = colors.onSecondaryContainer,
                     onClick = onNavigateToPersonalization,
                     showDivider = true
                 )
@@ -77,6 +87,8 @@ fun SettingsScreen(
                     title = Strings.appLockSection,
                     subtitle = Strings.appLockDesc,
                     icon = AppIcons.Lock,
+                    iconContainer = colors.primaryContainer,
+                    iconContent = colors.onPrimaryContainer,
                     onClick = onNavigateToSecurity
                 )
             }
@@ -87,6 +99,8 @@ fun SettingsScreen(
                     title = Strings.aboutApp,
                     subtitle = Strings.settingsHubAboutDesc,
                     icon = AppIcons.Info,
+                    iconContainer = colors.surfaceVariant,
+                    iconContent = colors.onSurfaceVariant,
                     onClick = onNavigateToAbout
                 )
             }
