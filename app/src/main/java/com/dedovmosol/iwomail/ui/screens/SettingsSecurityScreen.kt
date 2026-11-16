@@ -14,7 +14,7 @@ import com.dedovmosol.iwomail.ui.theme.AppIcons
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
+internal fun SettingsSecurityScreen(onBackClick: () -> Unit, highlight: String = "") {
     val context = LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val settingsRepo = remember { RepositoryProvider.getSettingsRepository(context) }
@@ -90,6 +90,8 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
         null -> Unit
     }
 
+    val rowHighlight =
+        if (highlight == "fingerprint" && !appLockEnabled) "appLock" else highlight
     SettingsPageScaffold(title = Strings.appLockSection, onBackClick = onBackClick) {
         item {
             SettingsGroup {
@@ -97,6 +99,8 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
                     title = Strings.appLockTitle,
                     description = Strings.appLockDesc,
                     icon = { Icon(AppIcons.Lock, null) },
+                    highlightId = "appLock",
+                    highlight = rowHighlight,
                     checked = appLockEnabled,
                     onChange = { enabled ->
                         if (enabled) {
@@ -121,6 +125,8 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
                         description = if (biometricAvailable) Strings.appLockFingerprintDesc
                         else Strings.appLockBiometricUnavailable,
                         icon = { Icon(AppIcons.Fingerprint, null) },
+                        highlightId = "fingerprint",
+                        highlight = rowHighlight,
                         checked = appLockBiometricEnabled,
                         enabled = biometricAvailable || appLockBiometricEnabled,
                         onChange = { enabled ->

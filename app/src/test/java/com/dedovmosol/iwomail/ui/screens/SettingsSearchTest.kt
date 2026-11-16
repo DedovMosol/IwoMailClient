@@ -31,4 +31,13 @@ class SettingsSearchTest {
     fun noMatchIsEmpty() {
         assertThat(filterSettingsEntries("xyz", catalog)).isEmpty()
     }
+
+    @Test
+    fun focusIsKeptOnMatchingEntry() {
+        val catalogWithFocus = listOf(
+            SettingsSearchEntry("Цепочки писем", "Почта", SettingsSearchDest.Mail, "conversations")
+        )
+        assertThat(filterSettingsEntries("цепоч", catalogWithFocus).single().focus)
+            .isEqualTo("conversations")
+    }
 }

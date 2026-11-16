@@ -1,7 +1,10 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +42,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -221,6 +225,25 @@ internal fun SettingsHubRow(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun rememberSettingsHighlight(id: String, highlight: String): Pair<Modifier, androidx.compose.material3.ListItemColors> {
+    val on = highlight.isNotEmpty() && highlight == id
+    val requester = remember { BringIntoViewRequester() }
+    LaunchedEffect(on, id) {
+        if (on) requester.bringIntoView()
+    }
+    val modifier = if (on) Modifier.bringIntoViewRequester(requester) else Modifier
+    val colors = ListItemDefaults.colors(
+        containerColor = if (on) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+        } else {
+            Color.Transparent
+        }
+    )
+    return modifier to colors
+}
+
 /** Переключатель на всю строку (M3 Settings); свитч справа без своего onClick — иначе двойное срабатывание. */
 @Composable
 internal fun SettingsSwitchRow(
@@ -229,8 +252,11 @@ internal fun SettingsSwitchRow(
     icon: @Composable (() -> Unit)? = null,
     checked: Boolean,
     enabled: Boolean = true,
+    highlightId: String = "",
+    highlight: String = "",
     onChange: (Boolean) -> Unit
 ) {
+    val (focusMod, rowColors) = rememberSettingsHighlight(highlightId, highlight)
     ListItem(
         headlineContent = { Text(title, style = MaterialTheme.typography.titleSmall) },
         supportingContent = if (description.isNullOrBlank()) null else ({
@@ -250,8 +276,10 @@ internal fun SettingsSwitchRow(
         trailingContent = {
             Switch(checked = checked, enabled = enabled, onCheckedChange = null)
         },
+        colors = rowColors,
         modifier = Modifier
             .heightIn(min = 64.dp)
+            .then(focusMod)
             .toggleable(
                 value = checked,
                 enabled = enabled,
@@ -271,8 +299,11 @@ internal fun SettingsNavRow(
     trailing: @Composable (() -> Unit)? = null,
     trailingIcon: ImageVector? = AppIcons.ChevronRight,
     enabled: Boolean = true,
+    highlightId: String = "",
+    highlight: String = "",
     onClick: (() -> Unit)? = null
 ) {
+    val (focusMod, rowColors) = rememberSettingsHighlight(highlightId, highlight)
     val textColor = if (enabled) {
         MaterialTheme.colorScheme.onSurface
     } else {
@@ -302,9 +333,10 @@ internal fun SettingsNavRow(
             }
             else -> null
         },
-        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        colors = rowColors,
         modifier = Modifier
             .heightIn(min = 64.dp)
+            .then(focusMod)
             .then(
                 if (onClick != null && enabled) {
                     Modifier.clickable(role = Role.Button, onClickLabel = title, onClick = onClick)

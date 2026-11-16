@@ -42,13 +42,9 @@ class EmailOperationsService(
     /** Тело из ItemOperations (TruncationSize = 1 МиБ) меньше этого — точно не обрезано. */
     private val EAS_COMPLETE_BODY_BYTES = 1_040_000
 
-    private fun toEwsFolderType(folderType: Int?): String? = when (folderType) {
-        FolderType.INBOX -> "inbox"
-        FolderType.SENT_ITEMS -> "sentitems"
-        FolderType.DRAFTS -> "drafts"
-        FolderType.DELETED_ITEMS -> "deleteditems"
-        FolderType.OUTBOX -> "outbox"
-        else -> null
+    private fun ewsFolderOf(folder: FolderEntity?): EwsMailFolder? {
+        val f = folder ?: return null
+        return EwsMailFolder.of(f.type, f.displayName)
     }
 
     /**
@@ -255,12 +251,11 @@ class EmailOperationsService(
                         android.util.Log.d("BDY", "loadEmailBody: Empty body from ItemOperations, trying EWS fallback...")
 
                         // Получаем тип папки для EWS DistinguishedFolderId
-                        val folderTypeStr = toEwsFolderType(folder?.type)
-
-                        if (folderTypeStr != null) {
+                        val ewsFolder = ewsFolderOf(folder)
+                        if (ewsFolder != null) {
                             val ewsResult = client.fetchEmailBodyViaEws(
                                 subject = email.subject,
-                                folderType = folderTypeStr,
+                                folder = ewsFolder,
                                 dateReceived = email.dateReceived,
                                 internetMessageId = resolvedMessageId?.takeIf { it.isNotBlank() }
                                     ?: email.internetMessageId
@@ -323,12 +318,12 @@ class EmailOperationsService(
                         var recovered = false
 
                         if (client.isExchange2007()) {
-                            val folderTypeStr = toEwsFolderType(folderForCheck?.type)
-                            if (folderTypeStr != null) {
-                                android.util.Log.d("BDY", "loadEmailBody: OBJECT_NOT_FOUND, trying EWS fallback for folder=$folderTypeStr")
+                            val ewsFolder = ewsFolderOf(folderForCheck)
+                            if (ewsFolder != null) {
+                                android.util.Log.d("BDY", "loadEmailBody: OBJECT_NOT_FOUND, trying EWS fallback")
                                 val ewsResult = client.fetchEmailBodyViaEws(
                                     subject = email.subject,
-                                    folderType = folderTypeStr,
+                                    folder = ewsFolder,
                                     dateReceived = email.dateReceived,
                                     internetMessageId = email.internetMessageId
                                 )
@@ -473,7 +468,7 @@ class EmailOperationsService(
             collectionId = folder?.serverId ?: email.folderId.substringAfter("_"),
             serverId = email.serverId,
             subject = email.subject,
-            ewsFolderType = toEwsFolderType(folder?.type),
+            folder = ewsFolderOf(folder),
             dateReceived = email.dateReceived,
             internetMessageId = email.internetMessageId
         )

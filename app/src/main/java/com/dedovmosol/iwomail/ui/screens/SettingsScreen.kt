@@ -34,11 +34,11 @@ import com.dedovmosol.iwomail.ui.theme.AppIcons
 fun SettingsScreen(
     onBackClick: () -> Unit,
     onNavigateToAccounts: () -> Unit = {},
-    onNavigateToMail: () -> Unit = {},
-    onNavigateToNotifications: () -> Unit = {},
-    onNavigateToPersonalization: () -> Unit = {},
-    onNavigateToSecurity: () -> Unit = {},
-    onNavigateToAbout: () -> Unit = {},
+    onNavigateToMail: (String) -> Unit = {},
+    onNavigateToNotifications: (String) -> Unit = {},
+    onNavigateToPersonalization: (String) -> Unit = {},
+    onNavigateToSecurity: (String) -> Unit = {},
+    onNavigateToAbout: (String) -> Unit = {},
     onNoAccountsLeft: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -63,15 +63,15 @@ fun SettingsScreen(
         keyboard?.hide()
     }
 
-    fun open(dest: SettingsSearchDest) {
+    fun open(dest: SettingsSearchDest, focus: String = "") {
         keyboard?.hide()
         when (dest) {
             SettingsSearchDest.Accounts -> onNavigateToAccounts()
-            SettingsSearchDest.Mail -> onNavigateToMail()
-            SettingsSearchDest.Alerts -> onNavigateToNotifications()
-            SettingsSearchDest.Appearance -> onNavigateToPersonalization()
-            SettingsSearchDest.Security -> onNavigateToSecurity()
-            SettingsSearchDest.About -> onNavigateToAbout()
+            SettingsSearchDest.Mail -> onNavigateToMail(focus)
+            SettingsSearchDest.Alerts -> onNavigateToNotifications(focus)
+            SettingsSearchDest.Appearance -> onNavigateToPersonalization(focus)
+            SettingsSearchDest.Security -> onNavigateToSecurity(focus)
+            SettingsSearchDest.About -> onNavigateToAbout(focus)
         }
     }
 
@@ -132,7 +132,7 @@ fun SettingsScreen(
                                 icon = icon,
                                 iconContainer = bg,
                                 iconContent = fg,
-                                onClick = { open(hit.dest); keyboard?.hide() },
+                                onClick = { open(hit.dest, hit.focus); keyboard?.hide() },
                                 showDivider = i < hits.lastIndex
                             )
                         }
@@ -160,7 +160,7 @@ fun SettingsScreen(
                         icon = AppIcons.Email,
                         iconContainer = colors.tertiaryContainer,
                         iconContent = colors.onTertiaryContainer,
-                        onClick = onNavigateToMail,
+                        onClick = { onNavigateToMail("") },
                         showDivider = true
                     )
                     SettingsHubRow(
@@ -169,7 +169,7 @@ fun SettingsScreen(
                         icon = AppIcons.Notifications,
                         iconContainer = colors.errorContainer,
                         iconContent = colors.onErrorContainer,
-                        onClick = onNavigateToNotifications
+                        onClick = { onNavigateToNotifications("") }
                     )
                 }
             }
@@ -181,7 +181,7 @@ fun SettingsScreen(
                         icon = AppIcons.Palette,
                         iconContainer = colors.secondaryContainer,
                         iconContent = colors.onSecondaryContainer,
-                        onClick = onNavigateToPersonalization,
+                        onClick = { onNavigateToPersonalization("") },
                         showDivider = true
                     )
                     SettingsHubRow(
@@ -190,7 +190,7 @@ fun SettingsScreen(
                         icon = AppIcons.Lock,
                         iconContainer = colors.primaryContainer,
                         iconContent = colors.onPrimaryContainer,
-                        onClick = onNavigateToSecurity
+                        onClick = { onNavigateToSecurity("") }
                     )
                 }
             }
@@ -202,7 +202,7 @@ fun SettingsScreen(
                         icon = AppIcons.Info,
                         iconContainer = colors.surfaceVariant,
                         iconContent = colors.onSurfaceVariant,
-                        onClick = onNavigateToAbout
+                        onClick = { onNavigateToAbout("") }
                     )
                 }
             }

@@ -133,6 +133,9 @@ private fun popExitTransition(): ExitTransition {
 }
 
 sealed class Screen(val route: String) {
+    fun highlightGraph(): String = "$route?h={h}"
+    fun highlightDest(h: String = "") = "$route?h=${URLEncoder.encode(h, "UTF-8")}"
+
     object Onboarding : Screen("onboarding?isFirstLaunch={isFirstLaunch}") {
         fun createRoute(isFirstLaunch: Boolean = true): String {
             return "onboarding?isFirstLaunch=$isFirstLaunch"
@@ -1105,20 +1108,20 @@ fun AppNavigation(
                 onNavigateToAccounts = {
                     navController.navigate(Screen.SettingsAccounts.route) { launchSingleTop = true }
                 },
-                onNavigateToMail = {
-                    navController.navigate(Screen.SettingsMail.route) { launchSingleTop = true }
+                onNavigateToMail = { h ->
+                    navController.navigate(Screen.SettingsMail.highlightDest(h)) { launchSingleTop = true }
                 },
-                onNavigateToNotifications = {
-                    navController.navigate(Screen.SettingsNotifications.route) { launchSingleTop = true }
+                onNavigateToNotifications = { h ->
+                    navController.navigate(Screen.SettingsNotifications.highlightDest(h)) { launchSingleTop = true }
                 },
-                onNavigateToPersonalization = {
-                    navController.navigate(Screen.Personalization.route) { launchSingleTop = true }
+                onNavigateToPersonalization = { h ->
+                    navController.navigate(Screen.Personalization.highlightDest(h)) { launchSingleTop = true }
                 },
-                onNavigateToSecurity = {
-                    navController.navigate(Screen.SettingsSecurity.route) { launchSingleTop = true }
+                onNavigateToSecurity = { h ->
+                    navController.navigate(Screen.SettingsSecurity.highlightDest(h)) { launchSingleTop = true }
                 },
-                onNavigateToAbout = {
-                    navController.navigate(Screen.About.route) { launchSingleTop = true }
+                onNavigateToAbout = { h ->
+                    navController.navigate(Screen.About.highlightDest(h)) { launchSingleTop = true }
                 },
                 onNoAccountsLeft = {
                     navController.navigate(Screen.Setup.route) {
@@ -1136,14 +1139,32 @@ fun AppNavigation(
                 }
             )
         }
-        composable(Screen.SettingsMail.route) {
-            SettingsMailScreen(onBackClick = { navController.popBackStack() })
+        composable(
+            route = Screen.SettingsMail.highlightGraph(),
+            arguments = listOf(navArgument("h") { type = NavType.StringType; defaultValue = "" })
+        ) { entry ->
+            SettingsMailScreen(
+                onBackClick = { navController.popBackStack() },
+                highlight = entry.arguments?.getString("h").orEmpty()
+            )
         }
-        composable(Screen.SettingsNotifications.route) {
-            SettingsNotificationsScreen(onBackClick = { navController.popBackStack() })
+        composable(
+            route = Screen.SettingsNotifications.highlightGraph(),
+            arguments = listOf(navArgument("h") { type = NavType.StringType; defaultValue = "" })
+        ) { entry ->
+            SettingsNotificationsScreen(
+                onBackClick = { navController.popBackStack() },
+                highlight = entry.arguments?.getString("h").orEmpty()
+            )
         }
-        composable(Screen.SettingsSecurity.route) {
-            SettingsSecurityScreen(onBackClick = { navController.popBackStack() })
+        composable(
+            route = Screen.SettingsSecurity.highlightGraph(),
+            arguments = listOf(navArgument("h") { type = NavType.StringType; defaultValue = "" })
+        ) { entry ->
+            SettingsSecurityScreen(
+                onBackClick = { navController.popBackStack() },
+                highlight = entry.arguments?.getString("h").orEmpty()
+            )
         }
         
         composable(
@@ -1164,9 +1185,13 @@ fun AppNavigation(
             )
         }
         
-        composable(Screen.Personalization.route) {
+        composable(
+            route = Screen.Personalization.highlightGraph(),
+            arguments = listOf(navArgument("h") { type = NavType.StringType; defaultValue = "" })
+        ) { entry ->
             PersonalizationScreen(
-                onBackClick = { navController.popBackStack() }
+                onBackClick = { navController.popBackStack() },
+                highlight = entry.arguments?.getString("h").orEmpty()
             )
         }
         
@@ -1187,9 +1212,13 @@ fun AppNavigation(
             )
         }
         
-        composable(Screen.About.route) {
+        composable(
+            route = Screen.About.highlightGraph(),
+            arguments = listOf(navArgument("h") { type = NavType.StringType; defaultValue = "" })
+        ) { entry ->
             AboutScreen(
                 onBackClick = { navController.popBackStack() },
+                highlight = entry.arguments?.getString("h").orEmpty(),
                 onNavigateToUpdates = {
                     navController.navigate(Screen.Updates.route)
                 },

@@ -31,7 +31,8 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun MailAlertsSettingsSection(
     settingsRepo: SettingsRepository,
-    accounts: List<AccountEntity>
+    accounts: List<AccountEntity>,
+    highlight: String = ""
 ) {
     val context = LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
@@ -56,6 +57,8 @@ internal fun MailAlertsSettingsSection(
             icon = { Icon(AppIcons.Notifications, null) },
             checked = quiet.enabled,
             enabled = prefs != null,
+            highlightId = "quietHours",
+            highlight = highlight,
             onChange = { enabled -> scope.launch { settingsRepo.setQuietHours(quiet.copy(enabled = enabled)) } }
         )
         if (quiet.enabled) {
@@ -70,7 +73,9 @@ internal fun MailAlertsSettingsSection(
             title = Strings.vipSenders,
             subtitle = if (vip.isEmpty()) Strings.vipSendersHint else null,
             icon = AppIcons.Star,
-            trailingIcon = null
+            trailingIcon = null,
+            highlightId = "vipSenders",
+            highlight = highlight
         )
         for (address in vip) {
             SettingsNavRow(

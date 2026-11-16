@@ -57,4 +57,28 @@ class EwsIdsTest {
         assertThat(EwsIds.parseAllItemIdsAndChangeKeys(xml))
             .containsExactly("A" to "CA", "B" to "CB").inOrder()
     }
+
+    @Test
+    fun folderId_tPrefix_asOn2007_ignoresParentFolderId() {
+        val xml = """
+            <t:ParentFolderId Id="ROOT" ChangeKey="CKR"/>
+            <t:Folder>
+                <t:FolderId Id="AAMk/folder+id==" ChangeKey="AQAA"/>
+            </t:Folder>
+        """.trimIndent()
+        assertThat(EwsIds.parseFolderIds(xml)).containsExactly("AAMk/folder+id==")
+    }
+
+    @Test
+    fun folderId_reversedAttrs_andNoPrefix() {
+        assertThat(EwsIds.parseFolderIds("""<FolderId ChangeKey="CK" Id="F1"/>"""))
+            .containsExactly("F1")
+        assertThat(EwsIds.parseFolderIds("""<m:FolderId Id="F2"/>""")).containsExactly("F2")
+    }
+
+    @Test
+    fun folderId_twoMatches_ambiguous() {
+        val xml = """<t:FolderId Id="A"/><t:FolderId Id="B"/>"""
+        assertThat(EwsIds.parseFolderIds(xml)).containsExactly("A", "B").inOrder()
+    }
 }

@@ -149,6 +149,7 @@ class EwsReadReceiptsServerTest {
 
         val findFolder = exchange.ews("FindFolder").single().xml
         assertThat(findFolder).contains("""<m:FindFolder Traversal="Deep">""")
+        assertThat(findFolder).contains("""<m:IndexedPageFolderView MaxEntriesReturned="2"""")
         assertThat(findFolder).contains("""<t:Constant Value="Projects"/>""")
         assertThat(exchange.ews("FindItem").single().xml).contains("""<t:FolderId Id="F-PROJ"/>""")
     }

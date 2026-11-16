@@ -43,7 +43,8 @@ import com.dedovmosol.iwomail.ui.theme.AppIcons
 fun AboutScreen(
     onBackClick: () -> Unit,
     onNavigateToUpdates: () -> Unit,
-    onNavigateToOnboarding: () -> Unit
+    onNavigateToOnboarding: () -> Unit,
+    highlight: String = ""
 ) {
     val isRu = isRussian()
     val uriHandler = LocalUriHandler.current
@@ -115,6 +116,8 @@ fun AboutScreen(
                 subtitle = "Exchange (EAS), IMAP, POP3",
                 icon = AppIcons.Business,
                 trailingIcon = null,
+                highlightId = "protocols",
+                highlight = highlight,
                 onClick = {
                     if (!easterFound && !base64Revealed) {
                         protocolTapCount++
@@ -136,12 +139,16 @@ fun AboutScreen(
                 subtitle = "DedovMosol",
                 icon = AppIcons.Person,
                 trailingIcon = AppIcons.OpenInNew,
+                highlightId = "developer",
+                highlight = highlight,
                 onClick = { uriHandler.openUri("https://github.com/DedovMosol/") }
             )
             SettingsNavRow(
                 title = Strings.privacyPolicy,
                 icon = AppIcons.Policy,
                 trailingIcon = AppIcons.OpenInNew,
+                highlightId = "privacy",
+                highlight = highlight,
                 onClick = { uriHandler.openUri(com.dedovmosol.iwomail.ui.PrivacyPolicy.url(isRu)) }
             )
         }

@@ -29,7 +29,7 @@ import kotlinx.coroutines.launch
 
 /** Настройки почты: картинки из интернета, фото из адресной книги, цепочки, отмена отправки, свайпы в списке писем. */
 @Composable
-internal fun MailSettingsSection(settingsRepo: SettingsRepository) {
+internal fun MailSettingsSection(settingsRepo: SettingsRepository, highlight: String = "") {
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val images by settingsRepo.remoteImagesPrefs.collectAsStateWithLifecycle(initialValue = null)
     val undoSeconds by settingsRepo.undoSendSeconds.collectAsStateWithLifecycle(initialValue = UndoSend.DEFAULT_SECONDS)
@@ -48,6 +48,8 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository) {
             icon = { Icon(AppIcons.Image, null) },
             checked = images?.alwaysLoad == true,
             enabled = images != null,
+            highlightId = "remoteImages",
+            highlight = highlight,
             onChange = { always -> scope.launch { settingsRepo.setRemoteImagesAlways(always) } }
         )
         SettingsSwitchRow(
@@ -56,6 +58,8 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository) {
             icon = { Icon(AppIcons.Person, null) },
             checked = galPhotos == true,
             enabled = galPhotos != null,
+            highlightId = "galPhotos",
+            highlight = highlight,
             onChange = { on -> scope.launch { settingsRepo.setGalPhotosEnabled(on) } }
         )
         SettingsSwitchRow(
@@ -64,6 +68,8 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository) {
             icon = { Icon(AppIcons.Reply, null) },
             checked = conversations == true,
             enabled = conversations != null,
+            highlightId = "conversations",
+            highlight = highlight,
             onChange = { on -> scope.launch { settingsRepo.setConversationView(on) } }
         )
 
@@ -84,17 +90,23 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository) {
             title = Strings.undoSendSetting,
             subtitle = Strings.undoSendDesc(undoSeconds),
             icon = AppIcons.Send,
+            highlightId = "undoSend",
+            highlight = highlight,
             onClick = { choice = "undo" }
         )
 
         SettingsNavRow(
             title = Strings.swipeStart,
             subtitle = Strings.swipeActionName(swipes.first),
+            highlightId = "swipeStart",
+            highlight = highlight,
             onClick = { choice = "start" }
         )
         SettingsNavRow(
             title = Strings.swipeEnd,
             subtitle = Strings.swipeActionName(swipes.second),
+            highlightId = "swipeEnd",
+            highlight = highlight,
             onClick = { choice = "end" }
         )
     }

@@ -824,21 +824,21 @@ class EasClient(
      * - если найдено более одного кандидата, fallback отменяется
      *
      * @param subject Тема письма для поиска
-     * @param folderType Тип папки EWS (inbox, sentitems, deleteditems, drafts)
+     * @param folder Папка EWS: distinguished или пользовательская по DisplayName
      * @param dateReceived Дата получения письма (ms) для фильтрации
      * @param internetMessageId RFC 5322 Message-ID, если уже известен локально
      * @return HTML тело и InternetMessageId либо пустой результат, если безопасное совпадение не найдено
      */
     suspend fun fetchEmailBodyViaEws(
         subject: String,
-        folderType: String,
+        folder: EwsMailFolder,
         dateReceived: Long = 0L,
         internetMessageId: String? = null
     ): EasResult<EmailBodyResult> {
         return withContext(Dispatchers.IO) {
             try {
                 val lookedUpByMessageId = EwsMailMatch.messageIdOnly(internetMessageId)
-                val ewsItemId = when (val found = findEwsMailItemId(subject, folderType, dateReceived, internetMessageId)) {
+                val ewsItemId = when (val found = findEwsMailItemId(subject, folder, dateReceived, internetMessageId)) {
                     is EasResult.Error -> return@withContext found
                     is EasResult.Success -> found.data ?: return@withContext EasResult.Success(EmailBodyResult(""))
                 }
@@ -940,27 +940,53 @@ class EasClient(
     }
 
     /**
-     * EWS ItemId РїРёСЃСЊРјР° РїРѕ InternetMessageId, С‚РµРјРµ Рё РґР°С‚Рµ (EAS ServerId РІ EWS РЅРµ РїРµСЂРµРІРѕРґРёС‚СЃСЏ). РЎРѕРІРїР°РґРµРЅРёРµ РґРѕР»Р¶РЅРѕ
-     * Р±С‹С‚СЊ СЂРѕРІРЅРѕ РѕРґРЅРѕ, РёРЅР°С‡Рµ null: РѕС‚РєСЂС‹С‚СЊ С‡СѓР¶РѕРµ РїРёСЃСЊРјРѕ С…СѓР¶Рµ, С‡РµРј РЅРµ РѕС‚РєСЂС‹С‚СЊ РЅРёРєР°РєРѕРіРѕ. Exchange 2007 SP1+.
+     * Пользовательская папка: тот же FindFolder, что и отказ от MDN ([EwsReadReceipts.findFolderByName]).
+     * Ровно один FolderId — иначе null. Exchange 2007 SP1+.
      */
+    private suspend fun findEwsFolderIdByDisplayName(displayName: String): EasResult<String?> {
+        if (displayName.isBlank()) return EasResult.Success(null)
+        val request = transport.buildEwsSoapRequest(EwsReadReceipts.findFolderByName(displayName))
+        val response = transport.executeEwsWithAuth(request, "FindFolder")
+            ?: return EasResult.Error("FindFolder request failed")
+        val ids = EwsIds.parseFolderIds(response)
+        return when (ids.size) {
+            1 -> EasResult.Success(ids.first())
+            0 -> EasResult.Success(null)
+            else -> {
+                android.util.Log.w("EasClient", "findEwsFolderIdByDisplayName: ambiguous displayName")
+                EasResult.Success(null)
+            }
+        }
+    }
+
     private suspend fun findEwsMailItemId(
         subject: String,
-        folderType: String,
+        folder: EwsMailFolder,
         dateReceived: Long,
         internetMessageId: String?
     ): EasResult<String?> = withContext(Dispatchers.IO) {
-            // Определяем EWS DistinguishedFolderId на основе типа папки
-            val distinguishedFolderId = when (folderType.lowercase()) {
-                "inbox", "1" -> "inbox"
-                "sent", "sentitems", "5" -> "sentitems"
-                "drafts", "3" -> "drafts"
-                "deleted", "deleteditems", "4" -> "deleteditems"
-                "outbox", "6" -> "outbox"
-                else -> null
-            }
-            if (distinguishedFolderId == null) {
-                android.util.Log.w("EasClient", "fetchEmailBodyViaEws: unsupported folderType='$folderType', skipping fallback")
-                return@withContext EasResult.Success(null)
+            val distinguishedFolderId = (folder as? EwsMailFolder.Distinguished)?.id
+            val parentFolderXml = when (folder) {
+                is EwsMailFolder.Distinguished ->
+                    """<t:DistinguishedFolderId Id="${escapeXml(folder.id)}"/>"""
+                is EwsMailFolder.Named -> {
+                    val name = folder.displayName.trim()
+                    if (name.isEmpty()) {
+                        android.util.Log.w("EasClient", "fetchEmailBodyViaEws: unnamed user folder, skipping fallback")
+                        return@withContext EasResult.Success(null)
+                    }
+                    when (val found = findEwsFolderIdByDisplayName(name)) {
+                        is EasResult.Error -> return@withContext found
+                        is EasResult.Success -> {
+                            val id = found.data
+                            if (id.isNullOrBlank()) {
+                                android.util.Log.w("EasClient", "fetchEmailBodyViaEws: no unique EWS folder for displayName")
+                                return@withContext EasResult.Success(null)
+                            }
+                            """<t:FolderId Id="${escapeXml(id)}"/>"""
+                        }
+                    }
+                }
             }
 
             // Экранируем subject для XML
@@ -1047,7 +1073,7 @@ class EasClient(
             </t:FieldOrder>
             </m:SortOrder>
             <m:ParentFolderIds>
-            <t:DistinguishedFolderId Id="$distinguishedFolderId"/>
+            $parentFolderXml
             </m:ParentFolderIds>
         </m:FindItem>
     </soap:Body>
@@ -1110,14 +1136,16 @@ class EasClient(
         collectionId: String,
         serverId: String,
         subject: String,
-        ewsFolderType: String?,
+        folder: EwsMailFolder?,
         dateReceived: Long,
         internetMessageId: String?
     ): EasResult<ByteArray> {
         if (DraftIds.isEwsItemId(serverId)) return mimeBytesEws(serverId)
         return MessageMime.choose(emailService.fetchMime(collectionId, serverId)) {
             val ewsItemId = try {
-                ewsFolderType?.let { (findEwsMailItemId(subject, it, dateReceived, internetMessageId) as? EasResult.Success)?.data }
+                folder?.let {
+                    (findEwsMailItemId(subject, it, dateReceived, internetMessageId) as? EasResult.Success)?.data
+                }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 null

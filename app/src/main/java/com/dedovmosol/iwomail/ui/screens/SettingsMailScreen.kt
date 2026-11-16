@@ -9,20 +9,20 @@ import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.ui.Strings
 
 @Composable
-internal fun SettingsMailScreen(onBackClick: () -> Unit) {
+internal fun SettingsMailScreen(onBackClick: () -> Unit, highlight: String = "") {
     val context = LocalContext.current
     val settingsRepo = remember { RepositoryProvider.getSettingsRepository(context) }
     SettingsPageScaffold(title = Strings.mailSection, onBackClick = onBackClick) {
         item {
             SettingsGroup {
-                MailSettingsSection(settingsRepo)
+                MailSettingsSection(settingsRepo, highlight)
             }
         }
     }
 }
 
 @Composable
-internal fun SettingsNotificationsScreen(onBackClick: () -> Unit) {
+internal fun SettingsNotificationsScreen(onBackClick: () -> Unit, highlight: String = "") {
     val context = LocalContext.current
     val settingsRepo = remember { RepositoryProvider.getSettingsRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
@@ -30,7 +30,7 @@ internal fun SettingsNotificationsScreen(onBackClick: () -> Unit) {
     SettingsPageScaffold(title = Strings.mailAlertsSection, onBackClick = onBackClick) {
         item {
             SettingsGroup {
-                MailAlertsSettingsSection(settingsRepo, accounts)
+                MailAlertsSettingsSection(settingsRepo, accounts, highlight)
             }
         }
     }

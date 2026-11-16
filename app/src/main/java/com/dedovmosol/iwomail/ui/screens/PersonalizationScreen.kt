@@ -215,7 +215,8 @@ private fun DayScrollbarColorRow(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PersonalizationScreen(
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    highlight: String = ""
 ) {
     val context = LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
@@ -544,12 +545,16 @@ fun PersonalizationScreen(
                     title = Strings.language,
                     subtitle = currentLanguage.displayName,
                     icon = AppIcons.Language,
+                    highlightId = "language",
+                    highlight = highlight,
                     onClick = { showLanguageDialog = true }
                 )
                 SettingsNavRow(
                     title = Strings.fontSize,
                     subtitle = fontSize.getDisplayName(isRu),
                     icon = AppIcons.TextFields,
+                    highlightId = "fontSize",
+                    highlight = highlight,
                     onClick = { showFontSizeDialog = true }
                 )
             }
@@ -562,6 +567,8 @@ fun PersonalizationScreen(
                 SettingsNavRow(
                     title = Strings.colorTheme,
                     subtitle = if (dailyThemesEnabled) Strings.dailyThemesActive else getThemeDisplayName(currentTheme),
+                    highlightId = "colorTheme",
+                    highlight = highlight,
                     leading = {
                         Box(
                             modifier = Modifier
@@ -580,6 +587,8 @@ fun PersonalizationScreen(
                     title = Strings.themeMode,
                     subtitle = themeMode.getDisplayName(isRu),
                     icon = themeModeIcon(themeMode),
+                    highlightId = "themeMode",
+                    highlight = highlight,
                     onClick = { showThemeModeDialog = true }
                 )
                 SettingsNavRow(
@@ -600,6 +609,8 @@ fun PersonalizationScreen(
                     title = Strings.dailyThemes,
                     description = Strings.dailyThemesDesc,
                     icon = { Icon(AppIcons.CalendarMonth, null) },
+                    highlightId = "dailyThemes",
+                    highlight = highlight,
                     checked = dailyThemesEnabled,
                     onChange = { enabled ->
                         scope.launch { settingsRepo.setDailyThemesEnabled(enabled) }

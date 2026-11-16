@@ -44,4 +44,13 @@ object EwsIds {
             val changeKey = CHANGE_KEY_ATTR.find(attrs)?.groupValues?.get(1)
             if (id != null && changeKey != null) id to changeKey else null
         }.toList()
+
+    // Не ParentFolderId: перед FolderId должен быть '<' или префикс, не "Parent".
+    private val FOLDER_ID_TAG = Regex("<(?:[A-Za-z][\\w.-]*:)?FolderId\\b([^>]*?)/?>")
+
+    /** Все FolderId/@Id из FindFolder. Префикс и порядок атрибутов не важны. */
+    fun parseFolderIds(xml: String): List<String> =
+        FOLDER_ID_TAG.findAll(xml).mapNotNull { m ->
+            ID_ATTR.find(m.groupValues[1])?.groupValues?.get(1)
+        }.toList()
 }

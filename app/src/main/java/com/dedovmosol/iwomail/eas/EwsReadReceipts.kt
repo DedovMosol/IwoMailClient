@@ -67,12 +67,10 @@ internal class EwsReadReceipts(
         if (displayName.isBlank()) return null
         val response = post(envelope(findFolderByName(displayName)), "FindFolder") ?: return null
         if (!EwsClient.isEwsSuccess(response) || !EwsClient.isCompleteEnvelope(response)) return null
-        return FOLDER_ID.findAll(response).map { it.groupValues[1] }.toList().singleOrNull()
+        return EwsIds.parseFolderIds(response).singleOrNull()
     }
 
     companion object {
-        /** Тег FolderId с любым префиксом; ParentFolderId не совпадает (имя тега другое). */
-        private val FOLDER_ID = Regex("<(?:[A-Za-z][\\w.-]*:)?FolderId\\b[^>]*?\\bId=\"([^\"]+)\"")
         private val RESPONSE_CODE = Regex("<(?:[A-Za-z][\\w.-]*:)?ResponseCode>([^<]+)</")
 
         /** Сервер уже не ждёт отчёта: отправлен/подавлен раньше, не запрашивался или письмо в «Нежелательной почте». */
@@ -103,6 +101,7 @@ internal class EwsReadReceipts(
   <m:FolderShape>
     <t:BaseShape>IdOnly</t:BaseShape>
   </m:FolderShape>
+  <m:IndexedPageFolderView MaxEntriesReturned="2" Offset="0" BasePoint="Beginning"/>
   <m:Restriction>
     <t:IsEqualTo>
       <t:FieldURI FieldURI="folder:DisplayName"/>
