@@ -2,6 +2,7 @@ package com.dedovmosol.iwomail.ui.screens
 
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.Color
@@ -10,8 +11,9 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -74,12 +76,12 @@ fun SettingsScreen(
         }
     ) {
         item {
-            OutlinedTextField(
+            TextField(
                 value = query,
                 onValueChange = { query = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
                 placeholder = { Text(Strings.searchSettings) },
                 leadingIcon = { Icon(AppIcons.Search, contentDescription = null) },
                 trailingIcon = {
@@ -92,7 +94,15 @@ fun SettingsScreen(
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
-                shape = MaterialTheme.shapes.extraLarge
+                shape = RoundedCornerShape(24.dp),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent
+                )
             )
         }
         if (searching) {
