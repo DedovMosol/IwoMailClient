@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -57,8 +58,13 @@ fun SettingsScreen(
     var query by rememberSaveable { mutableStateOf("") }
     val hits = remember(query, catalog) { filterSettingsEntries(query, catalog) }
     val searching = query.trim().isNotEmpty()
+    BackHandler(enabled = searching) {
+        query = ""
+        keyboard?.hide()
+    }
 
     fun open(dest: SettingsSearchDest) {
+        keyboard?.hide()
         when (dest) {
             SettingsSearchDest.Accounts -> onNavigateToAccounts()
             SettingsSearchDest.Mail -> onNavigateToMail()

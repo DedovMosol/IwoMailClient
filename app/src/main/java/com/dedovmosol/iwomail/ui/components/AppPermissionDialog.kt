@@ -92,7 +92,12 @@ fun AppPermissionDialog(
                             )
                         }
                         Spacer(Modifier.width(12.dp))
-                        Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White)
+                        Text(
+                            title,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = Color.White,
+                            maxLines = 2
+                        )
                     }
                 }
                 Text(
