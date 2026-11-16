@@ -319,19 +319,16 @@ class EasAttachmentService internal constructor(
             fileReference
         }
 
-        var result = tryItemOperations(decodedRef)
-        if (result is EasResult.Success) {
-            return result
+        // Exchange 2007 SP1 (corp, live): FileReference в Fetch уже percent-encoded
+        // (%2b/%3a). Decode-first → ItemOperations Status 15 и пустой Success, закодированный
+        // ref → ~50 КБ DOCX. Не принимать пустой Success — иначе оригинальный ref не пробуется.
+        val attempts = linkedSetOf(fileReference, decodedRef)
+        var last: EasResult<ByteArray> = EasResult.Error("ItemOperations Fetch вложения не удался")
+        for (ref in attempts) {
+            last = tryItemOperations(ref)
+            if (last is EasResult.Success && last.data.isNotEmpty()) return last
         }
-
-        if (decodedRef != fileReference) {
-            result = tryItemOperations(fileReference)
-            if (result is EasResult.Success) {
-                return result
-            }
-        }
-
-        return result
+        return last
     }
 
     private suspend fun tryItemOperations(fileRef: String): EasResult<ByteArray> {

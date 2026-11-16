@@ -208,7 +208,7 @@ EAS ServerId **не** переводится в EWS ItemId. Поиск:
 | ID | Находка | Статус |
 |----|---------|--------|
 | C1 | Ротация тел/вложений | **Исправлено в коде.** EWS: Message-ID или Subject+≤2 мин, ровно 1 хит, сверка GetItem. Вложения по FileReference. Миграция ServerId только при одном хите. InternetMessageId из Sync пишется в Room, если сервер отдал (EAS 14+ чаще, 12.1 редко). |
-| C2 | Нет текста с сервера | **Частично.** Status 6 = нет объекта, 8 ≠ удаление. Fetch сериализован со Sync. Пользовательские папки без EWS — по-прежнему пусто. Честный отказ лучше чужого тела. |
+| C2 | Нет текста с сервера | **Частично.** На живом 2007 SP1 Inbox/Sent Fetch HTML **Status 1**. GetAttachment **HTTP 501**; вложение качается ItemOperations Fetch. Decode FileReference → Status **15**, encoded → DOCX (исправлено: не принимать пустой Success). |
 | H1 | Пустой спиннер | **Исправлено в коде.** `viewModel(key=emailId)`, без `launchSingleTop` на деталь, ошибка вместо вечной крутилки, FAB только если письмо есть, WebView `heightIn(min=48.dp)`, prefetch `tryWithFolder`. |
 | H2 | Звезда отвергнута | **Исправлено.** Звезда и меню «Без срока» = сегодня, четыре даты EAS. |
 | M1 | Цепочки в поиске без стрелки | **Исправлено.** SearchResultItem: ExpandMore/ExpandLess как в списке писем. |
