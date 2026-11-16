@@ -97,6 +97,7 @@ fun EmailDetailScreen(
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
 
     val viewModel: EmailDetailViewModel = viewModel(
+        key = emailId,
         factory = EmailDetailViewModel.provideFactory(
             context.applicationContext as android.app.Application,
             emailId
@@ -505,13 +506,12 @@ fun EmailDetailScreen(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false }
                         ) {
-                            // Переслать
+                            email?.let { target ->
                             DropdownMenuItem(
                                 text = { Text(Strings.forward) },
                                 onClick = { showOverflowMenu = false; onForwardClick() },
                                 leadingIcon = { Icon(AppIcons.Forward, null) }
                             )
-                            email?.let { target ->
                                 DropdownMenuItem(
                                     text = { Text(Strings.printOrPdf) },
                                     onClick = { showOverflowMenu = false; printEmail(target) },
@@ -598,24 +598,25 @@ fun EmailDetailScreen(
             )
         },
         floatingActionButton = {
-            com.dedovmosol.iwomail.ui.theme.AnimatedFab(
-                // У записи RSS-канала нет адреса для ответа — пересылка
-                onClick = if (isRss) onForwardClick else onReplyClick,
-                containerColor = LocalColorTheme.current.gradientStart
-            ) {
-                Icon(
-                    when {
-                        isRss -> AppIcons.Forward
-                        isInSent -> AppIcons.Email
-                        else -> AppIcons.Reply
-                    },
-                    when {
-                        isRss -> Strings.forward
-                        isInSent -> Strings.writeMore
-                        else -> Strings.reply
-                    },
-                    tint = Color.White
-                )
+            if (email != null) {
+                com.dedovmosol.iwomail.ui.theme.AnimatedFab(
+                    onClick = if (isRss) onForwardClick else onReplyClick,
+                    containerColor = LocalColorTheme.current.gradientStart
+                ) {
+                    Icon(
+                        when {
+                            isRss -> AppIcons.Forward
+                            isInSent -> AppIcons.Email
+                            else -> AppIcons.Reply
+                        },
+                        when {
+                            isRss -> Strings.forward
+                            isInSent -> Strings.writeMore
+                            else -> Strings.reply
+                        },
+                        tint = Color.White
+                    )
+                }
             }
         }
     ) { padding ->
@@ -624,7 +625,20 @@ fun EmailDetailScreen(
                 modifier = Modifier.fillMaxSize().padding(padding),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator()
+                if (bodyLoadErrorText != null) {
+                    com.dedovmosol.iwomail.ui.components.CopyableErrorCard(
+                        text = "${Strings.loadError}: $bodyLoadErrorText",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                    )
+                } else {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(Strings.loadingEmail, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
             }
         } else {
             // Smart-cast: в else-ветви после проверки email == null тип гарантированно ненулевой.

@@ -9,7 +9,8 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Один Sync-запрос на папку за раз; разные папки друг друга не ждут. Виртуальное время runTest. */
+/** Один EAS-запрос на папку за раз; разные папки друг друга не ждут. Виртуальное время runTest. */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class FolderSyncGateTest {
 
     @Test
@@ -38,6 +39,17 @@ class FolderSyncGateTest {
         }.awaitAll()
 
         assertThat(currentTime).isEqualTo(100)
+    }
+
+    @Test
+    fun `tryWithFolder skips when the folder is busy`() = runTest {
+        val held = async {
+            FolderSyncGate.withFolder("gate-test-try") { delay(100); "held" }
+        }
+        delay(1)
+        assertThat(FolderSyncGate.tryWithFolder("gate-test-try") { "skip" }).isNull()
+        assertThat(held.await()).isEqualTo("held")
+        assertThat(FolderSyncGate.tryWithFolder("gate-test-try") { "ok" }).isEqualTo("ok")
     }
 
     @Test

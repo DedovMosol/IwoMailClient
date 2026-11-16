@@ -628,7 +628,9 @@ data class EmailDedupInfo(
     val subject: String,
     val from: String,
     val to: String,
-    val dateReceived: Long
+    val dateReceived: Long,
+    val internetMessageId: String? = null,
+    val conversationId: String? = null
 )
 
 @Entity(

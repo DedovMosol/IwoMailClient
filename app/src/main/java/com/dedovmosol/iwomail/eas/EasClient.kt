@@ -837,6 +837,7 @@ class EasClient(
     ): EasResult<EmailBodyResult> {
         return withContext(Dispatchers.IO) {
             try {
+                val lookedUpByMessageId = EwsMailMatch.messageIdOnly(internetMessageId)
                 val ewsItemId = when (val found = findEwsMailItemId(subject, folderType, dateReceived, internetMessageId)) {
                     is EasResult.Error -> return@withContext found
                     is EasResult.Success -> found.data ?: return@withContext EasResult.Success(EmailBodyResult(""))
@@ -859,6 +860,9 @@ class EasClient(
                 <t:AdditionalProperties>
                     <t:FieldURI FieldURI="message:InternetMessageId"/>
                     <t:FieldURI FieldURI="message:InReplyTo"/>
+                    <t:FieldURI FieldURI="item:Subject"/>
+                    <t:FieldURI FieldURI="item:DateTimeReceived"/>
+                    <t:FieldURI FieldURI="item:DateTimeSent"/>
                 </t:AdditionalProperties>
             </m:ItemShape>
             <m:ItemIds>
@@ -888,7 +892,8 @@ class EasClient(
                     // Это ОСНОВНАЯ причина бага на Exchange 2007, где ItemOperations
                     // возвращает пустое тело и используется этот EWS fallback.
                     body = unescapeXml(body)
-                    val ewsMessageId = XmlUtils.extractTagValue(getItemResponse, "t:InternetMessageId")
+                    val ewsMessageId = (XmlUtils.extractTagValue(getItemResponse, "t:InternetMessageId")
+                        ?: XmlUtils.extractTagValue(getItemResponse, "InternetMessageId"))
                         ?.trim()
                         ?.takeIf { it.isNotBlank() }
                         ?.let(::unescapeXml)
@@ -896,6 +901,27 @@ class EasClient(
                         ?.trim()
                         ?.takeIf { it.isNotBlank() }
                         ?.let(::unescapeXml)
+                    val ewsSubject = XmlUtils.extractTagValue(getItemResponse, "t:Subject")
+                        ?.trim()?.takeIf { it.isNotBlank() }?.let(::unescapeXml)
+                    val ewsDateText = XmlUtils.extractTagValue(getItemResponse, "t:DateTimeReceived")
+                        ?: XmlUtils.extractTagValue(getItemResponse, "t:DateTimeSent")
+                    val ewsDateMillis = ewsDateText?.let { CalendarDateUtils.parseEwsDateTime(it) }
+                    if (!EwsMailMatch.acceptBody(
+                            localSubject = subject,
+                            localDateReceived = dateReceived,
+                            localMessageId = internetMessageId,
+                            ewsSubject = ewsSubject,
+                            ewsDateMillis = ewsDateMillis,
+                            ewsMessageId = ewsMessageId,
+                            lookedUpByMessageId = lookedUpByMessageId
+                        )
+                    ) {
+                        android.util.Log.w(
+                            "EasClient",
+                            "fetchEmailBodyViaEws: GetItem did not match local message, dropping body"
+                        )
+                        return@withContext EasResult.Success(EmailBodyResult(""))
+                    }
                     return@withContext EasResult.Success(
                         EmailBodyResult(
                             body = body,
@@ -972,39 +998,26 @@ class EasClient(
             </t:And>"""
             }
 
-            val subjectOnlyRestriction = """<t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCaseAndNonSpacingCharacters">
-                <t:FieldURI FieldURI="item:Subject"/>
-                <t:Constant Value="$escapedSubject"/>
-            </t:Contains>"""
-
             val restrictions = buildList {
-                if (!internetMessageId.isNullOrBlank()) {
-                    add(
-                        """<t:IsEqualTo>
+                if (EwsMailMatch.messageIdOnly(internetMessageId)) {
+                    for (idValue in EwsMailMatch.messageIdRestrictionValues(internetMessageId!!)) {
+                        add(
+                            """<t:IsEqualTo>
                 <t:FieldURI FieldURI="message:InternetMessageId"/>
                 <t:FieldURIOrConstant>
-                    <t:Constant Value="${escapeXml(internetMessageId)}"/>
+                    <t:Constant Value="${escapeXml(idValue)}"/>
                 </t:FieldURIOrConstant>
             </t:IsEqualTo>"""
-                    )
+                        )
+                    }
+                    return@buildList
                 }
                 if (dateReceived > 0L) {
-                    // Порядок: от самого узкого к более широкому окну; для Sent пробуем
-                    // дополнительно DateTimeSent, а затем DateTimeReceived. На каждое окно
-                    // требуется РОВНО один кандидат — иначе fallback отменяется.
                     for (field in dateFieldsToTry) {
-                        add(buildDateRestriction(15_000L, field))
-                        add(buildDateRestriction(120_000L, field))
-                        add(buildDateRestriction(600_000L, field))
-                        if (isSentFolder) {
-                            add(buildDateRestriction(3_600_000L, field))
+                        for (window in EwsMailMatch.dateWindowsMs()) {
+                            add(buildDateRestriction(window, field))
                         }
                     }
-                    if (isSentFolder && internetMessageId.isNullOrBlank()) {
-                        add(subjectOnlyRestriction)
-                    }
-                } else if (internetMessageId.isNullOrBlank()) {
-                    add(subjectOnlyRestriction)
                 }
             }
 

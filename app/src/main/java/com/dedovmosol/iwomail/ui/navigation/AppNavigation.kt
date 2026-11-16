@@ -539,9 +539,9 @@ fun AppNavigation(
                     }
                     
                     // Открываем письмо (даже если inbox не найден — пользователь должен увидеть письмо)
-                        navController.navigate(Screen.EmailDetail.createRoute(openEmailId)) {
-                        launchSingleTop = true
-                    }
+                    // Не launchSingleTop: маршрут один (email/{id}), иначе ViewModel
+                    // прошлого письма остаётся на вершине стека.
+                    navController.navigate(Screen.EmailDetail.createRoute(openEmailId))
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e

@@ -83,6 +83,43 @@ class EmailSyncService(
                 kotlin.math.abs(serverDate - localDateReceived) < DRAFT_DEDUP_WINDOW_MS
         }
 
+        /**
+         * Смена ServerId после SyncKey=0 (EAS 12.1): ровно одна старая запись с тем же to в ±2 с.
+         * Разный Message-ID или ConversationId — другое письмо, тело не переносить.
+         */
+        internal fun uniqueServerIdMigration(
+            incoming: EmailDedupInfo,
+            sameSubjectFrom: List<EmailDedupInfo>
+        ): EmailDedupInfo? {
+            val hits = sameSubjectFrom.filter { existing ->
+                existing.serverId != incoming.serverId &&
+                    existing.to == incoming.to &&
+                    kotlin.math.abs(existing.dateReceived - incoming.dateReceived) < 2_000L
+            }
+            if (hits.size != 1) return null
+            val one = hits.single()
+            val inId = com.dedovmosol.iwomail.eas.EwsMailMatch.normalizeMessageId(incoming.internetMessageId)
+            val oldId = com.dedovmosol.iwomail.eas.EwsMailMatch.normalizeMessageId(one.internetMessageId)
+            if (inId != null && oldId != null && inId != oldId) return null
+            if (!incoming.conversationId.isNullOrBlank() &&
+                !one.conversationId.isNullOrBlank() &&
+                incoming.conversationId != one.conversationId
+            ) {
+                return null
+            }
+            return one
+        }
+
+        /** Несколько старых записей в окне ±2 с — не угадывать, входящий Add не вставлять. */
+        internal fun ambiguousServerIdHits(incoming: EmailDedupInfo, sameSubjectFrom: List<EmailDedupInfo>): Boolean {
+            val hits = sameSubjectFrom.count { existing ->
+                existing.serverId != incoming.serverId &&
+                    existing.to == incoming.to &&
+                    kotlin.math.abs(existing.dateReceived - incoming.dateReceived) < 2_000L
+            }
+            return hits > 1
+        }
+
         /** Окно, в котором копия черновика без темы из EAS Sync считается тем же черновиком, что запись приложения. */
         const val DRAFT_MIGRATION_WINDOW_MS = 300_000L
 
@@ -512,9 +549,13 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
 
         for (tAtt in targetAtts) {
             val matchIdx = localAtts.withIndex().indexOfFirst { (i, sAtt) ->
-                i !in usedSourceIndices &&
-                ((!sAtt.contentId.isNullOrBlank() && tAtt.contentId == sAtt.contentId) ||
-                (sAtt.displayName.isNotBlank() && tAtt.displayName == sAtt.displayName))
+                i !in usedSourceIndices && (
+                    (sAtt.fileReference.isNotBlank() && tAtt.fileReference == sAtt.fileReference) ||
+                    (!sAtt.contentId.isNullOrBlank() && tAtt.contentId == sAtt.contentId) ||
+                    (sAtt.displayName.isNotBlank() && tAtt.displayName == sAtt.displayName &&
+                        localAtts.count { it.displayName == sAtt.displayName } == 1 &&
+                        targetAtts.count { it.displayName == tAtt.displayName } == 1)
+                )
             }
             if (matchIdx >= 0) {
                 usedSourceIndices.add(matchIdx)
@@ -1174,22 +1215,35 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             }
 
             if (matched != null) {
-                val matchingCandidate = matched.firstOrNull { existing ->
-                    kotlin.math.abs(existing.dateReceived - newEmail.dateReceived) < 5000
-                }
-                if (matchingCandidate != null) {
-                    if (isDrafts && matchingCandidate.serverId != newEmail.serverId) {
-                        draftReplacements[newEmail.id] = matchingCandidate.id
-                    } else if (!isDrafts && matchingCandidate.serverId != newEmail.serverId &&
-                        matchingCandidate.to == newEmail.to &&
-                        kotlin.math.abs(matchingCandidate.dateReceived - newEmail.dateReceived) < 2000) {
-                        // ServerId changed after SyncKey=0 reset (Exchange 2007 SP1 EAS 12.1).
-                        // Strict match: subject+from+to+date±2sec — minimizes false positives.
-                        // Record migration: old record must be updated to new serverId/id,
-                        // otherwise reconcile will delete it as orphan and MoveItems will use stale serverId.
-                        serverIdMigrations[matchingCandidate.id] = newEmail
+                if (isDrafts) {
+                    val matchingCandidate = matched.firstOrNull { existing ->
+                        kotlin.math.abs(existing.dateReceived - newEmail.dateReceived) < 5000
+                    }
+                    if (matchingCandidate != null) {
+                        if (matchingCandidate.serverId != newEmail.serverId) {
+                            draftReplacements[newEmail.id] = matchingCandidate.id
+                        } else {
+                            duplicateIds.add(newEmail.id)
+                        }
+                    }
+                } else {
+                    val incoming = EmailDedupInfo(
+                        id = newEmail.id,
+                        serverId = newEmail.serverId,
+                        subject = newEmail.subject,
+                        from = newEmail.from,
+                        to = newEmail.to,
+                        dateReceived = newEmail.dateReceived,
+                        internetMessageId = newEmail.internetMessageId,
+                        conversationId = newEmail.conversationId
+                    )
+                    val migrated = uniqueServerIdMigration(incoming, matched)
+                    if (migrated != null) {
+                        serverIdMigrations[migrated.id] = newEmail
                         duplicateIds.add(newEmail.id)
-                    } else {
+                    } else if (matched.any { it.serverId == newEmail.serverId } ||
+                        ambiguousServerIdHits(incoming, matched)
+                    ) {
                         duplicateIds.add(newEmail.id)
                     }
                 }
@@ -1699,29 +1753,20 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         emailId: String,
         serverAttachments: List<com.dedovmosol.iwomail.eas.EasAttachment>
     ) {
-        val serverNames = serverAttachments.map { it.displayName }.toSet()
-
         val filesToDelete = database.withTransaction {
-            val localAtts = attachmentDao.getAttachmentsList(emailId)
-
-            val staleAtts = localAtts.filter { it.displayName !in serverNames }
-            val pathsToDelete = staleAtts.mapNotNull { it.localPath }
-            val staleIds = staleAtts.map { it.id }
-            if (staleIds.isNotEmpty()) {
-                attachmentDao.deleteByIds(staleIds)
-            }
-
-            val localByName = localAtts.associateBy { it.displayName }
+            val localAtts = attachmentDao.getAttachmentsList(emailId).toMutableList()
+            val matchedLocalIds = mutableSetOf<Long>()
+            val usedLocal = mutableSetOf<Int>()
             val newAtts = mutableListOf<AttachmentEntity>()
             for (serverAtt in serverAttachments) {
-                val existing = localByName[serverAtt.displayName]
-                if (existing != null) {
-                    if (serverAtt.fileReference.isNotEmpty()) {
-                        attachmentDao.updateFileReference(emailId, serverAtt.displayName, serverAtt.fileReference)
+                val idx = AttachmentKeys.indexOf(localAtts, serverAtt, usedLocal)
+                if (idx >= 0) {
+                    usedLocal.add(idx)
+                    val existing = localAtts[idx]
+                    matchedLocalIds.add(existing.id)
+                    if (serverAtt.fileReference.isNotEmpty() && existing.fileReference != serverAtt.fileReference) {
+                        attachmentDao.updateFileReferenceById(existing.id, serverAtt.fileReference)
                     }
-                    // Синхронизируем contentId + inline-флаг, если изменился contentId ИЛИ inline
-                    // ещё не выставлен (например черновик, синхронизированный старой версией со
-                    // строгим isInline=IsInline). Иначе inline-картинка осталась бы дублем.
                     if (!serverAtt.contentId.isNullOrBlank() &&
                         (existing.contentId != serverAtt.contentId || existing.isInline != serverAtt.effectiveIsInline)
                     ) {
@@ -1739,10 +1784,15 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                     ))
                 }
             }
+            val staleAtts = localAtts.filter { it.id !in matchedLocalIds }
+            val pathsToDelete = staleAtts.mapNotNull { it.localPath }
+            val staleIds = staleAtts.map { it.id }
+            if (staleIds.isNotEmpty()) {
+                attachmentDao.deleteByIds(staleIds)
+            }
             if (newAtts.isNotEmpty()) {
                 attachmentDao.insertAll(newAtts)
             }
-
             pathsToDelete
         }
 

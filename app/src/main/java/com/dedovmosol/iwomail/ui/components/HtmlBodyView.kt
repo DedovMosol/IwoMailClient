@@ -4,6 +4,7 @@ import android.webkit.WebView
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -63,7 +64,10 @@ fun HtmlBodyView(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp)
-                .then(if (webViewHeight > 0) Modifier.height(webViewHeight.dp) else Modifier),
+                .then(
+                    if (webViewHeight > 0) Modifier.height(webViewHeight.dp)
+                    else Modifier.heightIn(min = 48.dp)
+                ),
             colors = CardDefaults.cardColors(
                 containerColor = androidx.compose.ui.graphics.Color.White
             )

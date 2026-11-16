@@ -235,7 +235,7 @@ interface EmailDao {
     @Query("SELECT id FROM emails WHERE folderId = :folderId")
     suspend fun getEmailIdsByFolder(folderId: String): List<String>
 
-    @Query("SELECT id, serverId, subject, `from`, `to`, dateReceived FROM emails WHERE folderId = :folderId")
+    @Query("SELECT id, serverId, subject, `from`, `to`, dateReceived, internetMessageId, conversationId FROM emails WHERE folderId = :folderId")
     suspend fun getDedupInfoByFolder(folderId: String): List<EmailDedupInfo>
 
     /** Адрес писем на сервере без тел: SQLite ограничивает число параметров IN (999) — вызывать пачками ≤ 500. */
@@ -816,6 +816,9 @@ interface AttachmentDao {
 
     @Query("UPDATE attachments SET fileReference = :fileReference WHERE emailId = :emailId AND displayName = :displayName")
     suspend fun updateFileReference(emailId: String, displayName: String, fileReference: String)
+
+    @Query("UPDATE attachments SET fileReference = :fileReference WHERE id = :id")
+    suspend fun updateFileReferenceById(id: Long, fileReference: String)
 
     @Query("UPDATE attachments SET contentId = :contentId, isInline = :isInline WHERE id = :id")
     suspend fun updateContentId(id: Long, contentId: String, isInline: Boolean)

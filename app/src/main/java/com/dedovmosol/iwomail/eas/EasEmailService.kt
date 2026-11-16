@@ -322,7 +322,8 @@ class EasEmailService internal constructor(
                 }
             }
 
-            if (fetchMimeHeaders) {
+            // Заголовки: MDN/отписка по флагу; при пустом теле — всегда (Message-ID для безопасного EWS).
+            if (fetchMimeHeaders || bodyContent.isEmpty()) {
                 val headers = fetchTopLevelHeaders(collectionId, serverId)
 
                 if (headers is EasResult.Success && headers.data == SENTINEL_NOT_FOUND && bodyContent.isEmpty()) {
@@ -368,7 +369,9 @@ class EasEmailService internal constructor(
         )) {
             is EasResult.Success -> when {
                 // Сбой на сервере (Status ≠ 1) — не «заголовков нет»: иначе отписка письма потерялась бы навсегда
-                mime.data.status != null && mime.data.status != 1 && mime.data.status != 8 ->
+                mime.data.status != null &&
+                    mime.data.status != ItemOperationsStatus.SUCCESS &&
+                    mime.data.status != ItemOperationsStatus.INVALID_RANGE ->
                     EasResult.Error("ItemOperations Fetch status=${mime.data.status}")
                 else -> EasResult.Success(
                     when (val data = mime.data.data) {
@@ -420,7 +423,7 @@ class EasEmailService internal constructor(
             val status = EasPatterns.ITEM_OPS_FETCH_STATUS
                 .find(responseXml)?.groupValues?.get(1)?.toIntOrNull()
                 ?: deps.extractValue(responseXml, "Status")?.toIntOrNull()
-            if (status == 8) {
+            if (status == ItemOperationsStatus.NOT_FOUND) {
                 return@executeEasCommand FetchedBody(SENTINEL_NOT_FOUND, truncated = false, status = status)
             }
 

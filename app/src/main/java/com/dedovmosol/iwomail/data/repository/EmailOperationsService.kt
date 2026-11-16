@@ -12,8 +12,6 @@ import com.dedovmosol.iwomail.eas.onSuccessResult
 import com.dedovmosol.iwomail.util.stripHtml
 import com.dedovmosol.iwomail.widget.updateMailWidget
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import java.util.Locale
 
 /**
@@ -239,12 +237,14 @@ class EmailOperationsService(
 
             val folderServerId = email.folderId.substringAfter("_")
 
-            return when (val result = client.fetchEmailBodyWithMdn(
-                folderServerId,
-                email.serverId,
-                // Заголовки MIME (отчёт о прочтении, отписка) — не для своих писем и не для записей RSS-каналов
-                fetchMimeHeaders = folder?.type != FolderType.SENT_ITEMS && !com.dedovmosol.iwomail.eas.RssItems.isRss(email.messageClass)
-            )) {
+            return when (val result = FolderSyncGate.withFolder(email.folderId) {
+                client.fetchEmailBodyWithMdn(
+                    folderServerId,
+                    email.serverId,
+                    fetchMimeHeaders = folder?.type != FolderType.SENT_ITEMS &&
+                        !com.dedovmosol.iwomail.eas.RssItems.isRss(email.messageClass)
+                )
+            }) {
                 is EasResult.Success -> {
                     var bodyContent = result.data.body
                     var resolvedMessageId = result.data.originalMessageId
@@ -262,7 +262,8 @@ class EmailOperationsService(
                                 subject = email.subject,
                                 folderType = folderTypeStr,
                                 dateReceived = email.dateReceived,
-                                internetMessageId = email.internetMessageId
+                                internetMessageId = resolvedMessageId?.takeIf { it.isNotBlank() }
+                                    ?: email.internetMessageId
                             )
                             if (ewsResult is EasResult.Success && ewsResult.data.body.isNotEmpty()) {
                                 android.util.Log.d("BDY", "loadEmailBody: EWS fallback SUCCESS, bodyLength=${ewsResult.data.body.length}")
@@ -315,10 +316,9 @@ class EmailOperationsService(
                 }
                 is EasResult.Error -> {
                     if (result.message == "OBJECT_NOT_FOUND") {
-                        // КРИТИЧНО: ItemOperations Status=8 не всегда означает, что письмо
-                        // удалено на сервере. Exchange 2007 SP1 может возвращать Status=8 для
-                        // Sent Items с вложениями (.jpg, .mp4 и др.), хотя письмо валидно.
-                        // Пробуем EWS fallback перед удалением.
+                        // [MS-ASCMD] ItemOperations Fetch Status=6 — объекта нет.
+                        // На 2007 пустой Fetch / Status=8 (Range) сюда больше не попадают.
+                        // EWS — только по Message-ID или узкому окну; чужое тело не пишем.
                         val folderForCheck = folder ?: folderDao.getFolder(email.folderId)
                         var recovered = false
 
@@ -519,7 +519,9 @@ class EmailOperationsService(
             val folderServerId = email.folderId.substringAfter("_")
 
             val attResult = kotlinx.coroutines.withTimeoutOrNull(20_000L) {
-                client.fetchAttachmentMetadata(folderServerId, sid)
+                FolderSyncGate.withFolder(email.folderId) {
+                    client.fetchAttachmentMetadata(folderServerId, sid)
+                }
             } ?: run {
                 android.util.Log.w("EmailOps", "refreshAttachmentMetadata timeout emailId=$emailId")
                 return
@@ -548,36 +550,30 @@ class EmailOperationsService(
             val client = accountRepo.createEasClient(accountId) ?: return
             val folderServerId = inboxFolder.serverId
 
-            kotlinx.coroutines.supervisorScope {
-                emails.chunked(3).forEach { chunk ->
-                    chunk.map { email ->
-                        async {
-                            try {
-                                // КРИТИЧНО: Сохраняем email.id и email.serverId в локальные переменные
-                                // чтобы избежать race condition при параллельной загрузке
-                                val emailId = email.id
-                                val emailServerId = email.serverId
-
-                                // Записи RSS-каналов (лента во «Входящих») — без запроса заголовков MIME
-                                val result = client.fetchEmailBodyWithMdn(
-                                    folderServerId, emailServerId,
-                                    fetchMimeHeaders = !com.dedovmosol.iwomail.eas.RssItems.isRss(email.messageClass)
-                                )
-                                result.onSuccessResult { response ->
-                                    emailDao.updateBody(emailId, response.body)
-                                    if (!response.mdnRequestedBy.isNullOrBlank() && !email.mdnSent) {
-                                        emailDao.updateMdnRequestedBy(emailId, response.mdnRequestedBy)
-                                    }
-                                    response.listUnsubscribe?.let {
-                                        emailDao.updateListUnsubscribe(emailId, it, response.listUnsubscribeOneClick)
-                                    }
-                                    response.originalMessageId
-                                        ?.takeIf { it.isNotBlank() }
-                                        ?.let { emailDao.updateInternetMessageId(emailId, it) }
-                                }
-                            } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
+            for (email in emails) {
+                try {
+                    val emailId = email.id
+                    val emailServerId = email.serverId
+                    val result = FolderSyncGate.tryWithFolder(inboxFolder.id) {
+                        client.fetchEmailBodyWithMdn(
+                            folderServerId, emailServerId,
+                            fetchMimeHeaders = !com.dedovmosol.iwomail.eas.RssItems.isRss(email.messageClass)
+                        )
+                    } ?: continue
+                    result.onSuccessResult { response ->
+                        if (response.body.isNotBlank()) emailDao.updateBody(emailId, response.body)
+                        if (!response.mdnRequestedBy.isNullOrBlank() && !email.mdnSent) {
+                            emailDao.updateMdnRequestedBy(emailId, response.mdnRequestedBy)
                         }
-                    }.awaitAll()
+                        response.listUnsubscribe?.let {
+                            emailDao.updateListUnsubscribe(emailId, it, response.listUnsubscribeOneClick)
+                        }
+                        response.originalMessageId
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { emailDao.updateInternetMessageId(emailId, it) }
+                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                 }
             }
         } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }

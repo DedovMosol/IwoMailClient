@@ -30,6 +30,8 @@ register_krista_addin.bat
 # Screenshots (store/marketing artifacts not for repo)
 Screenshots/
 Rustore*.png
+# Local UX mock references (not for repo)
+photo/
 
 # Pre-refactor screen backups (.bak copies of Compose screens)
 backups/

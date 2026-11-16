@@ -83,10 +83,21 @@ class FlagPresetsTest {
 
     @Test
     fun `star toggles a no-date flag`() {
-        assertThat(FlagPresets.toggled(MailFlag.NONE)).isEqualTo(MailFlag(MailFlag.STATUS_ACTIVE))
-        assertThat(FlagPresets.toggled(MailFlag(MailFlag.STATUS_ACTIVE, 1L, 2L, 3L))).isEqualTo(MailFlag.NONE)
-        // Выполненный — снова в работу
-        assertThat(FlagPresets.toggled(MailFlag(MailFlag.STATUS_COMPLETE))).isEqualTo(MailFlag(MailFlag.STATUS_ACTIVE))
+        val now = time("2026-10-29 15:00")
+        assertThat(FlagPresets.toggled(MailFlag.NONE, now, zone)).isEqualTo(
+            MailFlag(MailFlag.STATUS_ACTIVE, day("2026-10-29"), day("2026-10-29"), null)
+        )
+        assertThat(FlagPresets.toggled(MailFlag(MailFlag.STATUS_ACTIVE, 1L, 2L, 3L), now, zone)).isEqualTo(MailFlag.NONE)
+        assertThat(FlagPresets.toggled(MailFlag(MailFlag.STATUS_COMPLETE), now, zone)).isEqualTo(
+            MailFlag(MailFlag.STATUS_ACTIVE, day("2026-10-29"), day("2026-10-29"), null)
+        )
+        val xml = com.dedovmosol.iwomail.eas.MailFlags.toXml(
+            FlagPresets.toggled(MailFlag.NONE, now, zone), now, zone
+        )
+        assertThat(xml).contains("<tasks:StartDate>")
+        assertThat(xml).contains("<tasks:DueDate>")
+        assertThat(xml).contains("<tasks:UtcStartDate>")
+        assertThat(xml).contains("<tasks:UtcDueDate>")
     }
 
     @Test

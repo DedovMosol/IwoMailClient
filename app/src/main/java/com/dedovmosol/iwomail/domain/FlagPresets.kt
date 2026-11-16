@@ -42,8 +42,15 @@ object FlagPresets {
         return MailFlag.due(day, day, time)
     }
 
-    /** Отметка, которую ставит звёздочка: снять или поставить без срока. */
-    fun toggled(current: MailFlag): MailFlag = if (current.active) MailFlag.NONE else MailFlag(MailFlag.STATUS_ACTIVE)
+    /**
+     * Звезда: снять или поставить «на сегодня» (четыре даты EAS).
+     * Флаг без срока Exchange 2007 часто отклоняет Sync Status 6 ([MS-ASEMAIL]).
+     */
+    fun toggled(
+        current: MailFlag,
+        now: Long = System.currentTimeMillis(),
+        zone: TimeZone = TimeZone.getDefault()
+    ): MailFlag = if (current.active) MailFlag.NONE else flag(FlagPreset.TODAY, current, now, zone)
 
     private const val FRIDAY = 4
 
