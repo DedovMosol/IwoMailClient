@@ -592,17 +592,11 @@ interface EmailDao {
     suspend fun getDraftEmails(accountId: Long): List<EmailEntity>
 
     /**
-     * Получает все локальные черновики для аккаунта (по serverId)
+     * Черновики на устройстве (`local_draft_`) аккаунта без тел: автоочистке нужны только id и время последней
+     * правки (у черновика dateReceived — момент сохранения), а тела с картинками — мегабайты.
      */
-    @Query("SELECT * FROM emails WHERE accountId = :accountId AND serverId LIKE 'local_draft_%' ORDER BY dateReceived DESC")
-    suspend fun getLocalDraftEmails(accountId: Long): List<EmailEntity>
-
-    /**
-     * Получает письма из папки, полученные раньше указанного времени
-     * Используется для автоочистки корзины
-     */
-    @Query("SELECT * FROM emails WHERE folderId = :folderId AND dateReceived < :beforeTime")
-    suspend fun getEmailsOlderThan(folderId: String, beforeTime: Long): List<EmailEntity>
+    @Query("SELECT id, serverId, dateReceived FROM emails WHERE accountId = :accountId AND substr(serverId, 1, 12) = 'local_draft_'")
+    suspend fun getLocalDraftRefs(accountId: Long): List<LocalDraftRef>
 
     /**
      * Получает уникальные email адреса из истории переписки для автодополнения

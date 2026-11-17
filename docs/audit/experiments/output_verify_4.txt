@@ -1,0 +1,25 @@
+=== NAV-11 | ContentResolver.openInputStream supports content, android.resource and file schemes
+URL: https://developer.android.com/reference/android/content/ContentResolver
+RESULT: FOUND (263232 chars fetched)
+SNIPPET: ...RY_ARG_SQL_SELECTION_ARGS Key for SQL selection string arguments list. String QUERY_ARG_SQL_SORT_ORDER Key for an SQL style sort string that may be present in the query Bundle argument passed to ContentProvider.query(Uri,String[],Bundle,CancellationSignal) when called by a legacy client. int QUERY_SORT_DIRECTION_ASCENDING int QUERY_SORT_DIRECTION_DESCENDING String SCHEME_ANDROID_RESOURCE String SCHEME_CONTENT String SCHEME_FILE String SYNC_EXTRAS_ACCOUNT This constant was deprecated in API level 15. instead use requestSync(android.accounts.Account,String,android.os.Bundle) String SYNC_EXTRAS_DISCARD_LOCAL_DELETIONS Indicates that the sync adapter should not proceed with the delete operations, if it determines that there are too many. String SYNC_EXTRAS_DO_NOT_RETRY If this extra is set to true then the request will not be retried if it fai...
+
+=== NAV-11 | ContentResolver.openInputStream (AOSP source: file scheme branch)
+URL: https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/content/ContentResolver.java?format=TEXT
+RESULT: FOUND (180851 chars fetched)
+SNIPPET: ... InputStream stream = r.r.openRawResource(r.id); return stream; } catch (Resources.NotFoundException ex) { throw new FileNotFoundException("Resource does not exist: " + uri); } } else if (SCHEME_FILE.equals(scheme)) { // Note: left here to avoid breaking compatibility. May be removed // with sufficient testing. return new FileInputStream(uri.getPath()); } else { AssetFileDescriptor fd = openAssetFileDescriptor(uri...
+
+=== MAIL-01 | AOSP: MediaStore.Downloads declared with @SdkConstant / since Q
+URL: https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/provider/MediaStore.java?format=TEXT
+RESULT: FETCH FAILED
+
+=== NAV-19 | Bundle/Saved state size guidance (activity state saving)
+URL: https://developer.android.com/topic/libraries/architecture/saving-states
+RESULT: FOUND (32723 chars fetched)
+SNIPPET: ...d frames and visual stutter. Key Point: Saved state APIs only save data written to it when the Activity is stopped. Writing into it in between this lifecycle state defers the save operation till the next stopped lifecycle event. Don't use saved state to store large amounts of data, such as bitmaps, nor complex data structures that require lengthy serialization or deserialization. Instead, store only primitive types and simple, small objects such as String . As such, use saved state to store a minimal amount of data nece...
+
+=== CMP-09 | AlarmManager: setExactAndAllowWhileIdle and SCHEDULE_EXACT_ALARM
+URL: https://developer.android.com/develop/background-work/services/alarms
+RESULT: FOUND (32644 chars fetched)
+SNIPPET: ...r this reason, exact alarms aren't affected by foreground service launch restrictions . Declare the appropriate exact alarm permission If your app targets Android 12 or higher, you must obtain the "Alarms & reminders" special app access. To do so, declare the SCHEDULE_EXACT_ALARM permission in your app's manifest file, as shown in the following code snippet: <manifest ...> <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/> <application ...> ... </application> </manifest> If your app targets Android 13 (API level...
+
+DONE

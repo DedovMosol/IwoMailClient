@@ -929,7 +929,7 @@ fun SetupScreen(
                                 contentColor = Color.White
                             )
                         ) {
-                            Text(if (isRussian()) "Нет" else "None", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                            Text("STARTTLS", color = Color.White, style = MaterialTheme.typography.labelLarge)
                         }
                     } else {
                         OutlinedButton(
@@ -945,10 +945,17 @@ fun SetupScreen(
                             border = BorderStroke(1.dp, securityTheme.gradientStart),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = securityTheme.gradientStart)
                         ) {
-                            Text(if (isRussian()) "Нет" else "None")
+                            Text("STARTTLS")
                         }
                     }
                 }
+                // UI2-01: второй режим — не «без шифрования», а STARTTLS: пароль уходит только после перехода на TLS
+                if (!useSSL) Text(
+                    if (isRussian()) "STARTTLS: шифрование включается на обычном порту (143, 110) до входа. Сервер без шифрования не получит пароль."
+                    else "STARTTLS: encryption is switched on over the plain port (143, 110) before sign-in. A server without encryption never gets the password.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
 
                 OutlinedTextField(
                     value = incomingPort,

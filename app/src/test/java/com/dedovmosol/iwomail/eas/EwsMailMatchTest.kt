@@ -5,6 +5,23 @@ import org.junit.Test
 
 class EwsMailMatchTest {
 
+    /** FieldURI, которые Exchange 2007 SP1 принимает в GetItem (проверены на сервере, output_EasProbe_fielduris/ewsmid). */
+    private val validOn2007 = setOf(
+        "message:InternetMessageId", "item:InReplyTo", "item:Subject", "item:DateTimeReceived", "item:DateTimeSent"
+    )
+
+    @Test
+    fun `body GetItem asks only for FieldURIs of the Exchange 2007 schema`() {
+        val request = EwsMailMatch.bodyGetItemRequest("AAMk+id/1=")
+
+        val fields = Regex("FieldURI=\"([^\"]+)\"").findAll(request).map { it.groupValues[1] }.toSet()
+        // message:InReplyTo роняет весь запрос SOAP Fault'ом (HTTP 500) — раньше откат тела не работал
+        assertThat(fields).doesNotContain("message:InReplyTo")
+        assertThat(fields).containsExactlyElementsIn(validOn2007)
+        assertThat(request).contains("<t:ItemId Id=\"AAMk+id/1=\"/>")
+        assertThat(request).contains("<t:RequestServerVersion Version=\"Exchange2007_SP1\"/>")
+    }
+
     @Test
     fun messageIdNormalizesBracketsAndCase() {
         assertThat(EwsMailMatch.sameMessageId("<A@B.com>", "a@b.com")).isTrue()

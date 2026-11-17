@@ -35,6 +35,15 @@ import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import java.text.SimpleDateFormat
 import java.util.*
 
+/**
+ * Год и месяц (0-11) через [delta] месяцев. PIM-01: прежний `calendar.set(MONTH, m ± 1)` хранил день выбранной даты
+ * (нестрогий Calendar: 31 января + 1 месяц = 3 марта, из 31 марта «назад» — снова март) и её год, а не показанный.
+ */
+internal fun shiftMonth(year: Int, month: Int, delta: Int): Pair<Int, Int> {
+    val total = year * 12 + month + delta
+    return Math.floorDiv(total, 12) to Math.floorMod(total, 12)
+}
+
 @Composable
 internal fun MonthView(
     events: List<CalendarEventEntity>,
@@ -100,14 +109,14 @@ internal fun MonthView(
                 month = currentMonth,
                 year = currentYear,
                 onPreviousMonth = {
-                    calendar.set(Calendar.MONTH, currentMonth - 1)
-                    currentMonth = calendar.get(Calendar.MONTH)
-                    currentYear = calendar.get(Calendar.YEAR)
+                    val (y, m) = shiftMonth(currentYear, currentMonth, -1)
+                    currentYear = y
+                    currentMonth = m
                 },
                 onNextMonth = {
-                    calendar.set(Calendar.MONTH, currentMonth + 1)
-                    currentMonth = calendar.get(Calendar.MONTH)
-                    currentYear = calendar.get(Calendar.YEAR)
+                    val (y, m) = shiftMonth(currentYear, currentMonth, 1)
+                    currentYear = y
+                    currentMonth = m
                 },
                 onTitleClick = { showYearView = true }
             )

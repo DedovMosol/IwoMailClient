@@ -315,7 +315,6 @@ class EmailOperationsService(
                         // На 2007 пустой Fetch / Status=8 (Range) сюда больше не попадают.
                         // EWS — только по Message-ID или узкому окну; чужое тело не пишем.
                         val folderForCheck = folder ?: folderDao.getFolder(email.folderId)
-                        var recovered = false
 
                         if (client.isExchange2007()) {
                             val ewsFolder = ewsFolderOf(folderForCheck)
@@ -345,21 +344,12 @@ class EmailOperationsService(
                             }
                         }
 
-                        if (!recovered) {
-                            // НЕ удаляем черновики и отправленные при OBJECT_NOT_FOUND!
-                            // Черновики: EAS может не проиндексировать после EWS CreateItem.
-                            // Отправленные: Exchange 2007 SP1 возвращает Status=8 для некоторых
-                            // писем с вложениями, но письмо валидно на сервере.
-                            val safeType = folderForCheck?.type
-                            if (safeType != FolderType.DRAFTS && safeType != FolderType.SENT_ITEMS) {
-                                EmailSyncService.registerDeletedEmail(emailId, context)
-                                attachmentDao.deleteByEmail(emailId)
-                                emailDao.delete(emailId)
-                                updateFolderCounts(email.folderId)
-                            } else {
-                                android.util.Log.w("BDY", "loadEmailBody: OBJECT_NOT_FOUND for type=$safeType, NOT deleting locally")
-                            }
-                        }
+                        // PROTO-08: письмо локально НЕ удаляем. Status 6 не значит «удалено»: пока идёт полная
+                        // синхронизация папки (SyncKey=0), Exchange 2007 отвечает 6 на каждое письмо, которое ещё
+                        // не пришло заново (проверено на сервере). Прежнее удаление с защитой от «воскрешения»
+                        // на 5 минут прятало такое письмо до следующей полной синхронизации. Удалённое на сервере
+                        // убирает синхронизация (Delete или сверка после полного прохода); её запускает экран.
+                        android.util.Log.w("BDY", "loadEmailBody: OBJECT_NOT_FOUND for type=${folderForCheck?.type}, left to folder sync")
                     }
                     result
                 }

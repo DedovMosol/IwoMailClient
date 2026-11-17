@@ -1,0 +1,36 @@
+ImapProbe Tue Nov 17 00:20:17 +04 2026, JavaMail 1.6.7
+=== A1. IMAP порт 143, свойства как в ImapClient (useSSL=false, starttls.enable=false), возможности как у реального сервера ===
+  JavaMail 1.6.7 + свойства приложения
+    исход у клиента: AuthenticationFailedException: AUTHENTICATE failed.
+    клиент -> сервер: A0 CAPABILITY
+    клиент -> сервер: A1 AUTHENTICATE PLAIN
+    клиент -> сервер:   [ответ на AUTHENTICATE] AHUAZmFrZS1zZWNyZXQ=  => base64-декод: |u|fake-secret
+    пароль виден на линии открытым текстом: ДА
+
+=== A2. То же, но предлагаемое исправление: starttls.enable=true, starttls.required=true ===
+  JavaMail 1.6.7 + STARTTLS required
+    исход у клиента: MessagingException: B1 BAD audit-stop
+    клиент -> сервер: B0 CAPABILITY
+    клиент -> сервер: B1 STARTTLS
+    пароль виден на линии открытым текстом: нет
+
+=== A3. POP3 порт 110, свойства как в Pop3Client, CAPA как у реального сервера ===
+  JavaMail 1.6.7 + свойства Pop3Client
+    исход у клиента: AuthenticationFailedException: fail
+    клиент -> сервер: CAPA
+    клиент -> сервер: USER u
+    клиент -> сервер: PASS fake-secret
+    пароль виден на линии открытым текстом: ДА
+
+=== A4. IMAPS: сертификат доверенный, но выписан на другое имя (CN=evil.example), useSSL=true, acceptAllCerts=false ===
+  JavaMail 1.6.7, imaps, checkserveridentity=не задан (как в приложении)
+    исход у клиента: AuthenticationFailedException: AUTHENTICATE failed.
+    клиент -> сервер: C0 CAPABILITY
+    клиент -> сервер: C1 AUTHENTICATE PLAIN
+    клиент -> сервер:   [ответ на AUTHENTICATE] AHUAZmFrZS1zZWNyZXQ=  => base64-декод: |u|fake-secret
+    пароль виден на линии открытым текстом: ДА
+
+=== A5. То же с предлагаемым исправлением mail.imaps.ssl.checkserveridentity=true ===
+  JavaMail 1.6.7, imaps, checkserveridentity=true
+    исход у клиента: MessagingException: Can't verify identity of server: 127.0.0.1
+    пароль виден на линии открытым текстом: нет

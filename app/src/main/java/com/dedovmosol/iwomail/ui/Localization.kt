@@ -136,6 +136,14 @@ object Strings {
     val autoCleanupTrash: String @Composable get() = if (isRussian()) "Корзина" else "Trash"
     val autoCleanupDrafts: String @Composable get() = if (isRussian()) "Черновики" else "Drafts"
     val autoCleanupSpam: String @Composable get() = if (isRussian()) "Спам" else "Spam"
+    val shareFilesSkipped: String @Composable get() = if (isRussian())
+        "Не все файлы добавлены: превышен лимит вложений 10 МБ или файл недоступен"
+        else "Not all files were attached: the 10 MB attachment limit was exceeded or a file could not be read"
+    val autoCleanupFoldersHint: String @Composable get() = if (isRussian())
+        "Удаляется только то, что пролежало в папке весь срок: первая очистка — через выбранный срок после включения. " +
+            "Корзина и спам очищаются на сервере безвозвратно. Черновик на устройстве удаляется, если его не меняли весь срок."
+        else "Only items that stayed in the folder for the whole period are removed: the first cleanup runs one period after you turn it on. " +
+            "Trash and spam are permanently deleted on the server. A draft on the device is removed if it was not edited for the whole period."
     val autoCleanupAppFiles: String @Composable get() = if (isRussian()) "Файлы приложения" else "App files"
     val autoCleanupDownloads: String @Composable get() = if (isRussian()) "Загрузки" else "Downloads"
     val autoCleanupRollback: String @Composable get() = if (isRussian()) "Файлы отката" else "Rollback files"

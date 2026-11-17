@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import com.dedovmosol.iwomail.ui.utils.rememberAppHaptics
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -1703,8 +1704,9 @@ fun EmailDetailScreen(
                         // Plain text — с кликабельными ссылками и email-адресами
                         val linkColor = MaterialTheme.colorScheme.primary
                         val bodyStyle = MaterialTheme.typography.bodyMedium
-                        val annotatedBody = remember(bodyText, linkColor) {
-                            buildAnnotatedString {
+                        // MAIL-25: поиск ссылок — вне главного потока; до результата текст показывается без ссылок
+                        val annotatedBody by produceState(AnnotatedString(bodyText), bodyText, linkColor) {
+                            value = withContext(Dispatchers.Default) { buildAnnotatedString {
                                 var lastIndex = 0
                                 BODY_LINK_REGEX.findAll(bodyText).forEach { match ->
                                     // Текст до ссылки
@@ -1732,7 +1734,7 @@ fun EmailDetailScreen(
                                 if (lastIndex < bodyText.length) {
                                     append(bodyText.substring(lastIndex))
                                 }
-                            }
+                            } }
                         }
                         @Suppress("DEPRECATION")
                         ClickableText(

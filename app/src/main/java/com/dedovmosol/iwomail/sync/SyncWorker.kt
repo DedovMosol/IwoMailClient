@@ -238,7 +238,7 @@ class SyncWorker(
                 
                 if (!serviceRunning) {
                     android.util.Log.i("SyncWorker", "PushService not running - starting it")
-                    PushService.start(applicationContext)
+                    PushService.startOrSchedule(applicationContext)
                 }
             }
         } catch (e: Exception) {
@@ -305,120 +305,66 @@ class SyncWorker(
     }
     
     /**
-     * Автоматическая очистка папок по ИНТЕРВАЛУ:
-     * значение N в настройках означает "чистить раз в N дней".
-     *
-     * Поведение:
-     * - Корзина/спам: полная очистка папки при наступлении интервала.
-     * - Локальные черновики: полная очистка при наступлении интервала.
+     * Автоочистка корзины, спама и черновиков на устройстве — правила в [AutoFolderCleanup].
+     * Первая проверка после установки, включения или смены срока ничего не удаляет.
      */
     private suspend fun performAutoTrashCleanup(accounts: List<com.dedovmosol.iwomail.data.database.AccountEntity>): Boolean {
         return try {
-            var hasCleanupErrors = false
-            val now = System.currentTimeMillis()
-
-            for (account in accounts) {
-                // Очистка корзины: раз в N дней, начисто
-                if (account.autoCleanupTrashDays > 0) {
-                    val intervalMs = account.autoCleanupTrashDays * ONE_DAY_MS
-                    val lastRun = settingsRepo.getLastAutoCleanupTrashTime(account.id)
-                    if (now - lastRun >= intervalMs) {
-                        val trashFolders = database.folderDao().getFoldersByAccountList(account.id)
-                            .filter { it.type == FolderType.DELETED_ITEMS }
-
-                        var folderFailed = false
-                        for (trashFolder in trashFolders) {
-                            val emailIds = database.emailDao().getEmailIdsByFolder(trashFolder.id)
-                            if (emailIds.isNotEmpty()) {
-                                for (batch in emailIds.chunked(200)) {
-                                    val result = mailRepo.deleteEmailsPermanently(batch)
-                                    if (result is EasResult.Error) {
-                                        folderFailed = true
-                                        hasCleanupErrors = true
-                                        android.util.Log.w("SyncWorker", "Auto cleanup trash failed for account ${account.id}: ${result.message}")
-                                        break
-                                    }
-                                }
-                            }
-                        }
-
-                        if (!folderFailed) {
-                            settingsRepo.setLastAutoCleanupTrashTime(account.id, now)
-                        }
-                    }
-                }
-
-                // Очистка локальных черновиков: раз в N дней, начисто
-                if (account.autoCleanupDraftsDays > 0) {
-                    val intervalMs = account.autoCleanupDraftsDays * ONE_DAY_MS
-                    val lastRun = settingsRepo.getLastAutoCleanupDraftsTime(account.id)
-                    if (now - lastRun >= intervalMs) {
-                        val localDrafts = database.emailDao().getLocalDraftEmails(account.id)
-                        var draftsFailed = false
-                        for (draft in localDrafts) {
-                            try {
-                                // Удаляем вложения
-                                database.attachmentDao().deleteByEmail(draft.id)
-                                // Удаляем черновик
-                                database.emailDao().delete(draft.id)
-                            } catch (e: Exception) {
-                                if (e is kotlinx.coroutines.CancellationException) throw e
-                                draftsFailed = true
-                                hasCleanupErrors = true
-                                android.util.Log.w("SyncWorker", "Auto cleanup local draft failed for ${draft.id}", e)
-                            }
-                        }
-                        if (!draftsFailed) {
-                            settingsRepo.setLastAutoCleanupDraftsTime(account.id, now)
-                        }
-                    }
-                }
-
-                // Очистка спама: раз в N дней, начисто
-                if (account.autoCleanupSpamDays > 0) {
-                    val intervalMs = account.autoCleanupSpamDays * ONE_DAY_MS
-                    val lastRun = settingsRepo.getLastAutoCleanupSpamTime(account.id)
-                    if (now - lastRun >= intervalMs) {
-                        val spamFolders = database.folderDao().getFoldersByAccountList(account.id)
-                            .filter { it.type == FolderType.JUNK_EMAIL }
-
-                        var spamFailed = false
-                        for (spamFolder in spamFolders) {
-                            val emailIds = database.emailDao().getEmailIdsByFolder(spamFolder.id)
-                            if (emailIds.isNotEmpty()) {
-                                for (batch in emailIds.chunked(200)) {
-                                    val result = mailRepo.deleteEmailsPermanently(batch)
-                                    if (result is EasResult.Error) {
-                                        spamFailed = true
-                                        hasCleanupErrors = true
-                                        android.util.Log.w("SyncWorker", "Auto cleanup spam failed for account ${account.id}: ${result.message}")
-                                        break
-                                    }
-                                }
-                            }
-                        }
-
-                        if (!spamFailed) {
-                            settingsRepo.setLastAutoCleanupSpamTime(account.id, now)
-                        }
-                    }
-                }
-            }
-
-            if (hasCleanupErrors) {
-                false
-            } else {
-                // Глобальный маркер поддерживаем для обратной совместимости/мониторинга
-                settingsRepo.setLastTrashCleanupTime(System.currentTimeMillis())
-                true
-            }
+            val ok = createAutoFolderCleanup().run(accounts.map {
+                AutoFolderCleanup.AccountSettings(it.id, it.autoCleanupTrashDays, it.autoCleanupSpamDays, it.autoCleanupDraftsDays)
+            })
+            if (ok) settingsRepo.setLastTrashCleanupTime(System.currentTimeMillis())
+            ok
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.w("SyncWorker", "Auto cleanup failed with exception", e)
             false
         }
     }
-    
+
+    private fun createAutoFolderCleanup() = AutoFolderCleanup(
+        store = AutoCleanupStateStore(java.io.File(applicationContext.noBackupFilesDir, "auto_cleanup")),
+        clock = {
+            CleanupClock(
+                wallMs = System.currentTimeMillis(),
+                elapsedMs = android.os.SystemClock.elapsedRealtime(),
+                bootCount = try {
+                    android.provider.Settings.Global.getInt(
+                        applicationContext.contentResolver, android.provider.Settings.Global.BOOT_COUNT, -1
+                    )
+                } catch (e: Exception) {
+                    -1
+                }
+            )
+        },
+        ops = object : AutoFolderCleanup.Ops {
+            override suspend fun folderEmailIds(accountId: Long, kind: CleanupKind): Set<String> {
+                val type = if (kind == CleanupKind.SPAM) FolderType.JUNK_EMAIL else FolderType.DELETED_ITEMS
+                val ids = HashSet<String>()
+                for (folder in database.folderDao().getFoldersByAccountList(accountId)) {
+                    if (folder.type == type) ids += database.emailDao().getEmailIdsByFolder(folder.id)
+                }
+                return ids
+            }
+
+            override suspend fun localDrafts(accountId: Long): Map<String, Long> =
+                database.emailDao().getLocalDraftRefs(accountId).associate { it.id to it.dateReceived }
+
+            override suspend fun deletePermanently(ids: List<String>): Boolean {
+                val result = mailRepo.deleteEmailsPermanently(ids)
+                if (result is EasResult.Error) android.util.Log.w("SyncWorker", "Auto cleanup delete failed: ${result.message}")
+                return result is EasResult.Success
+            }
+
+            override suspend fun deleteLocalDraft(accountId: Long, emailId: String): Boolean {
+                val serverId = database.emailDao().getLocalDraftRefs(accountId).firstOrNull { it.id == emailId }?.serverId
+                    ?: return true // уже удалён
+                // Через репозиторий: файлы вложений и черновик на сервере, который этот заменял, удаляются тоже
+                return mailRepo.deleteDraft(accountId, serverId) is EasResult.Success
+            }
+        }
+    )
+
     private suspend fun performAppFileCleanup(): Boolean {
         try {
             val now = System.currentTimeMillis()

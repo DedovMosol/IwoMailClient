@@ -26,7 +26,7 @@ class CalendarExceptionService(
     private val ewsRequest: suspend (String, String) -> EasResult<String>
 ) {
 
-    private data class EwsExceptionOccurrence(
+    internal data class EwsExceptionOccurrence(
         val uid: String,
         val subject: String,
         val body: String,
@@ -142,7 +142,8 @@ class CalendarExceptionService(
      * as changed when only a single occurrence is modified in Outlook on PC.
      *
      * Solution: EWS FindItem + CalendarView returns all expanded occurrences,
-     * including modified ones (CalendarItemType = "Exception").
+     * including modified ones (CalendarItemType = "Exception"); GetItem adds Body and
+     * OriginalStart, which Exchange 2007 rejects in FindItem (ErrorInvalidPropertyForOperation).
      * Match them to local masters by UID and update exceptions JSON.
      */
     suspend fun supplementRecurringExceptionsViaEws(
@@ -178,37 +179,7 @@ class CalendarExceptionService(
             cal.get(java.util.Calendar.DAY_OF_MONTH)
         )
 
-        val findRequest = """<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
-               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
-    <soap:Header>
-        <t:RequestServerVersion Version="Exchange2007_SP1"/>
-    </soap:Header>
-    <soap:Body>
-        <m:FindItem Traversal="Shallow">
-            <m:ItemShape>
-                <t:BaseShape>IdOnly</t:BaseShape>
-                <t:AdditionalProperties>
-                    <t:FieldURI FieldURI="item:Subject"/>
-                    <t:FieldURI FieldURI="item:Body"/>
-                    <t:FieldURI FieldURI="calendar:Start"/>
-                    <t:FieldURI FieldURI="calendar:End"/>
-                    <t:FieldURI FieldURI="calendar:Location"/>
-                    <t:FieldURI FieldURI="calendar:CalendarItemType"/>
-                    <t:FieldURI FieldURI="calendar:UID"/>
-                    <t:FieldURI FieldURI="calendar:OriginalStart"/>
-                </t:AdditionalProperties>
-            </m:ItemShape>
-            <m:CalendarView StartDate="$startStr" EndDate="$endStr" MaxEntriesReturned="2000"/>
-            <m:ParentFolderIds>
-                <t:DistinguishedFolderId Id="calendar"/>
-            </m:ParentFolderIds>
-        </m:FindItem>
-    </soap:Body>
-</soap:Envelope>""".trimIndent()
-
-        val findResult = ewsRequest(findRequest, "FindItem")
+        val findResult = ewsRequest(calendarViewRequest(startStr, endStr), "FindItem")
         if (findResult is EasResult.Error) {
             android.util.Log.w(
                 "CalendarExceptionService",
@@ -239,34 +210,24 @@ class CalendarExceptionService(
         }
 
         val localUids = localRecurringEvents.map { it.uid }.toSet()
+        val candidates = parseCalendarViewExceptions(findXml, localUids)
 
+        // Body и OriginalStart FindItem не отдаёт (Exchange 2007: ErrorInvalidPropertyForOperation,
+        // проверено на сервере) — берём их GetItem по ItemId вхождений-исключений.
+        // Без OriginalStart исключение не сопоставить с локальным: не получили — ничего не меняем.
         val exceptions = mutableListOf<EwsExceptionOccurrence>()
-        val ciPattern = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>"
-            .toRegex(setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
-
-        for (m in ciPattern.findAll(findXml)) {
-            val xml = m.groupValues[1]
-            val itemType = XmlValueExtractor.extractEws(xml, "CalendarItemType") ?: continue
-            if (itemType != "Exception") continue
-
-            val uid = XmlValueExtractor.extractEws(xml, "UID") ?: continue
-            if (uid !in localUids) continue
-
-            val subject = XmlValueExtractor.extractEws(xml, "Subject") ?: ""
-            val rawBody = "<(?:t:)?Body[^>]*>(.*?)</(?:t:)?Body>"
-                .toRegex(RegexOption.DOT_MATCHES_ALL)
-                .find(xml)?.groupValues?.getOrNull(1)?.trim() ?: ""
-            val body = CalendarBodyFormat.normalizeIncoming(XmlUtils.unescape(rawBody))
-            val startMs = CalendarDateUtils.parseEwsDateTime(XmlValueExtractor.extractEws(xml, "Start")) ?: 0L
-            val endMs = CalendarDateUtils.parseEwsDateTime(XmlValueExtractor.extractEws(xml, "End")) ?: 0L
-            val location = XmlValueExtractor.extractEws(xml, "Location") ?: ""
-            val originalStartMs = CalendarDateUtils.parseEwsDateTime(
-                XmlValueExtractor.extractEws(xml, "OriginalStart")
-            ) ?: startMs
-
-            exceptions.add(
-                EwsExceptionOccurrence(uid, subject, body, startMs, endMs, location, originalStartMs)
-            )
+        for (chunk in candidates.chunked(GET_ITEM_BATCH)) {
+            val getResult = ewsRequest(exceptionDetailsRequest(chunk.map { it.itemId }), "GetItem")
+            if (getResult is EasResult.Error) {
+                android.util.Log.w("CalendarExceptionService", "supplementRecurringExceptionsViaEws: GetItem failed: ${getResult.message}")
+                return emptyMap()
+            }
+            val details = parseExceptionDetails((getResult as EasResult.Success).data, chunk)
+            if (details == null) {
+                android.util.Log.w("CalendarExceptionService", "supplementRecurringExceptionsViaEws: GetItem response incomplete — skipping")
+                return emptyMap()
+            }
+            exceptions += details
         }
 
         if (exceptions.isEmpty()) {
@@ -342,7 +303,11 @@ class CalendarExceptionService(
                     if (exStartTime > 0L) {
                         currentByOriginalStart[exStartTime] = obj
                     }
-                    val isOutsideWindow = exStartTime < windowStartMs || exStartTime > windowEndMs
+                    // CalendarView отдаёт вхождение по ФАКТИЧЕСКОМУ времени: исключение, перенесённое за край
+                    // окна, сервер не вернёт — проверить его нечем, значит не удаляем.
+                    val actualStart = obj.optLong("startTime", 0L)
+                    val isOutsideWindow = exStartTime < windowStartMs || exStartTime > windowEndMs ||
+                        (actualStart > 0L && (actualStart < windowStartMs || actualStart > windowEndMs))
                     if (isDeleted || isOutsideWindow) {
                         entries.add(obj.toString())
                     }
@@ -366,5 +331,99 @@ class CalendarExceptionService(
         }
 
         return if (entries.isEmpty()) "" else "[${entries.joinToString(",")}]"
+    }
+
+    /** Вхождение-исключение из CalendarView: всё, что FindItem может вернуть на Exchange 2007. */
+    internal data class ExceptionCandidate(
+        val itemId: String,
+        val uid: String,
+        val subject: String,
+        val startMs: Long,
+        val endMs: Long,
+        val location: String
+    )
+
+    internal companion object {
+        const val GET_ITEM_BATCH = 50
+
+        private val CALENDAR_ITEM = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>"
+            .toRegex(setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        private val GET_ITEM_MESSAGE =
+            "<(?:m:)?GetItemResponseMessage\\b[^>]*\\bResponseClass=\"(\\w+)\"[^>]*>(.*?)</(?:m:)?GetItemResponseMessage>"
+                .toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val BODY = "<(?:t:)?Body\\b[^>]*?(?:/>|>(.*?)</(?:t:)?Body>)".toRegex(RegexOption.DOT_MATCHES_ALL)
+
+        private fun envelope(body: String) = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+    <soap:Header><t:RequestServerVersion Version="Exchange2007_SP1"/></soap:Header>
+    <soap:Body>$body</soap:Body>
+</soap:Envelope>"""
+
+        /**
+         * FindItem + CalendarView. Только свойства, допустимые в FindItem на Exchange 2007:
+         * item:Body и calendar:OriginalStart дают ErrorInvalidPropertyForOperation на весь запрос.
+         */
+        fun calendarViewRequest(startDate: String, endDate: String): String = envelope(
+            "<m:FindItem Traversal=\"Shallow\"><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties>" +
+                "<t:FieldURI FieldURI=\"item:Subject\"/><t:FieldURI FieldURI=\"calendar:Start\"/>" +
+                "<t:FieldURI FieldURI=\"calendar:End\"/><t:FieldURI FieldURI=\"calendar:Location\"/>" +
+                "<t:FieldURI FieldURI=\"calendar:CalendarItemType\"/><t:FieldURI FieldURI=\"calendar:UID\"/>" +
+                "</t:AdditionalProperties></m:ItemShape>" +
+                "<m:CalendarView StartDate=\"${XmlUtils.escape(startDate)}\" EndDate=\"${XmlUtils.escape(endDate)}\" MaxEntriesReturned=\"2000\"/>" +
+                "<m:ParentFolderIds><t:DistinguishedFolderId Id=\"calendar\"/></m:ParentFolderIds></m:FindItem>"
+        )
+
+        /** GetItem тела и исходного времени вхождений (без BodyType — как раньше, Best). */
+        fun exceptionDetailsRequest(itemIds: List<String>): String = envelope(
+            "<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties>" +
+                "<t:FieldURI FieldURI=\"item:Body\"/><t:FieldURI FieldURI=\"calendar:OriginalStart\"/>" +
+                "<t:FieldURI FieldURI=\"calendar:UID\"/></t:AdditionalProperties></m:ItemShape><m:ItemIds>" +
+                itemIds.joinToString("") { "<t:ItemId Id=\"${XmlUtils.escape(it)}\"/>" } +
+                "</m:ItemIds></m:GetItem>"
+        )
+
+        fun parseCalendarViewExceptions(findXml: String, localUids: Set<String>): List<ExceptionCandidate> =
+            CALENDAR_ITEM.findAll(findXml).mapNotNull { m ->
+                val xml = m.groupValues[1]
+                if (XmlValueExtractor.extractEws(xml, "CalendarItemType") != "Exception") return@mapNotNull null
+                val uid = XmlValueExtractor.extractEws(xml, "UID")?.takeIf { it in localUids } ?: return@mapNotNull null
+                val itemId = XmlValueExtractor.extractAttribute(xml, "ItemId", "Id") ?: return@mapNotNull null
+                ExceptionCandidate(
+                    itemId = XmlUtils.unescape(itemId),
+                    uid = uid,
+                    subject = XmlValueExtractor.extractEws(xml, "Subject") ?: "",
+                    startMs = CalendarDateUtils.parseEwsDateTime(XmlValueExtractor.extractEws(xml, "Start")) ?: 0L,
+                    endMs = CalendarDateUtils.parseEwsDateTime(XmlValueExtractor.extractEws(xml, "End")) ?: 0L,
+                    location = XmlValueExtractor.extractEws(xml, "Location") ?: ""
+                )
+            }.toList()
+
+        /**
+         * Ответы GetItem идут в порядке запрошенных ItemId. null — ответ неполный, с ошибкой,
+         * без OriginalStart или с чужим UID: такое исключение не сопоставить, поэтому не трогаем ничего.
+         */
+        internal fun parseExceptionDetails(getXml: String, chunk: List<ExceptionCandidate>): List<EwsExceptionOccurrence>? {
+            val messages = GET_ITEM_MESSAGE.findAll(getXml).toList()
+            if (messages.size != chunk.size) return null
+            return chunk.zip(messages).map { (candidate, m) ->
+                if (m.groupValues[1] != "Success") return null
+                val xml = m.groupValues[2]
+                if (XmlValueExtractor.extractEws(xml, "UID") != candidate.uid) return null
+                val originalStartMs = CalendarDateUtils.parseEwsDateTime(XmlValueExtractor.extractEws(xml, "OriginalStart"))
+                    ?: return null
+                val rawBody = BODY.find(xml)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+                EwsExceptionOccurrence(
+                    uid = candidate.uid,
+                    subject = candidate.subject,
+                    body = CalendarBodyFormat.normalizeIncoming(XmlUtils.unescape(rawBody)),
+                    startMs = candidate.startMs,
+                    endMs = candidate.endMs,
+                    location = candidate.location,
+                    originalStartMs = originalStartMs
+                )
+            }
+        }
     }
 }

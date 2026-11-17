@@ -1,0 +1,22 @@
+EasProbe, режим calexc, запуск Tue Nov 17 10:52:47 +04 2026, JDK 17.0.20
+Сервер и учётная запись — из IWO_AUDIT_*, DeviceId IWOAUDITPROBE2026 (отдельное партнёрство аудита)
+
+=== T1. TLS и сертификат ===
+  только TLSv1.2 : ОТКАЗ (SSLHandshakeException)
+  только TLSv1.1 : ОТКАЗ (SSLHandshakeException)
+  только TLSv1   : рукопожатие OK, протокол=TLSv1, шифр=SSL_RSA_WITH_3DES_EDE_CBC_SHA
+  Subject совпадает с IWO_AUDIT_CERT_CN: да; выпущен внутренним CA: true
+  Срок:    Thu May 29 13:48:16 +04 2025 .. Sat May 29 13:48:16 +04 2027
+  Алгоритм подписи: SHA1withRSA, ключ: RSA 2048 бит
+  SAN: DNS-имён 4, IP-адресов 0
+  Адрес подключения в SAN: нет (подключение по IP)
+  Самоподписан (issuer == subject): false
+
+=== K2. Исключение серии: FindItem CalendarView + GetItem (исправленный путь) ===
+  CreateItem серии: HTTP 200, ResponseCode=NoError, MessageText=null, ItemId есть: true
+  GetItem OccurrenceItemId #2: HTTP 200, ResponseCode=NoError
+  UpdateItem вхождения [Subject+Body+Start/End (+2 ч)]: HTTP 200, ResponseCode=NoError, MessageText=null
+  Старый запрос приложения при наличии исключения: ResponseCode=ErrorInvalidPropertyForOperation
+  Новый FindItem: ResponseCode=NoError, IncludesLastItemInRange=true, вхождений серии 5, Exception найден: true, Start=2026-12-02T11:00:00Z
+  GetItem Exception: HTTP 200, ResponseCode=NoError, Body=exception body, OriginalStart=2026-12-02T09:00:00Z (ожидается 2026-12-02T09:00:00Z)
+  DeleteItem серии (уборка): ResponseCode=NoError

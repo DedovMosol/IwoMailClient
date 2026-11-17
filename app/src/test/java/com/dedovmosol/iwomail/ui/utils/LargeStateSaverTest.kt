@@ -26,9 +26,61 @@ class LargeStateSaverTest {
 
         val saved = saver.saveValue(text)
 
-        assertThat(saved).isEqualTo(text)
+        assertThat(saved.length).isEqualTo(text.length + 2)
         assertThat(dir.root.listFiles()).isEmpty()
         assertThat(saver.restore(saved)).isEqualTo(text)
+    }
+
+    // ---------- NAV-09: текст пользователя (или чужого приложения через «Поделиться») — не путь к файлу ----------
+
+    @get:Rule
+    val outside = TemporaryFolder()
+
+    @Test
+    fun `shared text that looks like the old file marker is kept as text and the file is untouched`() {
+        val victim = outside.newFile("mail_database").apply { writeText("DB") }
+        val saver = createLargeStringSaver(dir.root, "body")
+        val text = "\u0000FILE:" + victim.absolutePath
+
+        assertThat(saver.restore(saver.saveValue(text))).isEqualTo(text)
+        assertThat(victim.readText()).isEqualTo("DB")
+    }
+
+    @Test
+    fun `old-format reference outside the cache is neither read nor deleted`() {
+        val victim = outside.newFile("mail_database").apply { writeText("DB") }
+        val saver = createLargeStringSaver(dir.root, "body")
+
+        assertThat(saver.restore("\u0000FILE:" + victim.absolutePath)).isEmpty()
+        assertThat(victim.exists()).isTrue()
+    }
+
+    @Test
+    fun `file reference with a path or a foreign name is rejected`() {
+        val victim = dir.newFile("secret.tmp").apply { writeText("S") }
+        val saver = createLargeStringSaver(dir.root, "body")
+
+        for (name in listOf("../secret.tmp", "secret.tmp", "${LARGE_STATE_FILE_PREFIX}x_../../secret.tmp", victim.absolutePath)) {
+            assertThat(saver.restore("\u0001F$name")).isEmpty()
+        }
+        assertThat(victim.readText()).isEqualTo("S")
+    }
+
+    @Test
+    fun `text that starts with the new markers round-trips unchanged`() {
+        val saver = createLargeStringSaver(dir.root, "body")
+        for (text in listOf("\u0001Fcompose_state_x.tmp", "\u0001T", "", "F", "T")) {
+            assertThat(saver.restore(saver.saveValue(text))).isEqualTo(text)
+        }
+    }
+
+    @Test
+    fun `old-format reference to an own state file is still restored`() {
+        val saver = createLargeStringSaver(dir.root, "body")
+        val own = dir.newFile("${LARGE_STATE_FILE_PREFIX}body_123e4567-e89b-12d3-a456-426614174000.tmp").apply { writeText("draft") }
+
+        assertThat(saver.restore("\u0000FILE:" + own.absolutePath)).isEqualTo("draft")
+        assertThat(own.exists()).isFalse()
     }
 
     @Test

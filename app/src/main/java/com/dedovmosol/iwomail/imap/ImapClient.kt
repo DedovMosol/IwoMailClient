@@ -4,6 +4,7 @@ import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.database.FolderEntity
 import com.dedovmosol.iwomail.shared.MailClient
+import com.dedovmosol.iwomail.shared.MailSessionProperties
 import com.dedovmosol.iwomail.shared.MessageToEntityConverter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -21,39 +22,17 @@ class ImapClient(
     
     private var store: Store? = null
     
-    private fun getSession(): Session {
-        val protocol = if (account.useSSL) "imaps" else "imap"
-        val props = Properties().apply {
-            put("mail.store.protocol", protocol)
-            // Устанавливаем properties для ОБОИХ протоколов (imap и imaps),
-            // т.к. JavaMail использует prefix "mail.imaps.*" для SSL-протокола
-            put("mail.imap.host", account.serverUrl)
-            put("mail.imaps.host", account.serverUrl)
-            put("mail.imap.port", account.incomingPort.toString())
-            put("mail.imaps.port", account.incomingPort.toString())
-            put("mail.imap.ssl.enable", account.useSSL.toString())
-            put("mail.imaps.ssl.enable", account.useSSL.toString())
-            put("mail.imap.starttls.enable", "false")
-            put("mail.imaps.starttls.enable", "false")
-            if (account.acceptAllCerts) {
-                put("mail.imap.ssl.trust", "*")
-                put("mail.imaps.ssl.trust", "*")
-                put("mail.imap.ssl.checkserveridentity", "false")
-                put("mail.imaps.ssl.checkserveridentity", "false")
-            }
-            // Таймауты для обоих протоколов
-            put("mail.imap.connectiontimeout", "15000")
-            put("mail.imap.timeout", "15000")
-            put("mail.imaps.connectiontimeout", "15000")
-            put("mail.imaps.timeout", "15000")
-        }
-        return Session.getInstance(props)
-    }
+    private fun getSession(): Session = Session.getInstance(
+        MailSessionProperties.build(
+            MailSessionProperties.Protocol.IMAP, account.serverUrl, account.incomingPort,
+            useSsl = account.useSSL, acceptAllCerts = account.acceptAllCerts
+        )
+    )
     
     override suspend fun connect(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val session = getSession()
-            val protocol = if (account.useSSL) "imaps" else "imap"
+            val protocol = MailSessionProperties.storeProtocol(MailSessionProperties.Protocol.IMAP, account.useSSL)
             store = session.getStore(protocol).apply {
                 connect(account.serverUrl, account.incomingPort, account.username, password)
             }

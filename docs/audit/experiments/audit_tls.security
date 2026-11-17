@@ -1,0 +1,3 @@
+# Audit probe only: Exchange 2007 / IIS 6 at 192.0.2.10 speaks TLS 1.0 only.
+# JDK 17 disables TLSv1/TLSv1.1 by default; this override re-enables them for the probe process.
+jdk.tls.disabledAlgorithms=SSLv3, RC4, DES, MD5withRSA, DH keySize < 1024, EC keySize < 224, anon, NULL

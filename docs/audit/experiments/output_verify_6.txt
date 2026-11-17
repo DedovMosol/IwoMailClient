@@ -1,0 +1,14 @@
+=== BOM mapping: 2024.06.00 -> material3
+HTTP 200
+2024.06.00 2024.05.00 2024.04.01 2024.04.00 2024.03.00 2024.02.02 2024.02.01 2024.02.00 2024.01.00 2023.10.01 2023.10.00 2023.09.02 2023.09.01 2023.09.00 2023.08.00 2023.06.01 2023.06.00 2023.05.01 2023.05.00 2023.04.01 2023.04.00 2023.03.00 2023.01.00 2022.12.00 2022.11.00 2022.10.00 Library BOM Versions Group Release Note androidx.compose.animation:animation 1.12.1 Compose Animation Group 1.12.0 Compose Animation Group 1.11.4 Compose Animation Group 1.11.3 Compose Animation Group 1.11.2 Compose Animation Group 1.11.1 Compose Animation Group 1.11.0 Compose Animation Group 1.10.6 Compose Anima
+
+=== TimePickerState guard in the material3 release line used by the project
+HTTP 404 for refs/tags/androidx-compose-material3-1.2.1 :: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/TimePicker.kt
+HTTP 404 for refs/tags/androidx-compose-material3-1.2.1 :: compose/material3/material3/src/main/java/androidx/compose/material3/TimePicker.kt
+HTTP 404 for refs/tags/androidx-compose-material3-1.2.0 :: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/TimePicker.kt
+HTTP 404 for refs/tags/androidx-compose-material3-1.2.0 :: compose/material3/material3/src/main/java/androidx/compose/material3/TimePicker.kt
+FOUND at refs/heads/androidx-compose-release :: compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/TimePicker.kt
+  require(initialHour in 0..MaxHourValue) { "initialHour should in [0..23] range" }
+  require(initialMinute in 0..MaxMinuteValue) { "initialMinute should be in [0..59] range" }
+HTTP 404 for refs/heads/androidx-compose-release :: compose/material3/material3/src/main/java/androidx/compose/material3/TimePicker.kt
+DONE

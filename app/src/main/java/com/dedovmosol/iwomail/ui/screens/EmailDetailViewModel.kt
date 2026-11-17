@@ -185,6 +185,7 @@ class EmailDetailViewModel(
                     combine(emailFlow, attachmentsFlow, foldersFlow) { email, attachments, folders ->
                         Triple(email, attachments, folders)
                     }.collect { (email, attachments, folders) ->
+                        onEmailPresence(email != null)
                         val currentFolder = folders.find { it.id == email?.folderId }
                         _uiState.update {
                             it.copy(
@@ -200,6 +201,46 @@ class EmailDetailViewModel(
                     }
                 }
         }
+    }
+
+    // MAIL-05: письмо, которое было на экране, пропало из БД (окончательное удаление, удаление на сервере,
+    // синхронизация) — экран закрывается, а не показывает «Загрузка письма» без конца. Закрытие — один раз:
+    // повторный NavigateBack снял бы со стека ещё и предыдущий экран.
+    private var emailSeen = false
+    private var closed = false
+    /** Свои операции, после которых письма может не стать (перенос, удаление): закрывают экран сами. */
+    private var localOps = 0
+
+    private fun onEmailPresence(present: Boolean) {
+        if (present) emailSeen = true
+        else if (emailSeen && localOps == 0) closeAsDeletedOnServer()
+    }
+
+    private fun navigateBackOnce() {
+        if (closed) return
+        closed = true
+        sendEvent(EmailDetailEvent.NavigateBack)
+    }
+
+    private fun closeAsDeletedOnServer() {
+        if (closed) return
+        sendEvent(EmailDetailEvent.DeletedOnServer)
+        navigateBackOnce()
+    }
+
+    /** Операция над этим письмом: пока она идёт, исчезновение записи — её результат, а не удаление на сервере. */
+    private suspend fun <T> localOp(block: suspend () -> T): T {
+        localOps++
+        try {
+            return block()
+        } finally {
+            localOps--
+        }
+    }
+
+    /** После своей операции (и её тоста): записи не стало — закрыть экран. */
+    private fun closeIfGone() {
+        if (emailSeen && emailFlow.value == null) navigateBackOnce()
     }
 
     /** Ключ для inline-картинок: пересчитываем загрузку только при реальном изменении входных данных. */
@@ -358,13 +399,19 @@ class EmailDetailViewModel(
                 }
                 is EasResult.Error -> {
                     if (result.message == "OBJECT_NOT_FOUND") {
-                        // Для Sent/Drafts loadEmailBody НЕ удаляет письмо при OBJECT_NOT_FOUND.
-                        val stillExists = withContext(ioDispatcher) { actions.getEmailSync(emailId) } != null
-                        if (!stillExists) {
-                            sendEvent(EmailDetailEvent.DeletedOnServer)
-                            sendEvent(EmailDetailEvent.NavigateBack)
-                        } else {
-                            _uiState.update { it.copy(bodyLoadError = BodyLoadError.LoadFailed) }
+                        // PROTO-08: Status 6 — письмо удалено на сервере ИЛИ ещё не пришло в идущей полной
+                        // синхронизации папки. Различает только синхронизация: удалённое она убирает из БД,
+                        // остальное возвращает. Поэтому — один проход синхронизации и повторная загрузка.
+                        val retry = if (withContext(ioDispatcher) { actions.getEmailSync(emailId) } != null) {
+                            actions.syncAndReloadBody(emailId, current.accountId, current.folderId)
+                        } else null
+                        val fresh = withContext(ioDispatcher) { actions.getEmailSync(emailId) }
+                        when {
+                            fresh == null -> closeAsDeletedOnServer()
+                            retry is EasResult.Success && fresh.body.isBlank() ->
+                                _uiState.update { it.copy(bodyLoadError = BodyLoadError.NoBodyFromServer) }
+                            retry is EasResult.Success -> Unit
+                            else -> _uiState.update { it.copy(bodyLoadError = BodyLoadError.LoadFailed) }
                         }
                     } else {
                         _uiState.update { it.copy(bodyLoadError = BodyLoadError.Raw(result.message)) }
@@ -421,12 +468,12 @@ class EmailDetailViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isDeleting = true) }
             try {
-                val result = actions.deleteEmails(listOf(emailId), isInTrash = false)
+                val result = localOp { actions.deleteEmails(listOf(emailId), isInTrash = false) }
                 when (result) {
                     is EasResult.Success -> {
                         val count = (result.data as? Int) ?: 0
                         sendEvent(if (count > 0) EmailDetailEvent.MovedToTrash else EmailDetailEvent.DeletedPermanently)
-                        sendEvent(EmailDetailEvent.NavigateBack)
+                        navigateBackOnce()
                     }
                     is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
                 }
@@ -436,6 +483,7 @@ class EmailDetailViewModel(
                 sendEvent(EmailDetailEvent.Error(e.message ?: "Unknown error"))
             } finally {
                 _uiState.update { it.copy(isDeleting = false) }
+                closeIfGone()
             }
         }
     }
@@ -445,11 +493,11 @@ class EmailDetailViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isMoving = true) }
             try {
-                val result = actions.moveEmails(listOf(emailId), targetFolderId)
+                val result = localOp { actions.moveEmails(listOf(emailId), targetFolderId) }
                 when (result) {
                     is EasResult.Success -> {
                         sendEvent(EmailDetailEvent.Moved)
-                        sendEvent(EmailDetailEvent.NavigateBack)
+                        navigateBackOnce()
                     }
                     is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
                 }
@@ -459,6 +507,7 @@ class EmailDetailViewModel(
                 sendEvent(EmailDetailEvent.Error(e.message ?: "Unknown error"))
             } finally {
                 _uiState.update { it.copy(isMoving = false) }
+                closeIfGone()
             }
         }
     }
@@ -468,11 +517,11 @@ class EmailDetailViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isRestoring = true) }
             try {
-                val result = actions.restoreFromTrash(listOf(emailId))
+                val result = localOp { actions.restoreFromTrash(listOf(emailId)) }
                 when (result) {
                     is EasResult.Success -> {
                         sendEvent(EmailDetailEvent.Restored)
-                        sendEvent(EmailDetailEvent.NavigateBack)
+                        navigateBackOnce()
                     }
                     is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
                 }
@@ -482,6 +531,7 @@ class EmailDetailViewModel(
                 sendEvent(EmailDetailEvent.Error(e.message ?: "Unknown error"))
             } finally {
                 _uiState.update { it.copy(isRestoring = false) }
+                closeIfGone()
             }
         }
     }
@@ -648,8 +698,14 @@ class EmailDetailViewModel(
     suspend fun deleteEmailPermanently(
         emailIds: List<String>,
         onProgress: (deleted: Int, total: Int) -> Unit
-    ): EasResult<Int> =
-        withContext(ioDispatcher) { mailRepo.deleteEmailsPermanentlyWithProgress(emailIds, onProgress) }
+    ): EasResult<Int> {
+        // Запись исчезает посреди операции — это её результат: экран закроется после неё, без «удалено на сервере»
+        try {
+            return localOp { withContext(ioDispatcher) { mailRepo.deleteEmailsPermanentlyWithProgress(emailIds, onProgress) } }
+        } finally {
+            closeIfGone()
+        }
+    }
 
     private fun sendEvent(event: EmailDetailEvent) {
         viewModelScope.launch { _events.send(event) }

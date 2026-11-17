@@ -1,0 +1,49 @@
+ImapProbe Tue Nov 17 00:23:11 +04 2026, JavaMail 1.6.7
+=== A1. IMAP порт 143, свойства как в ImapClient (useSSL=false, starttls.enable=false), возможности как у реального сервера ===
+  JavaMail 1.6.7 + свойства приложения
+    исход у клиента: AuthenticationFailedException: AUTHENTICATE failed.
+    клиент -> сервер: A0 CAPABILITY
+    клиент -> сервер: A1 AUTHENTICATE PLAIN
+    клиент -> сервер:   [ответ на AUTHENTICATE] AHUAZmFrZS1zZWNyZXQ=  => base64-декод: |u|fake-secret
+    поддельный сервер получил пароль в читаемом виде: ДА
+
+=== A2. То же, но предлагаемое исправление: starttls.enable=true, starttls.required=true ===
+  JavaMail 1.6.7 + STARTTLS required
+    исход у клиента: MessagingException: B1 BAD audit-stop
+    клиент -> сервер: B0 CAPABILITY
+    клиент -> сервер: B1 STARTTLS
+    поддельный сервер получил пароль в читаемом виде: нет
+
+=== A3. POP3 порт 110, свойства как в Pop3Client, CAPA как у реального сервера ===
+  JavaMail 1.6.7 + свойства Pop3Client
+    исход у клиента: AuthenticationFailedException: fail
+    клиент -> сервер: CAPA
+    клиент -> сервер: USER u
+    клиент -> сервер: PASS fake-secret
+    поддельный сервер получил пароль в читаемом виде: ДА
+
+=== A4. IMAPS: сертификат доверенный, но выписан на другое имя (CN=evil.example), useSSL=true, acceptAllCerts=false ===
+  JavaMail 1.6.7, imaps, checkserveridentity=не задан (как в приложении)
+    исход у клиента: AuthenticationFailedException: AUTHENTICATE failed.
+    клиент -> сервер: C0 CAPABILITY
+    клиент -> сервер: C1 AUTHENTICATE PLAIN
+    клиент -> сервер:   [ответ на AUTHENTICATE] AHUAZmFrZS1zZWNyZXQ=  => base64-декод: |u|fake-secret
+    поддельный сервер получил пароль в читаемом виде: ДА
+
+=== A5. То же с предлагаемым исправлением mail.imaps.ssl.checkserveridentity=true ===
+  JavaMail 1.6.7, imaps, checkserveridentity=true
+    исход у клиента: MessagingException: Can't verify identity of server: 127.0.0.1
+    поддельный сервер получил пароль в читаемом виде: нет
+
+=== B1. Реальный сервер, IMAPS 993 (TLS), только чтение: папки и классификация как в ImapClient.getFolders ===
+  вход по IMAPS: OK за 806 мс
+  Папок в LIST: 19; тип по правилу приложения {тип=число}: {1=18, 2=1} (1 = пользовательская)
+  Стандартные папки Exchange, найденные в LIST, и тип, который им присвоит приложение: {INBOX=2, Отправленные=1, Черновики=1, Удаленные=1, Нежелательная почта=1}
+  Папок без HOLDS_MESSAGES или с \Noselect: 0
+
+=== B2. Message-ID как основа id письма (MessageToEntityConverter: accountId_Message-ID или случайный UUID) ===
+  тип 2 (INBOX): сообщений 979 (проверено 979), без Message-ID 0, повтор Message-ID внутри папки 2, совпадение с другой проверенной папкой 0, UIDVALIDITY есть: true
+  тип 1: сообщений 664 (проверено 664), без Message-ID 0, повтор Message-ID внутри папки 0, совпадение с другой проверенной папкой 0, UIDVALIDITY есть: true
+  тип 1: сообщений 4 (проверено 4), без Message-ID 0, повтор Message-ID внутри папки 0, совпадение с другой проверенной папкой 0, UIDVALIDITY есть: true
+  тип 1: сообщений 0 (проверено 0), без Message-ID 0, повтор Message-ID внутри папки 0, совпадение с другой проверенной папкой 0, UIDVALIDITY есть: true
+  Итого проверено 1647: без Message-ID 0 (получат случайный UUID при каждой синхронизации), повторов внутри папки 2, совпадений между папками 0 (одна строка БД на два письма)

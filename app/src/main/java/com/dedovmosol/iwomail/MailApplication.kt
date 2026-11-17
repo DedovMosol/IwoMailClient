@@ -330,7 +330,9 @@ class MailApplication : Application() {
                 }
                 
                 if (hasExchangePushAccounts) {
-                    PushService.start(this@MailApplication)
+                    // BG-03: процесс мог подняться в фоне (Worker, ресивер) — запрет старта FGS не должен
+                    // пропустить планирование alarm-синхронизации ниже
+                    PushService.startOrSchedule(this@MailApplication)
                 }
                 
                 // Планируем AlarmManager как fallback для ВСЕХ аккаунтов (и PUSH и SCHEDULED)

@@ -353,6 +353,16 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_53_54
         )
 
+        /**
+         * Только для тестов Robolectric: приложение пересоздаётся на каждый тест, и соединение синглтона, открытого
+         * в прошлом тесте, недействительно («Illegal connection pointer»).
+         */
+        @androidx.annotation.VisibleForTesting
+        internal fun resetForTesting() = synchronized(this) {
+            INSTANCE?.close()
+            INSTANCE = null
+        }
+
         fun getInstance(context: Context): MailDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -464,10 +474,11 @@ data class AccountEntity(
     val certificatePath: String? = null,
     // Путь к файлу клиентского сертификата (.p12/.pfx)
     val clientCertificatePath: String? = null,
-    // Автоочистка папок (0 = выключено, иначе количество дней)
-    val autoCleanupTrashDays: Int = 60,
-    val autoCleanupDraftsDays: Int = 60,
-    val autoCleanupSpamDays: Int = 60,
+    // Автоочистка папок (0 = выключено, иначе срок в днях). По умолчанию выключена: очистка корзины и спама
+    // безвозвратно удаляет письма на сервере, черновики на устройстве — единственная копия; включает пользователь.
+    val autoCleanupTrashDays: Int = 0,
+    val autoCleanupDraftsDays: Int = 0,
+    val autoCleanupSpamDays: Int = 0,
     // Синхронизация контактов Exchange (0 = никогда, иначе интервал в днях)
     val contactsSyncIntervalDays: Int = 1, // По умолчанию каждый день
     // Ключ синхронизации для папки контактов
@@ -619,6 +630,13 @@ data class EmailServerRef(
     val subject: String,
     val from: String,
     val to: String,
+    val dateReceived: Long
+)
+
+/** Черновик на устройстве без тела (автоочистка): [dateReceived] у черновика — время последнего сохранения. */
+data class LocalDraftRef(
+    val id: String,
+    val serverId: String,
     val dateReceived: Long
 )
 

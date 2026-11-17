@@ -51,7 +51,7 @@ class BootReceiver : BroadcastReceiver() {
                         }
                         if (hasExchangePush) {
                             try {
-                                PushService.start(app)
+                                PushService.startOrSchedule(app)
                             } catch (e: Exception) {
                                 android.util.Log.w(TAG, "Failed to start PushService after exact-alarm grant", e)
                             }
@@ -83,7 +83,8 @@ class BootReceiver : BroadcastReceiver() {
 
                 if (hasExchangePushAccounts) {
                     try {
-                        PushService.start(app)
+                        // BG-02: на Android 15+ из BOOT_COMPLETED dataSync-FGS не запустить — через точный будильник
+                        PushService.startOrSchedule(app, fromBoot = action == Intent.ACTION_BOOT_COMPLETED)
                     } catch (e: Exception) {
                         android.util.Log.w(TAG, "Failed to start PushService after boot", e)
                     }

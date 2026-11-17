@@ -1,4 +1,4 @@
-﻿package com.dedovmosol.iwomail.ui.screens.calendar
+package com.dedovmosol.iwomail.ui.screens.calendar
 
 import android.provider.OpenableColumns
 import com.dedovmosol.iwomail.ui.components.launchLeavingApp
@@ -588,19 +588,12 @@ internal fun CreateEventDialog(
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
                         )
                         if (!allDayEvent) {
-                            OutlinedTextField(
+                            com.dedovmosol.iwomail.ui.components.TimeTextField(
                                 value = startTimeText,
-                                onValueChange = { newValue ->
-                                    val digits = newValue.filter { it.isDigit() }.take(4)
-                                    startTimeText = when {
-                                        digits.length <= 2 -> digits
-                                        else -> "${digits.substring(0, 2)}:${digits.substring(2)}"
-                                    }
-                                },
+                                onValueChange = { startTimeText = it },
                             placeholder = { Text(Strings.timePlaceholder, style = MaterialTheme.typography.bodySmall, maxLines = 1) },
                                 textStyle = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.weight(1f).height(48.dp),
-                                singleLine = true,
                                 trailingIcon = {
                                     IconButton(onClick = { showStartTimePicker = true }) {
                                         Icon(AppIcons.Schedule, null, modifier = Modifier.size(18.dp))
@@ -662,19 +655,12 @@ internal fun CreateEventDialog(
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
                         )
                         if (!allDayEvent) {
-                            OutlinedTextField(
+                            com.dedovmosol.iwomail.ui.components.TimeTextField(
                                 value = endTimeText,
-                                onValueChange = { newValue ->
-                                    val digits = newValue.filter { it.isDigit() }.take(4)
-                                    endTimeText = when {
-                                        digits.length <= 2 -> digits
-                                        else -> "${digits.substring(0, 2)}:${digits.substring(2)}"
-                                    }
-                                },
+                                onValueChange = { endTimeText = it },
                             placeholder = { Text(Strings.timePlaceholder, style = MaterialTheme.typography.bodySmall, maxLines = 1) },
                                 textStyle = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.weight(1f).height(48.dp),
-                                singleLine = true,
                                 trailingIcon = {
                                     IconButton(onClick = { showEndTimePicker = true }) {
                                         Icon(AppIcons.Schedule, null, modifier = Modifier.size(18.dp))
@@ -1239,8 +1225,7 @@ internal fun CreateEventDialog(
     }
 
     if (showStartTimePicker) {
-        val initHour = try { startTimeText.split(":")[0].toInt() } catch (_: Exception) { 9 }
-        val initMinute = try { startTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
+        val (initHour, initMinute) = com.dedovmosol.iwomail.ui.utils.TimeInput.hourMinute(startTimeText, defaultHour = 9)
         val timePickerState = rememberTimePickerState(initialHour = initHour, initialMinute = initMinute, is24Hour = true)
         BasicAlertDialog(
             onDismissRequest = { showStartTimePicker = false }
@@ -1261,8 +1246,7 @@ internal fun CreateEventDialog(
     }
 
     if (showEndTimePicker) {
-        val initHour = try { endTimeText.split(":")[0].toInt() } catch (_: Exception) { 10 }
-        val initMinute = try { endTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
+        val (initHour, initMinute) = com.dedovmosol.iwomail.ui.utils.TimeInput.hourMinute(endTimeText, defaultHour = 10)
         val timePickerState = rememberTimePickerState(initialHour = initHour, initialMinute = initMinute, is24Hour = true)
         BasicAlertDialog(
             onDismissRequest = { showEndTimePicker = false }

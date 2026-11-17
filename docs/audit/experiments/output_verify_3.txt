@@ -1,0 +1,46 @@
+=== MAIL-06 | Lazy lists: provide stable item keys
+URL: https://developer.android.com/develop/ui/compose/lists
+RESULT: FOUND (51906 chars fetched)
+SNIPPET: ...arrangements: LazyVerticalGrid ( columns = GridCells . Fixed ( 2 ), verticalArrangement = Arrangement . spacedBy ( 16. dp ), horizontalArrangement = Arrangement . spacedBy ( 16. dp ) ) { items ( photos ) { item - > PhotoItem ( item ) } } LazyListSnippets . kt Item keys By default, each item's state is keyed against the position of the item in the list or grid. However, this can cause issues if the dataset changes, since items which change position effectively lose any remembered state. If you imagine the scenario of LazyRow...
+
+=== NAV-21 | android.util.Base64.decode throws IllegalArgumentException (AOSP source)
+URL: https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/util/Base64.java?format=TEXT
+RESULT: FOUND (28733 chars fetched)
+SNIPPET: ...converted to * bytes using the default charset * @param flags controls certain features of the decoded output. * Pass {@code DEFAULT} to decode standard Base64. * * @throws IllegalArgumentException if the input contains * incorrect padding */ public static byte[] decode(String str, int flags) { return decode(str.getBytes(), flags); } /** * Decode the Base64-encoded data in input...
+
+=== ONB-03 | Kotlin coroutines: cancellation is cooperative (official guide)
+URL: https://kotlinlang.org/docs/cancellation-and-timeouts.html
+RESULT: PATTERN NOT FOUND (1 chars fetched)
+
+=== ONB-03 | Kotlin coroutines guide (GitHub source, current path)
+URL: https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/master/docs/topics/cancellation-and-timeouts.md
+RESULT: PATTERN NOT FOUND (14 chars fetched)
+
+=== ONB-03 | kotlinx.coroutines Job.cancel KDoc (source)
+URL: https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/master/kotlinx-coroutines-core/common/src/Job.kt
+RESULT: PATTERN NOT FOUND (30753 chars fetched)
+
+=== CMP-05/NAV-14 | Android unsafe intent launch guidance
+URL: https://developer.android.com/privacy-and-security/risks/unsafe-intent-launch
+RESULT: PATTERN NOT FOUND (7915 chars fetched)
+
+=== NAV-11 | Intent.EXTRA_STREAM / content URI sharing guidance (FileProvider)
+URL: https://developer.android.com/training/secure-file-sharing
+RESULT: PATTERN NOT FOUND (12013 chars fetched)
+
+=== MAIL-10 | WebViewClient.shouldOverrideUrlLoading request.hasGesture / isRedirect
+URL: https://developer.android.com/reference/android/webkit/WebResourceRequest
+RESULT: FOUND (166541 chars fetched)
+SNIPPET: ...quest, for example "GET". abstract Map < String , String > getRequestHeaders () Gets the headers associated with the request. abstract Uri getUrl () Gets the URL for which the resource request was made. abstract boolean hasGesture () Gets whether a gesture (such as a click) was associated with the request. abstract boolean isForMainFrame () Gets whether the request was made in order to fetch the main frame's document. abstract boolean isRedirect ...
+
+=== MAIL-08 | OWASP XSS Prevention: use an HTML sanitizer / allow-list, not a block-list
+URL: https://cheatsheetseries.owasp.org/cheatsheets/XSS_Filter_Evasion_Cheat_Sheet.html
+RESULT: FOUND (53266 chars fetched)
+SNIPPET: ... XSS Filter Evasion - OWASP Cheat Sheet Series Skip to content OWASP Cheat Sheet Series XSS Filter Evasion Initializing search OWASP/CheatSheetSeries OWASP Cheat Sheet Series OWASP/CheatSheetSeries Introduction ...
+
+=== MAIL-03 | OWASP: regular expression denial of service (ReDoS)
+URL: https://owasp.org/www-community/attacks/Regular_expression_Denial_of_Service_-_ReDoS
+RESULT: FOUND (6827 chars fetched)
+SNIPPET: ...ction The Regular expression Denial of Service (ReDoS) is a Denial of Service attack, that exploits the fact that most Regular Expression implementations may reach extreme situations that cause them to work very slowly (exponentially related to input size). An attacker can then cause a program using a Regular Expression (Regex) to enter these extreme situations and then hang for a very long time. Description The problematic Regex naïve algorithm T...
+
+DONE

@@ -12,38 +12,60 @@ import java.io.File
 internal const val LARGE_STATE_INLINE_CHARS = 10_000
 
 internal const val LARGE_STATE_FILE_PREFIX = "compose_state_"
-private const val FILE_MARKER = "\u0000FILE:"
+
+// Сохранённое значение всегда помечено своим видом, поэтому пользовательский текст не спутать со ссылкой на файл
+// (NAV-09: раньше строка из «Поделиться» вида "\u0000FILE:/data/.../mail_database" при восстановлении читалась
+// как путь — файл приложения читался в тело письма и удалялся).
+// Управляющий символ в начале: значение из прежней версии (обычный текст без пометки) с пометкой не спутать.
+private const val KIND_TEXT = "\u0001T"
+private const val KIND_FILE = "\u0001F"
+/** Прежний формат ссылки (до NAV-09) — принимается только для своего файла в [cacheDir]. */
+private const val LEGACY_FILE_MARKER = "\u0000FILE:"
+private val STATE_FILE_NAME = Regex("""${LARGE_STATE_FILE_PREFIX}[A-Za-z0-9_-]{1,64}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp""")
 
 /**
  * Saver для крупного текста (тело письма, HTML редактора): короткий — как есть, длинный — файлом в [cacheDir].
  *
  * Файл свой у каждого экземпляра ([tag] + случайная часть): два экрана с одинаковым [tag] в стеке навигации не
  * перезаписывают друг друга. Повторные сохранения одного экземпляра пишут в тот же файл; восстановление файл удаляет.
+ * В состоянии хранится только имя файла; восстановление принимает лишь имя своего формата прямо в [cacheDir].
  * Неиспользованные файлы (экран закрыт без восстановления) удаляет [isStaleLargeStateFile] при старте приложения.
  */
 internal fun createLargeStringSaver(cacheDir: File, tag: String): Saver<String, String> {
-    val file by lazy { File(cacheDir, "$LARGE_STATE_FILE_PREFIX${tag}_${java.util.UUID.randomUUID()}.tmp") }
+    val safeTag = tag.filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(64).ifEmpty { "state" }
+    val file by lazy { File(cacheDir, "$LARGE_STATE_FILE_PREFIX${safeTag}_${java.util.UUID.randomUUID()}.tmp") }
     return Saver(
         save = { value ->
-            if (value.length <= LARGE_STATE_INLINE_CHARS) value
+            if (value.length <= LARGE_STATE_INLINE_CHARS) KIND_TEXT + value
             else try {
                 file.writeText(value)
-                FILE_MARKER + file.absolutePath
+                KIND_FILE + file.name
             } catch (_: Exception) {
-                value.take(LARGE_STATE_INLINE_CHARS)
+                KIND_TEXT + value.take(LARGE_STATE_INLINE_CHARS)
             }
         },
         restore = { saved ->
-            if (saved.startsWith(FILE_MARKER)) {
-                try {
-                    val stored = File(saved.removePrefix(FILE_MARKER))
-                    if (stored.exists()) stored.readText().also { stored.delete() } else ""
-                } catch (_: Exception) {
-                    ""
-                }
-            } else saved
+            when {
+                saved.startsWith(KIND_TEXT) -> saved.substring(KIND_TEXT.length)
+                saved.startsWith(KIND_FILE) -> readOwnStateFile(cacheDir, saved.substring(KIND_FILE.length))
+                saved.startsWith(LEGACY_FILE_MARKER) -> readOwnStateFile(cacheDir, File(saved.removePrefix(LEGACY_FILE_MARKER)).name)
+                else -> saved
+            }
         }
     )
+}
+
+/** Читает и удаляет файл состояния, только если [name] — файл нашего формата прямо в [cacheDir]; иначе "". */
+private fun readOwnStateFile(cacheDir: File, name: String): String {
+    if (!STATE_FILE_NAME.matches(name)) return ""
+    return try {
+        val dir = cacheDir.canonicalFile
+        val stored = File(dir, name).canonicalFile
+        if (stored.parentFile != dir || !stored.isFile) return ""
+        stored.readText().also { stored.delete() }
+    } catch (_: Exception) {
+        ""
+    }
 }
 
 /** Файлы состояния старше суток — от закрытых экранов: состояние для восстановления после смерти процесса моложе. */

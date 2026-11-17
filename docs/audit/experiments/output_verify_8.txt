@@ -1,0 +1,25 @@
+=== MAIL-08 | CSP frame-src falls back to child-src, then default-src
+URL: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/frame-src
+RESULT: FOUND (11739 chars)
+SNIPPET: ... <iframe> . Note: frame-src allows you to specify where iframes in a page may be loaded from. This differs from frame-ancestors , which allows you to specify what parent source may embed a page. CSP version 1 Directive type Fetch directive Fallback If this directive is absent, the user agent will look for the child-src directive (which falls back to the default-src directive). In this article Syntax Examples Specifications Browser compatibility See also Syntax http Content-Security-P...
+
+=== MAIL-09 | CSP base-uri does NOT fall back to default-src
+URL: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/base-uri
+RESULT: FETCH FAILED
+
+=== MAIL-09 | CSP form-action does NOT fall back to default-src
+URL: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/form-action
+RESULT: FOUND (12283 chars)
+SNIPPET: ... should block redirects after a form submission is debated and browser implementations of this aspect are inconsistent (e.g., Firefox 57 doesn't block the redirects whereas Chrome 63 does). CSP version 2 Directive type Navigation directive default-src fallback No. Not setting this allows anything. In this article Syntax Examples Specifications Browser compatibility See also Syntax http Content-Security-Policy: form-action 'none'; Content-Security-Policy: form-action <source-expression-list>; Thi...
+
+=== MAIL-08 | CSP via <meta>: supported directives and limits
+URL: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy
+RESULT: FOUND (29478 chars)
+SNIPPET: ...r worker that created it. Multiple content security policies The CSP mechanism allows multiple policies being specified for a resource, including via the Content-Security-Policy header, the Content-Security-Policy-Report-Only header and a <meta> element. You can use the Content-Security-Policy header more than once, as in the example below. Pay special attention to the connect-src directive here. Even though the second policy would allow the connection, the first policy contains ...
+
+=== MAIL-08 | CSP default-src is a fallback for fetch directives (script-src, img-src, frame-src, ...)
+URL: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/default-src
+RESULT: FOUND (13308 chars)
+SNIPPET: ...ature is well established and works across many devices and browser versions. It’s been available across browsers since August 2016. See full compatibility Learn more The HTTP Content-Security-Policy (CSP) default-src directive serves as a fallback for the other CSP fetch directives . For each of the following directives that are absent, the user agent looks for the default-src directive and uses this value for it: child-src connect-src font-src frame-src img-src manifest-src media-s...
+
+DONE

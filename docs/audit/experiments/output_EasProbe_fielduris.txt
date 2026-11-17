@@ -1,0 +1,48 @@
+EasProbe, режим fielduris, запуск Tue Nov 17 10:47:58 +04 2026, JDK 17.0.20
+Сервер и учётная запись — из IWO_AUDIT_*, DeviceId IWOAUDITPROBE2026 (отдельное партнёрство аудита)
+
+=== T1. TLS и сертификат ===
+  только TLSv1.2 : ОТКАЗ (SSLHandshakeException)
+  только TLSv1.1 : ОТКАЗ (SSLHandshakeException)
+  только TLSv1   : рукопожатие OK, протокол=TLSv1, шифр=SSL_RSA_WITH_3DES_EDE_CBC_SHA
+  Subject совпадает с IWO_AUDIT_CERT_CN: да; выпущен внутренним CA: true
+  Срок:    Thu May 29 13:48:16 +04 2025 .. Sat May 29 13:48:16 +04 2027
+  Алгоритм подписи: SHA1withRSA, ключ: RSA 2048 бит
+  SAN: DNS-имён 4, IP-адресов 0
+  Адрес подключения в SAN: нет (подключение по IP)
+  Самоподписан (issuer == subject): false
+
+=== J1. FieldURI приложения против схемы Exchange 2007 (RequestServerVersion Exchange2007_SP1) ===
+  calendar:CalendarItemType          calendar  HTTP 200 OK NoError
+  calendar:End                       calendar  HTTP 200 OK NoError
+  calendar:IsAllDayEvent             calendar  HTTP 200 OK NoError
+  calendar:LegacyFreeBusyStatus      calendar  HTTP 200 OK NoError
+  calendar:Location                  calendar  HTTP 200 OK NoError
+  calendar:OriginalStart             calendar  HTTP 200 OK ErrorInvalidPropertyForOperation
+  calendar:Recurrence                calendar  HTTP 200 OK ErrorInvalidPropertyForOperation
+  calendar:RequiredAttendees         calendar  HTTP 200 OK ErrorInvalidPropertyForOperation
+  calendar:Start                     calendar  HTTP 200 OK NoError
+  calendar:UID                       calendar  HTTP 200 OK NoError
+  folder:DisplayName                 inbox     HTTP 200 OK NoError
+  folder:FolderClass                 inbox     HTTP 200 OK NoError
+  folder:TotalCount                  inbox     HTTP 200 OK NoError
+  item:Attachments                   inbox     HTTP 200 OK ErrorInvalidPropertyForOperation
+  item:Body                          inbox     HTTP 200 OK ErrorInvalidPropertyForOperation
+  item:Categories                    inbox     HTTP 200 OK NoError
+  item:DateTimeReceived              inbox     HTTP 200 OK NoError
+  item:DateTimeSent                  inbox     HTTP 200 OK NoError
+  item:HasAttachments                inbox     HTTP 200 OK NoError
+  item:Importance                    inbox     HTTP 200 OK NoError
+  item:InReplyTo                     inbox     HTTP 200 OK NoError
+  item:ItemClass                     inbox     HTTP 200 OK NoError
+  item:ReminderIsSet                 inbox     HTTP 200 OK NoError
+  item:ReminderMinutesBeforeStart    inbox     HTTP 200 OK NoError
+  item:Sensitivity                   inbox     HTTP 200 OK NoError
+  item:Subject                       inbox     HTTP 200 OK NoError
+  message:InternetMessageId          inbox     HTTP 200 OK NoError
+  message:IsRead                     inbox     HTTP 200 OK NoError
+  task:CompleteDate                  tasks     HTTP 200 OK NoError
+  task:DueDate                       tasks     HTTP 200 OK NoError
+  task:StartDate                     tasks     HTTP 200 OK NoError
+  task:Status                        tasks     HTTP 200 OK NoError
+  message:InReplyTo                  inbox     HTTP 500 ОТКАЗ — Запрос не прошел проверку на соответствие схеме: The 'FieldURI' attribute is invalid - The value 'message:InReplyTo' is invalid according to

@@ -1,0 +1,21 @@
+EasProbe, режим ewsatt, запуск Tue Nov 17 00:28:37 +04 2026, JDK 17.0.20
+Сервер https://192.0.2.10, пользователь DOMAIN\user, DeviceId IWOAUDITPROBE2026 (отдельное партнёрство аудита)
+
+=== T1. TLS и сертификат ===
+  только TLSv1.2 : ОТКАЗ (SSLHandshakeException)
+  только TLSv1.1 : ОТКАЗ (SSLHandshakeException)
+  только TLSv1   : рукопожатие OK, протокол=TLSv1, шифр=SSL_RSA_WITH_3DES_EDE_CBC_SHA
+  Subject: CN=mail.corp.example,O=Corp,C=RU
+  Issuer:  CN=corp-CA,DC=corp,DC=example
+  Срок:    Thu May 29 13:48:16 +04 2025 .. Sat May 29 13:48:16 +04 2027
+  Алгоритм подписи: SHA1withRSA, ключ: RSA 2048 бит
+  SAN: [[2, mail], [2, mail.corp.example], [2, corp2.example], [2, autodiscover.corp2.example]]
+  Совпадает ли CN с адресом подключения 192.0.2.10: нет (подключение по IP)
+  SHA-256 отпечаток: <sha256 hidden>
+  Самоподписан (issuer == subject): false
+
+=== H1. EWS (NTLM): можно ли скачать вложение больше 10 МБ, которое EAS не отдаёт ===
+  FindItem Size>10 МБ: HTTP 200 за 424 мс, ResponseClass=Success
+  GetItem вложения: HTTP 200 за 45 мс
+  вложений 2, крупнейшее по t:Size 0 байт
+  GetAttachment: HTTP 200 за 4 177 мс, ResponseClass=Success, ResponseCode=NoError, ответ 40 766 094 байт, содержимое после base64 30 573 625 байт

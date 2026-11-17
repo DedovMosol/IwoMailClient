@@ -1,0 +1,171 @@
+Run at: 2026-11-16 22:14:26
+
+=== MAIL-01 | MediaStore.Downloads requires API 29 (minSdk is 26)
+URL: https://developer.android.com/reference/android/provider/MediaStore.Downloads
+RESULT: FOUND
+SNIPPET: ...Events & Programs Documentation Android Developers Develop API reference Stay organized with collections Save and categorize content based on your preferences. Added in API level 29 Summary: Constants &#124; Inherited Constants &#124; Fields &#124; Methods &#124; Inherited Methods MediaStore.Downloads Kotlin | Java public static final clas...
+
+=== NAV-02/SET-04 | Activity.setRecentsScreenshotEnabled exists (API 33)
+URL: https://developer.android.com/reference/android/app/Activity
+RESULT: PATTERN NOT FOUND (537786 chars fetched)
+
+=== NAV-13 | Uri.getQueryParameter throws on non-hierarchical (opaque) URI such as mailto:
+URL: https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/net/Uri.java?format=TEXT
+RESULT: FOUND
+SNIPPET: ... rather than ' '.
+     *
+     * @param key which will be encoded
+     * @throws UnsupportedOperationException if this isn't a hierarchical URI
+     * @throws NullPointerException if key is null
+     * @return the decoded value or null if no parameter is found
+     */
+    @Nullable
+    public String getQueryParameter(String key) {
+        if (isOpaque()) {
+            throw new UnsupportedOperationException(NOT_HIERARCHICAL);
+        }
+        if (key == null) {
+            throw new NullPointerException("key");
+        }
+
+        final String query = getEncodedQuery();
+        if (query == null) {
+            return null;
+        }
+
+        final String encodedKey = encode(key, null);
+        final i...
+
+=== MAIL-09 | WebViewClient.shouldOverrideUrlLoading is not called for POST requests
+URL: https://developer.android.com/reference/android/webkit/WebViewClient
+RESULT: FOUND
+SNIPPET: ...load and starts a new load with the same URL. The correct way to continue loading a given URL is to simply return false , without calling WebView.loadUrl(String) . Note: This method is not called for POST requests. Note: This method may be called for subframes and with non-HTTP(S) schemes; calling WebView.loadUrl(String) with such a URL will fail. Parameters view WebView : The WebView that is initiating the c...
+
+=== NAV-01/SET-02 | PBKDF2-HMAC-SHA256 needs 600,000 iterations (OWASP)
+URL: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+RESULT: FOUND
+SNIPPET: ... factor for PBKDF2 is implemented through an iteration count, which should be set differently based on the internal hashing algorithm used. PBKDF2-HMAC-SHA256: 600,000 iterations (recommended) PBKDF2-HMAC-SHA512: 220,000 iterations PBKDF2-HMAC-SHA1: 1,400,000 iterations — legacy only , do not select for new systems. Parallel PBKDF2 &par...
+
+=== NAV-01/SET-02 | Authentication needs account lockout or throttling (OWASP)
+URL: https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html
+RESULT: FOUND
+SNIPPET: ...e examples Login Password recovery Account creation Error Codes and URLs Protect Against Automated Attacks Multi-Factor Authentication Login Throttling Account Lockout CAPTCHA Security Questions and Memorable Words Logging and Monitoring Use of authentication protocols that require no password OAuth 2.0 and 2.1 OpenID Connect...
+
+=== PIM-03 | M3 DatePicker selectedDateMillis is UTC midnight
+URL: https://developer.android.com/reference/kotlin/androidx/compose/material3/DatePickerState
+RESULT: FOUND
+SNIPPET: ... AppCompatMultiAutoCompleteTextView AppCompatRadioButton AppCompatRatingBar AppCompatSeekBar AppCompatSpinner AppCompatTextView AppCompatToggleButton LinearLayoutCompat LinearLayoutCompat.LayoutParams ListPopupWindow PopupMenu SearchView ShareActionProvider SwitchCompat ThemedSpinnerAdapter.Helper Toolbar Toolbar.LayoutPa...
+
+=== PIM-04 | M3 TimePickerState rejects hour outside 0..23 (source)
+URL: https://android.googlesource.com/platform/frameworks/support/+/refs/heads/androidx-main/compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/TimePicker.kt?format=TEXT
+RESULT: PATTERN NOT FOUND (175086 chars fetched)
+
+=== PIM-01 | java.util.Calendar is lenient by default (31 Feb rolls to 3 Mar)
+URL: https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/Calendar.html
+RESULT: FOUND
+SNIPPET: ...he Epoch) or values of the calendar fields. Calling the get , getTimeInMillis , getTime , add and roll involves such calculation. Leniency Calendar has two modes for interpreting the calendar fields, lenient and non-lenient . When a Calendar is in lenient mode, it accepts a wider range of calendar field values than it produces. When a Calendar recomputes calendar field values for return by get() , all of...
+
+=== ONB-19 | Compose: defer state reads / use lambda modifiers for frequently changing state
+URL: https://developer.android.com/develop/ui/compose/performance/bestpractices
+RESULT: FOUND
+SNIPPET: ...ressions where invalidation dampening isn't needed, and read collection .size directly instead of wrapping it in derivedStateOf . Avoid using produceState with snapshotFlow for synchronous state derivations, as it adds unnecessary coroutine dispatch overhead. Defer reads as long as possible When a performance issue has been identified, deferring state reads can help. Deferring state reads will ensure that Compose re-runs the minimum possible code on recomposition. For example, if your UI has state that is hoisted high up in t...
+
+=== MAIL-06 | Compose: use keys in lazy lists
+URL: https://developer.android.com/develop/ui/compose/performance/bestpractices
+RESULT: FOUND
+SNIPPET: ...tacts or comparator change, the sorted list is regenerated. Otherwise, the composable can keep using the cached sorted list. Always pass any inputs referenced inside the remember calculation block as keys so the cached value updates when those inputs change. Because remember stores its keys and cached result in the slot table and compares keys using Object.equals() on every recomposition pass, only us...
+
+=== NAV-18 | Foreground service type dataSync has a time limit (Android 15)
+URL: https://developer.android.com/develop/background-work/services/fgs/timeout
+RESULT: FETCH FAILED
+
+=== NAV-05/SET-03 | BIOMETRIC_STRONG and CryptoObject for sensitive actions
+URL: https://developer.android.com/identity/sign-in/biometric-auth
+RESULT: FOUND
+SNIPPET: ...f authentication that your app supports To define the types of authentication that your app supports, use the BiometricManager.Authenticators interface. The system lets you declare the following types of authentication: BIOMETRIC_STRONG Authentication using a Class 3 biometric, as defined on the Android compatibility definition page. BIOMETRIC_WEAK Authentication using a Class 2 biometric, as defined on the Android compatibility definition page. DEVICE...
+
+=== PIM-14 | CSV injection: cells starting with = + - @ (OWASP)
+URL: https://owasp.org/www-community/attacks/CSV_Injection
+RESULT: FOUND
+SNIPPET: ...y share that information with our analytics partners. Accept x Store Donate Join CSV Injection Author: Timo Goosen, Albinowax Contributor(s): kingthorin, Prasun Srivastav CSV Injection, also known as Formula Injection, occurs when websites embed untrusted input inside CSV files. When a spreadsheet program such as Microsoft Excel or LibreOffice Calc is used to open a CSV, any cells starting with = will be...
+
+=== NAV-10/CMP-13 | Saved instance state size limit and TransactionTooLargeException
+URL: https://developer.android.com/guide/components/activities/parcelables-and-bundles
+RESULT: FOUND
+SNIPPET: ...rmation about using @Parcelize , see Parcelable implementation generator . When sending data via an intent, you should be careful to limit the data size to a few KB. Sending too much data can cause the system to throw a TransactionTooLargeException exception. Sending data between processes Sending data between processes is similar to doing so between activities. However, when sending between processes, we recommend that you do not use custom parcelables. If you se...
+
+=== BLD-04 | Room: migrations are tested with MigrationTestHelper
+URL: https://developer.android.com/training/data-storage/room/migrating-db-versions
+RESULT: FOUND
+SNIPPET: ...e Plugin. getByName ( "androidTest" ). assets . srcDir ( " $ projectDir /schemas" ) } } dependencies { ... testImplementation ( "androidx.room3:room3-testing:3.0.3" ) } The testing package provides a MigrationTestHelper class, which can read exported schema files. The package also implements the JUnit4 TestRule interface to manage created databases. The following example demonstrates a test for a single migration: @...
+
+=== ONB-22 | Compose insets: imePadding for the on-screen keyboard
+URL: https://developer.android.com/develop/ui/compose/system/insets
+RESULT: PATTERN NOT FOUND (22783 chars fetched)
+
+=== NAV-26 | Predictive back needs android:enableOnBackInvokedCallback
+URL: https://developer.android.com/guide/navigation/custom-back/predictive-back-gesture
+RESULT: FOUND
+SNIPPET: ...: dependencies { // Add this in addition to your other dependencies implementation "androidx.activity:activity:1.6.0" } Note: OnBackPressedCallback is always called regardless of the value of android:enableOnBackInvokedCallback . In other words, disabling the system animation doesn't affect your app's back handling logic if it uses OnBackPressedCallback . Opt out of predictive back To opt out, in AndroidManifest.xml , in th...
+
+=== NAV-17/BLD-09 | Android 12: components with intent filters need explicit android:exported
+URL: https://developer.android.com/about/versions/12/behavior-changes-12
+RESULT: FOUND
+SNIPPET: ...sing your app. Safer component exporting If your app targets Android 12 or higher and contains activities , services , or broadcast receivers that use intent filters , you must explicitly declare the android:exported attribute for these app components. Warning: If an activity, service, or broadcast receiver uses intent filters and doesn't have an explicitly-declared value for android:exported , your app can't be ...
+
+=== NAV-19/SET-26 | Configuration changes recreate the Activity unless declared (uiMode, locale, fontScale)
+URL: https://developer.android.com/guide/topics/resources/runtime-changes
+RESULT: PATTERN NOT FOUND (29585 chars fetched)
+
+=== MAIL-09 | CSP: form-action does not fall back to default-src
+URL: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/form-action
+RESULT: FOUND
+SNIPPET: ...mission is debated and browser implementations of this aspect are inconsistent (e.g., Firefox 57 doesn't block the redirects whereas Chrome 63 does). CSP version 2 Directive type Navigation directive default-src fallback No. Not setting this allows anything. In this article Syntax Examples Specifications Browser compatibility See also Syntax http Content-Security-Policy: form-action 'none'; Content-Security-...
+
+=== PIM-16 | vCard 4.0: lines folded at 75 octets
+URL: https://www.rfc-editor.org/rfc/rfc6350.html
+RESULT: FOUND
+SNIPPET: ...D followed by U+000A). Long logical lines of text can be split into a multiple-physical-line representation using the following folding technique. Content lines SHOULD be folded to a maximum width of 75 octets, excluding the line break. Multi-octet characters MUST remain contiguous. The rationale for this folding process can be found in [RFC5322], Section 2.1.1 . A logical line MAY be continued on the next...
+
+=== ONB-03 | Coroutine cancellation is cooperative
+URL: https://kotlinlang.org/docs/cancellation-and-timeouts.html
+RESULT: PATTERN NOT FOUND (1 chars fetched)
+
+=== ONB-03 | OkHttp Call.cancel() aborts a blocking execute()
+URL: https://square.github.io/okhttp/5.x/okhttp/okhttp3/-call/index.html
+RESULT: PATTERN NOT FOUND (425 chars fetched)
+
+=== NAV-21 | android.util.Base64.decode throws IllegalArgumentException on bad input
+URL: https://developer.android.com/reference/android/util/Base64
+RESULT: FOUND
+SNIPPET: ... Short4 Type Type.Builder Enums Allocation.MipmapControl Element.DataKind Element.DataType RenderScript.ContextType RenderScript.Priority Sampler.Value Type.CubemapFace Exceptions RSDriverException RSIllegalArgumentException RSInvalidStateException RSRuntimeException android.sax Overview Interfaces ElementListener EndElementListener EndTextElementListener StartElementListener TextElementListener Classes Element RootEleme...
+
+=== BLD-14 | security-crypto releases page: stable 1.1.0
+URL: https://developer.android.com/jetpack/androidx/releases/security
+RESULT: FOUND
+SNIPPET: ...e keys and encrypt files and sharedpreferences. This table lists all the artifacts in the androidx.security group. Artifact Stable Release Release Candidate Beta Release Alpha Release security-crypto 1.1.0 - - - security-app-authenticator 1.0.0 - - - security-app-authenticator-testing 1.0.0 - - - security-identity-credential - - - 1.0.0-alpha03 This library was last updated on: September 09, 2026 Decla...
+
+=== MAIL-19/SET-12 | Accessibility: touch targets at least 48dp
+URL: https://developer.android.com/guide/topics/ui/accessibility/principles
+RESULT: PATTERN NOT FOUND (28628 chars fetched)
+
+=== SET-08/SET-09 | WCAG 1.4.3: contrast ratio of at least 4.5:1
+URL: https://www.w3.org/TR/WCAG22/
+RESULT: FOUND
+SNIPPET: ...ce . Success Criterion 1.4.3 Contrast (Minimum) Understanding Contrast (Minimum) | How to Meet Contrast (Minimum) (Level AA) The visual presentation of text and images of text has a contrast ratio of at least 4.5:1, except for the following: Large Text Large-scale text and images of large-scale text have a contrast ratio of at least 3:1; Incidental Text or images of text that are part of an inactive user interf...
+
+=== SET-09 | WCAG 1.4.11: non-text contrast of at least 3:1
+URL: https://www.w3.org/TR/WCAG22/
+RESULT: FOUND
+SNIPPET: ...of the content. Success Criterion 1.4.11 Non-text Contrast Understanding Non-text Contrast | How to Meet Non-text Contrast (Level AA) The visual presentation of the following have a contrast ratio of at least 3:1 against adjacent color(s): User Interface Components Visual information required to identify user interface components and states , except for inactive components or where the appearance of the component is determine...
+
+=== ONB-01 | PackageManager.GET_SIGNING_CERTIFICATES (APK signature check before install)
+URL: https://developer.android.com/reference/android/content/pm/PackageManager
+RESULT: FOUND
+SNIPPET: ...t GET_SHARED_LIBRARY_FILES ApplicationInfo flag: return the paths to the shared libraries that are associated with an application. int GET_SIGNATURES This constant was deprecated in API level 28. use GET_SIGNING_CERTIFICATES instead int GET_SIGNING_CERTIFICATES PackageInfo flag: return the signing certificates associated with this package. int GET_UNINSTALLED_PACKAGES This constant was deprecated in API level 24. replace...
+
+=== CMP-05 | MASVS/OWASP: mailto/EXTRA_TEXT are untrusted input
+URL: https://developer.android.com/privacy-and-security/risks/unsafe-intent-launch
+RESULT: PATTERN NOT FOUND (7915 chars fetched)
+
+DONE

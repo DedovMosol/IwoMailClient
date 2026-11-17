@@ -844,33 +844,7 @@ class EasClient(
                 }
 
                 // Шаг 2: GetItem для получения тела
-                val getItemRequest = """<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
-               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
-    <soap:Header>
-        <t:RequestServerVersion Version="Exchange2007_SP1"/>
-    </soap:Header>
-    <soap:Body>
-        <m:GetItem>
-            <m:ItemShape>
-                <t:BaseShape>Default</t:BaseShape>
-                <t:IncludeMimeContent>false</t:IncludeMimeContent>
-                <t:BodyType>HTML</t:BodyType>
-                <t:AdditionalProperties>
-                    <t:FieldURI FieldURI="message:InternetMessageId"/>
-                    <t:FieldURI FieldURI="message:InReplyTo"/>
-                    <t:FieldURI FieldURI="item:Subject"/>
-                    <t:FieldURI FieldURI="item:DateTimeReceived"/>
-                    <t:FieldURI FieldURI="item:DateTimeSent"/>
-                </t:AdditionalProperties>
-            </m:ItemShape>
-            <m:ItemIds>
-                <t:ItemId Id="${escapeXml(ewsItemId)}"/>
-            </m:ItemIds>
-        </m:GetItem>
-    </soap:Body>
-</soap:Envelope>""".trimIndent()
+                val getItemRequest = EwsMailMatch.bodyGetItemRequest(escapeXml(ewsItemId))
 
                 val getItemResponse = transport.executeEwsWithAuth(getItemRequest, "GetItem")
                     ?: return@withContext EasResult.Error("GetItem request failed")
@@ -931,6 +905,13 @@ class EasClient(
                     )
                 }
 
+                // Ошибка схемы (SOAP Fault, HTTP 500) или ResponseClass=Error — не «письмо без тела»:
+                // так годами молча терялся этот fallback на Exchange 2007 (message:InReplyTo).
+                if (getItemResponse.contains("faultcode") || getItemResponse.contains("ResponseClass=\"Error\"")) {
+                    val reason = Regex("<faultstring[^>]*>([^<]{1,200})").find(getItemResponse)?.groupValues?.get(1)
+                        ?: extractEwsError(getItemResponse)
+                    return@withContext EasResult.Error("EWS GetItem: $reason")
+                }
                 EasResult.Success(EmailBodyResult(""))
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e

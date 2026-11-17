@@ -77,42 +77,138 @@ private val ENCODED_HTML_EMAIL_FRAGMENT = Regex(
  * but does NOT prevent UI manipulation, external navigation, or plugin loading.
  * The blocklist below complements null-baseURL.
  */
-private val SANITIZE_SCRIPT_TAG = Regex("(?si)<script[^>]*>.*?</script>")
-private val SANITIZE_SCRIPT_OPEN_CLOSE = Regex("(?i)</?script[^>]*>")
-private val SANITIZE_IFRAME_TAG = Regex("(?si)<iframe[^>]*>.*?</iframe>")
-private val SANITIZE_IFRAME_OPEN_CLOSE = Regex("(?i)</?iframe[^>]*>")
-private val SANITIZE_OBJECT_TAG = Regex("(?si)<object[^>]*>.*?</object>")
-private val SANITIZE_OBJECT_OPEN_CLOSE = Regex("(?i)</?object[^>]*>")
-private val SANITIZE_EMBED = Regex("(?i)<embed\\b[^>]*/?>")
-private val SANITIZE_APPLET_TAG = Regex("(?si)<applet[^>]*>.*?</applet>")
-private val SANITIZE_APPLET_OPEN_CLOSE = Regex("(?i)</?applet[^>]*>")
-private val SANITIZE_META_REFRESH = Regex("""(?i)<meta\b[^>]*http-equiv\s*=\s*['"]?refresh['"]?[^>]*>""")
-private val SANITIZE_EVENT_DOUBLE = Regex("""(?i)\s+on\w+\s*=\s*"[^"]*"""")
-private val SANITIZE_EVENT_SINGLE = Regex("""(?i)\s+on\w+\s*=\s*'[^']*'""")
-private val SANITIZE_EVENT_UNQUOTED = Regex("""(?i)\s+on\w+\s*=\s*[^\s>"']+""")
+// MAIL-03: всё ниже работает за линейное время от размера письма. Прежние выражения `<tag[^>]*>.*?</tag>`,
+// `</?tag[^>]*>`, `<meta\b[^>]*http-equiv…` и `\s+on\w+…` на «письме-яде» (тысячи незакрытых тегов, нет `>`,
+// длинные пробелы) перебирали остаток строки с каждой позиции: 160 КБ — 16 с разбора на главном потоке (ANR).
+// Удаление тегов — сканером по indexOf с тем же результатом (сверено с прежними выражениями на 300 000 строк,
+// docs/audit/experiments/SanitizerLinearFix.java и HtmlUtilsSanitizeTest), обработчики событий — выражениями,
+// которые начинают совпадение только с начала пробельного отрезка и не откатываются (`(?<!\s)\s++`, `\w++`).
+private val SANITIZE_META_REFRESH_ATTR = Regex("""(?i)http-equiv\s*=\s*['"]?refresh""")
+private val SANITIZE_EVENT_DOUBLE = Regex("""(?i)(?<!\s)\s++on\w++\s*=\s*"[^"]*"""")
+private val SANITIZE_EVENT_SINGLE = Regex("""(?i)(?<!\s)\s++on\w++\s*=\s*'[^']*'""")
+private val SANITIZE_EVENT_UNQUOTED = Regex("""(?i)(?<!\s)\s++on\w++\s*=\s*[^\s>"']+""")
 private val SANITIZE_JS_URI_DOUBLE = Regex("""(?i)(href|src|action|formaction|xlink:href)\s*=\s*"\s*javascript:[^"]*"""")
 private val SANITIZE_JS_URI_SINGLE = Regex("""(?i)(href|src|action|formaction|xlink:href)\s*=\s*'\s*javascript:[^']*'""")
 private val SANITIZE_DATA_HTML_DOUBLE = Regex("""(?i)(href|src|action|formaction|xlink:href)\s*=\s*"\s*data:text/html[^"]*"""")
 private val SANITIZE_DATA_HTML_SINGLE = Regex("""(?i)(href|src|action|formaction|xlink:href)\s*=\s*'\s*data:text/html[^']*'""")
 
-fun sanitizeEmailHtml(html: String): String = html
-    .replace(SANITIZE_SCRIPT_TAG, "")
-    .replace(SANITIZE_SCRIPT_OPEN_CLOSE, "")
-    .replace(SANITIZE_IFRAME_TAG, "")
-    .replace(SANITIZE_IFRAME_OPEN_CLOSE, "")
-    .replace(SANITIZE_OBJECT_TAG, "")
-    .replace(SANITIZE_OBJECT_OPEN_CLOSE, "")
-    .replace(SANITIZE_EMBED, "")
-    .replace(SANITIZE_APPLET_TAG, "")
-    .replace(SANITIZE_APPLET_OPEN_CLOSE, "")
-    .replace(SANITIZE_META_REFRESH, "")
-    .replace(SANITIZE_EVENT_DOUBLE, "")
-    .replace(SANITIZE_EVENT_SINGLE, "")
-    .replace(SANITIZE_EVENT_UNQUOTED, "")
-    .replace(SANITIZE_JS_URI_DOUBLE, """$1="#"""")
-    .replace(SANITIZE_JS_URI_SINGLE, """$1='#'""")
-    .replace(SANITIZE_DATA_HTML_DOUBLE, """$1="#"""")
-    .replace(SANITIZE_DATA_HTML_SINGLE, """$1='#'""")
+fun sanitizeEmailHtml(html: String): String {
+    var h = html
+    for (tag in arrayOf("script", "iframe", "object")) {
+        h = removePairedTags(h, tag)
+        h = removeOpenCloseTags(h, tag)
+    }
+    h = removeTags(h, "<embed", requireBoundary = true) { true }
+    h = removePairedTags(h, "applet")
+    h = removeOpenCloseTags(h, "applet")
+    h = removeTags(h, "<meta", requireBoundary = true) { tag -> SANITIZE_META_REFRESH_ATTR.containsMatchIn(tag) }
+    return h
+        .replace(SANITIZE_EVENT_DOUBLE, "")
+        .replace(SANITIZE_EVENT_SINGLE, "")
+        .replace(SANITIZE_EVENT_UNQUOTED, "")
+        .replace(SANITIZE_JS_URI_DOUBLE, """$1="#"""")
+        .replace(SANITIZE_JS_URI_SINGLE, """$1='#'""")
+        .replace(SANITIZE_DATA_HTML_DOUBLE, """$1="#"""")
+        .replace(SANITIZE_DATA_HTML_SINGLE, """$1='#'""")
+}
+
+/** [s] в позиции [at] начинается с [lower] без учёта регистра ASCII (как `(?i)` без UNICODE_CASE). */
+private fun regionMatchesAscii(s: String, at: Int, lower: String): Boolean {
+    if (at < 0 || at + lower.length > s.length) return false
+    for (k in lower.indices) {
+        val c = s[at + k]
+        val lc = if (c in 'A'..'Z') c + 32 else c
+        if (lc != lower[k]) return false
+    }
+    return true
+}
+
+/** Первое вхождение [lower] (без учёта регистра ASCII) в [s] начиная с [from], или -1. Линейно: [lower] короткий. */
+private fun indexOfAscii(s: String, lower: String, from: Int): Int {
+    val first = lower[0]
+    var i = s.indexOf(first, from)
+    while (i >= 0) {
+        if (regionMatchesAscii(s, i, lower)) return i
+        i = s.indexOf(first, i + 1)
+    }
+    return -1
+}
+
+/** Удаляет `<tag…>…</tag>` целиком (то же, что `(?si)<tag[^>]*>.*?</tag>`). */
+private fun removePairedTags(s: String, tag: String): String {
+    val open = "<$tag"
+    val close = "</$tag>"
+    var out: StringBuilder? = null
+    var copyFrom = 0
+    var p = indexOfAscii(s, open, 0)
+    while (p >= 0) {
+        val gt = s.indexOf('>', p + open.length)
+        if (gt < 0) break                         // дальше нет '>' — совпадений нет
+        val c = indexOfAscii(s, close, gt + 1)
+        if (c < 0) break                          // дальше нет закрывающего — совпадений нет
+        val sb = out ?: StringBuilder(s.length).also { out = it }
+        sb.append(s, copyFrom, p)
+        copyFrom = c + close.length
+        p = indexOfAscii(s, open, copyFrom)
+    }
+    val sb = out ?: return s
+    sb.append(s, copyFrom, s.length)
+    return sb.toString()
+}
+
+/** Удаляет одиночные `<tag…>` и `</tag…>` (то же, что `(?i)</?tag[^>]*>`). */
+private fun removeOpenCloseTags(s: String, tag: String): String {
+    var out: StringBuilder? = null
+    var copyFrom = 0
+    var lt = s.indexOf('<')
+    while (lt >= 0) {
+        val nameAt = if (lt + 1 < s.length && s[lt + 1] == '/') lt + 2 else lt + 1
+        if (regionMatchesAscii(s, nameAt, tag)) {
+            val gt = s.indexOf('>', nameAt + tag.length)
+            if (gt < 0) break
+            val sb = out ?: StringBuilder(s.length).also { out = it }
+            sb.append(s, copyFrom, lt)
+            copyFrom = gt + 1
+            lt = s.indexOf('<', copyFrom)
+        } else {
+            lt = s.indexOf('<', lt + 1)
+        }
+    }
+    val sb = out ?: return s
+    sb.append(s, copyFrom, s.length)
+    return sb.toString()
+}
+
+/**
+ * Удаляет теги, начинающиеся с [lowerOpen] (например `<embed`), до первого `>` включительно, если [shouldRemove]
+ * для текста тега. [requireBoundary] — после имени не буква/цифра/`_` (как `\b`).
+ */
+private inline fun removeTags(s: String, lowerOpen: String, requireBoundary: Boolean, shouldRemove: (String) -> Boolean): String {
+    var out: StringBuilder? = null
+    var copyFrom = 0
+    var p = indexOfAscii(s, lowerOpen, 0)
+    while (p >= 0) {
+        val after = p + lowerOpen.length
+        if (requireBoundary && after < s.length && (s[after].isLetterOrDigit() || s[after] == '_')) {
+            p = indexOfAscii(s, lowerOpen, p + 1)
+            continue
+        }
+        val gt = s.indexOf('>', after)
+        if (gt < 0) break
+        if (shouldRemove(s.substring(after, gt))) {
+            val sb = out ?: StringBuilder(s.length).also { out = it }
+            sb.append(s, copyFrom, p)
+            copyFrom = gt + 1
+            p = indexOfAscii(s, lowerOpen, copyFrom)
+        } else {
+            // Тег без совпадения: начало внутри него дало бы тот же `>` и меньший текст — тоже без совпадения
+            p = indexOfAscii(s, lowerOpen, gt + 1)
+        }
+    }
+    val sb = out ?: return s
+    sb.append(s, copyFrom, s.length)
+    return sb.toString()
+}
 
 /**
  * Email HTML часто приходит как fragment без <html>/<body>:

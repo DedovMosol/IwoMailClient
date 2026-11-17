@@ -4,6 +4,18 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Audit phase 0: data loss, mail TLS, EWS on Exchange 2007 (2026-11-17)
+- Auto-cleanup (DATA-01/02) is off by default. It deletes only messages that were already in the folder at the previous check N days earlier: the first check, enabling and changing the period only record the folder contents, and a clock moved back restarts the count. A draft is deleted only if unchanged for N days, through `deleteDraft` (files included). Tests: `AutoFolderCleanupTest`
+- Status 6 on body load (PROTO-08): the message is no longer deleted locally or hidden for 5 minutes. During a full resync Exchange 2007 returns 6 for messages not yet re-sent (verified on the server). The screen syncs the folder once and closes only if the message is really gone. Tests: `LoadEmailBodyNotFoundTest`, `EmailDetailViewModelTest`
+- IMAP/POP3 (UI2-01/02): without SSL, STARTTLS/STLS is required and the certificate host name is checked. "Accept all certificates" stays optional. TLS 1.0 and 3DES are allowed last in the list: Exchange 2007 on 993/995 accepts only these, and with Android defaults sign-in failed. Errors are read along the whole cause chain: "Server certificate not trusted…" instead of "server has no STARTTLS". Tests: `MailSessionPropertiesTest`, `MailConnectionErrorsTest`
+- Push (BG-01/02/03): with no push accounts the service no longer restarts in a loop, and the restart worker does not retry forever. On Android 15 a boot start goes through WorkManager, with no FGS from BOOT_COMPLETED. Tests: `PushServiceRestartTest`
+- `LargeStateSaver` (NAV-09) reads and deletes only its own files in `cacheDir`
+- Calendar: daily and weekly series with COUNT and in Monday-first locales (PIM-02/12), month and year navigation (PIM-01), time fields without a crash on "9999" and with the cursor at the end (PIM-04). Tests: `RecurrenceHelperTest`, `MonthNavigationTest`, `TimeInputTest`
+- Poison mail (MAIL-03): linear sanitizer, same output as before on 300 real messages. Body links are found off the main thread with a bounded e-mail regex (MAIL-25). Tests: `HtmlUtilsSanitizePerformanceTest`, `BodyLinkRegexTest`
+- Deleting from the message screen closes it once, after the toast (MAIL-05). Share copies files off the main thread, up to 10 MB, and a toast reports skipped files (NAV-12). Tests: `ShareIntentCopyTest`
+- EWS on Exchange 2007: the body GetItem asked for `message:InReplyTo`, which the 2007 schema lacks (SOAP Fault, HTTP 500), so the EWS body fallback never worked. Now `item:InReplyTo`, and a SOAP Fault is returned as an error, not an empty body
+- Recurring exceptions via EWS: Exchange 2007 rejected the whole FindItem CalendarView with `item:Body` and `calendar:OriginalStart` (`ErrorInvalidPropertyForOperation`), so the exception supplement never worked. FindItem now omits them, body and original start come from GetItem. An incomplete reply changes nothing. Tests: `CalendarExceptionServiceEwsTest`
+- `LiveExchangeTest`: the same scenarios with the app's code on a real server, run only when environment variables are set (see CONTRIBUTING), skipped in CI
 ### Compose send and reminder alarms (2026-11-15)
 - Send and draft save run in `RetainScopeViewModel` (scope plus sending/savingDraft flags), so a rotation neither cancels the Job nor sticks the Send button
 - Reminders: `scheduleRtcWakeup` uses exact, then while-idle, then `set`. Worker retries (not success), KEEP so enqueue does not reset the attempt counter, stops after 5. Send and draft save are mutually exclusive, Back does not leave the screen while they run

@@ -114,17 +114,76 @@ class PushService : Service() {
         // лимит FGS); возобновление push берут на себя периодический SyncWorker + alarm.
         private const val KEY_FGS_TIMEOUT = "fgs_timeout"
 
+        private const val RESTART_WORK_NAME = "push_restart"
+        private const val BOOT_RESTART_DELAY_SEC = 5L
+        private const val FALLBACK_RESTART_DELAY_SEC = 10L
+
+        /**
+         * Прямой старт. Из фона на Android 12+ бросает ForegroundServiceStartNotAllowedException — для фоновых
+         * точек входа есть [startOrSchedule].
+         */
         fun start(context: Context) {
             val intent = Intent(context, PushService::class.java)
             // minSdk 26 (O): foreground-сервис всегда через startForegroundService.
             context.startForegroundService(intent)
         }
 
+        /**
+         * Старт из любой точки (Application, Worker, BroadcastReceiver). BG-02: на Android 15+ ресивер
+         * BOOT_COMPLETED не может запускать FGS типа dataSync (ForegroundServiceStartNotAllowedException,
+         * developer.android.com/about/versions/15/behavior-changes-15), поэтому после загрузки — разрешённым
+         * путём через точный будильник ([requestRestart]). BG-03: запрет старта из фона не должен обрывать
+         * вызывающего (раньше исключение пропускало планирование alarm-синхронизации) — тот же резервный путь.
+         */
+        fun startOrSchedule(
+            context: Context,
+            fromBoot: Boolean = false,
+            sdkInt: Int = Build.VERSION.SDK_INT // для тестов: Robolectric 4.12 не запускается на API 35
+        ) {
+            if (fromBoot && sdkInt >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                requestRestart(context, BOOT_RESTART_DELAY_SEC)
+                return
+            }
+            try {
+                start(context)
+            } catch (e: IllegalStateException) {
+                // ForegroundServiceStartNotAllowedException (API 31+) — подкласс IllegalStateException
+                android.util.Log.w(TAG, "Background FGS start not allowed — scheduling exemption-safe restart", e)
+                requestRestart(context, FALLBACK_RESTART_DELAY_SEC)
+            } catch (e: SecurityException) {
+                android.util.Log.w(TAG, "FGS start rejected — scheduling exemption-safe restart", e)
+                requestRestart(context, FALLBACK_RESTART_DELAY_SEC)
+            }
+        }
+
         fun stop(context: Context) {
             context.getSharedPreferences("push_service", Context.MODE_PRIVATE)
                 .edit().putBoolean("explicit_stop", true).apply()
             cancelSyncAlarm(context)
+            cancelRestart(context)
             context.stopService(Intent(context, PushService::class.java))
+        }
+
+        /** Снимает запланированный перезапуск (будильник и WorkManager): после явной остановки его быть не должно. */
+        fun cancelRestart(context: Context) {
+            val appContext = context.applicationContext
+            try {
+                val pendingIntent = PendingIntent.getForegroundService(
+                    appContext, RESTART_REQUEST_CODE, Intent(appContext, PushService::class.java),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE
+                )
+                if (pendingIntent != null) {
+                    appContext.getSystemService(android.app.AlarmManager::class.java)?.cancel(pendingIntent)
+                    pendingIntent.cancel()
+                }
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Failed to cancel restart alarm", e)
+            }
+            try {
+                androidx.work.WorkManager.getInstance(appContext).cancelUniqueWork(RESTART_WORK_NAME)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Failed to cancel restart work", e)
+            }
         }
 
         fun scheduleSyncAlarm(context: Context, intervalMinutes: Int) {
@@ -212,7 +271,7 @@ class PushService : Service() {
                     )
                     .build()
                 androidx.work.WorkManager.getInstance(appContext)
-                    .enqueueUniqueWork("push_restart", androidx.work.ExistingWorkPolicy.REPLACE, restartWork)
+                    .enqueueUniqueWork(RESTART_WORK_NAME, androidx.work.ExistingWorkPolicy.REPLACE, restartWork)
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "Failed to schedule WorkManager restart", e)
             }
@@ -427,11 +486,7 @@ class PushService : Service() {
             }
 
             if (!hasExchangePushAccounts) {
-                // Нет PUSH аккаунтов — останавливаемся
-                withContext(Dispatchers.Main) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
-                }
+                withContext(Dispatchers.Main) { stopNoPushAccounts() }
                 return@launch
             }
 
@@ -508,6 +563,19 @@ class PushService : Service() {
         super.onDestroy()
     }
 
+    /**
+     * BG-01: PUSH-аккаунтов нет — остановка как явная. Прежний stopSelf() без отметки: onDestroy ставил
+     * перезапуск через 60 с, onCreate снимал отметку, onStartCommand снова останавливался — цикл раз в минуту.
+     */
+    private fun stopNoPushAccounts() {
+        android.util.Log.i(TAG, "No Exchange PUSH accounts — stopping without restart")
+        getSharedPreferences("push_service", Context.MODE_PRIVATE)
+            .edit().putBoolean("explicit_stop", true).apply()
+        cancelRestart(applicationContext)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     private fun scheduleRestart() {
         android.util.Log.i(TAG, "Scheduling service restart")
         // DRY: единая exemption-safe точка рестарта (см. companion requestRestart).
@@ -576,7 +644,7 @@ class PushService : Service() {
             }
 
             if (exchangePushAccounts.isEmpty()) {
-                withContext(Dispatchers.Main) { stopSelf() }
+                withContext(Dispatchers.Main) { stopNoPushAccounts() }
                 return@launch
             }
 

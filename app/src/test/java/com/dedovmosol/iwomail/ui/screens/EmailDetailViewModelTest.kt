@@ -137,6 +137,109 @@ class EmailDetailViewModelTest {
         assertThat(events).contains(EmailDetailEvent.NavigateBack)
     }
 
+    @Test
+    fun `PROTO-08 body OBJECT_NOT_FOUND during resync syncs the folder and shows the body`() = runTest(dispatcher) {
+        coEvery { actions.getEmailSync(EMAIL_ID) } returnsMany listOf(email(body = ""), email(body = ""), email(body = "<p>ok</p>"))
+        coEvery { actions.loadEmailBody(EMAIL_ID) } returns EasResult.Error("OBJECT_NOT_FOUND")
+        coEvery { actions.syncAndReloadBody(EMAIL_ID, ACCOUNT_ID, INBOX_ID) } returns EasResult.Success(Unit)
+        val vm = createViewModel()
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { actions.syncAndReloadBody(EMAIL_ID, ACCOUNT_ID, INBOX_ID) }
+        assertThat(vm.uiState.value.bodyLoadError).isNull()
+        assertThat(vm.uiState.value.isLoadingBody).isFalse()
+        assertThat(events).doesNotContain(EmailDetailEvent.NavigateBack)
+    }
+
+    @Test
+    fun `PROTO-08 body OBJECT_NOT_FOUND that sync cannot resolve shows LoadFailed and keeps the screen`() = runTest(dispatcher) {
+        coEvery { actions.getEmailSync(EMAIL_ID) } returns email(body = "")
+        coEvery { actions.loadEmailBody(EMAIL_ID) } returns EasResult.Error("OBJECT_NOT_FOUND")
+        coEvery { actions.syncAndReloadBody(EMAIL_ID, ACCOUNT_ID, INBOX_ID) } returns EasResult.Error("OBJECT_NOT_FOUND")
+        val vm = createViewModel()
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        assertThat(vm.uiState.value.bodyLoadError).isEqualTo(BodyLoadError.LoadFailed)
+        assertThat(events).doesNotContain(EmailDetailEvent.NavigateBack)
+    }
+
+    // ===================== MAIL-05: письмо исчезло, пока открыто =====================
+
+    @Test
+    fun `email deleted on server while open closes the screen once`() = runTest(dispatcher) {
+        val flow = kotlinx.coroutines.flow.MutableStateFlow<EmailEntity?>(email())
+        every { mailRepo.getEmail(EMAIL_ID) } returns flow
+        val vm = createViewModel()
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        flow.value = null
+        advanceUntilIdle()
+        flow.value = null
+        advanceUntilIdle()
+
+        assertThat(events.count { it == EmailDetailEvent.NavigateBack }).isEqualTo(1)
+        assertThat(events).contains(EmailDetailEvent.DeletedOnServer)
+        assertThat(vm.uiState.value.email).isNull()
+    }
+
+    @Test
+    fun `permanent deletion closes the screen once without deleted-on-server toast`() = runTest(dispatcher) {
+        val flow = kotlinx.coroutines.flow.MutableStateFlow<EmailEntity?>(email())
+        every { mailRepo.getEmail(EMAIL_ID) } returns flow
+        coEvery { mailRepo.deleteEmailsPermanentlyWithProgress(listOf(EMAIL_ID), any()) } coAnswers {
+            flow.value = null // запись удаляется посреди операции
+            kotlinx.coroutines.yield()
+            EasResult.Success(1)
+        }
+        val vm = createViewModel()
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        val result = vm.deleteEmailPermanently(listOf(EMAIL_ID)) { _, _ -> }
+        advanceUntilIdle()
+
+        assertThat(result).isEqualTo(EasResult.Success(1))
+        assertThat(events.count { it == EmailDetailEvent.NavigateBack }).isEqualTo(1)
+        assertThat(events).doesNotContain(EmailDetailEvent.DeletedOnServer)
+    }
+
+    @Test
+    fun `move to trash that replaces the record navigates back once after the toast`() = runTest(dispatcher) {
+        val flow = kotlinx.coroutines.flow.MutableStateFlow<EmailEntity?>(email())
+        every { mailRepo.getEmail(EMAIL_ID) } returns flow
+        coEvery { actions.deleteEmails(listOf(EMAIL_ID), isInTrash = false) } coAnswers {
+            flow.value = null
+            kotlinx.coroutines.yield()
+            EasResult.Success(1)
+        }
+        val vm = createViewModel()
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        vm.deleteToTrash()
+        advanceUntilIdle()
+
+        assertThat(events.filter { it == EmailDetailEvent.MovedToTrash || it == EmailDetailEvent.NavigateBack })
+            .containsExactly(EmailDetailEvent.MovedToTrash, EmailDetailEvent.NavigateBack).inOrder()
+        assertThat(events).doesNotContain(EmailDetailEvent.DeletedOnServer)
+    }
+
+    @Test
+    fun `failed permanent deletion keeps the screen`() = runTest(dispatcher) {
+        coEvery { mailRepo.deleteEmailsPermanentlyWithProgress(any(), any()) } returns EasResult.Error("DELETE_FAILED")
+        val vm = createViewModel()
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        vm.deleteEmailPermanently(listOf(EMAIL_ID)) { _, _ -> }
+        advanceUntilIdle()
+
+        assertThat(events).doesNotContain(EmailDetailEvent.NavigateBack)
+    }
+
     // ===================== inline images =====================
 
     @Test

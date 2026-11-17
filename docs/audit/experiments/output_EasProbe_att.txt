@@ -1,0 +1,106 @@
+EasProbe, режим att, запуск Tue Nov 17 00:27:26 +04 2026, JDK 17.0.20
+Сервер https://192.0.2.10, пользователь DOMAIN\user, DeviceId IWOAUDITPROBE2026 (отдельное партнёрство аудита)
+
+=== T1. TLS и сертификат ===
+  только TLSv1.2 : ОТКАЗ (SSLHandshakeException)
+  только TLSv1.1 : ОТКАЗ (SSLHandshakeException)
+  только TLSv1   : рукопожатие OK, протокол=TLSv1, шифр=SSL_RSA_WITH_3DES_EDE_CBC_SHA
+  Subject: CN=mail.corp.example,O=Corp,C=RU
+  Issuer:  CN=corp-CA,DC=corp,DC=example
+  Срок:    Thu May 29 13:48:16 +04 2025 .. Sat May 29 13:48:16 +04 2027
+  Алгоритм подписи: SHA1withRSA, ключ: RSA 2048 бит
+  SAN: [[2, mail], [2, mail.corp.example], [2, corp2.example], [2, autodiscover.corp2.example]]
+  Совпадает ли CN с адресом подключения 192.0.2.10: нет (подключение по IP)
+  SHA-256 отпечаток: <sha256 hidden>
+  Самоподписан (issuer == subject): false
+
+=== T4. Provision (двухфазный, MS-ASPROV) и политика сервера ===
+  FolderSync до Provision (без X-MS-PolicyKey): HTTP 200
+  Фаза 1: HTTP 200 за 32 мс, Status=1
+  Status политики: 1, временный PolicyKey получен: true
+  Элементы политики (EASProvisionDoc):
+    DevicePasswordEnabled                         = 0
+    AlphanumericDevicePasswordRequired            = 0
+    PasswordRecoveryEnabled                       = 0
+    RequireStorageCardEncryption                  = 0
+    AttachmentsEnabled                            = 1
+    MinDevicePasswordLength                       = 4
+    MaxInactivityTimeDeviceLock                   = 900
+    MaxDevicePasswordFailedAttempts               = 8
+    MaxAttachmentSize                             = (пусто)
+    AllowSimpleDevicePassword                     = 1
+    DevicePasswordExpiration                      = (пусто)
+    DevicePasswordHistory                         = 0
+    AllowStorageCard                              = 1
+    AllowCamera                                   = 1
+    RequireDeviceEncryption                       = 0
+    AllowUnsignedApplications                     = 1
+    AllowUnsignedInstallationPackages             = 1
+    MinDevicePasswordComplexCharacters            = 3
+    AllowWiFi                                     = 1
+    AllowTextMessaging                            = 1
+    AllowPOPIMAPEmail                             = 1
+    AllowBluetooth                                = 2
+    AllowIrDA                                     = 1
+    RequireManualSyncWhenRoaming                  = 0
+    AllowDesktopSync                              = 1
+    MaxCalendarAgeFilter                          = 0
+    AllowHTMLEmail                                = 1
+    MaxEmailAgeFilter                             = 0
+    MaxEmailBodyTruncationSize                    = -1
+    MaxEmailHTMLBodyTruncationSize                = -1
+    RequireSignedSMIMEMessages                    = 0
+    RequireEncryptedSMIMEMessages                 = 0
+    RequireSignedSMIMEAlgorithm                   = 0
+    RequireEncryptionSMIMEAlgorithm               = 0
+    AllowSMIMEEncryptionAlgorithmNegotiation      = 2
+    AllowSMIMESoftCerts                           = 1
+    AllowBrowser                                  = 1
+    AllowConsumerEmail                            = 1
+    AllowRemoteDesktop                            = 1
+    AllowInternetSharing                          = 1
+    UnapprovedInROMApplicationList                = (пусто)
+    ApprovedApplicationList                       = (пусто)
+  Фаза 2 (подтверждение): HTTP 200, Status=1, итоговый PolicyKey получен: true, совпадает с временным: false
+
+=== T5. FolderSync ===
+  HTTP 200 за 140 мс, 1071 байт, Status=1
+  Папок: 22, по типам (MS-ASCMD FolderHierarchy Type): {1=2, 2=1, 3=1, 4=1, 5=1, 6=1, 7=1, 8=1, 9=1, 10=1, 11=1, 12=7, 14=1, 18=2}
+  Junk найден по имени: true
+  Входящие: элементов 978, страниц 20, байт 5 599 633, суммарно 8 540 мс, худшая страница 441 146 байт / 502 мс, Status=1, типы тел {Type 2=978}
+  Отправленные: элементов 664, страниц 14, байт 2 856 661, суммарно 6 078 мс, худшая страница 372 408 байт / 562 мс, Status=1, типы тел {Type 2=664}
+
+=== G1. Порог размера вложения для ItemOperations Fetch и размер ответа против лимита WbxmlParser 16 МиБ ===
+    вложение 4 275 335 байт: HTTP 200, top=1, fetch=1, Content-Type application/vnd.ms-sync.wbxml, ответ 5 695 724 байт (x1,33 к размеру), Data токен STR_I, после base64 4 271 733 байт, 774 мс
+    вложение 5 262 200 байт: HTTP 200, top=1, fetch=1, Content-Type application/vnd.ms-sync.wbxml, ответ 7 011 591 байт (x1,33 к размеру), Data токен STR_I, после base64 5 258 598 байт, 874 мс
+    вложение 5 463 921 байт: HTTP 200, top=1, fetch=1, Content-Type application/vnd.ms-sync.wbxml, ответ 7 285 213 байт (x1,33 к размеру), Data токен STR_I, после base64 5 463 857 байт, 946 мс
+    вложение 5 538 595 байт: HTTP 200, top=1, fetch=1, Content-Type application/vnd.ms-sync.wbxml, ответ 7 384 778 байт (x1,33 к размеру), Data токен STR_I, после base64 5 538 531 байт, 1 088 мс
+    вложение 8 099 327 байт: HTTP 200, top=1, fetch=1, Content-Type application/vnd.ms-sync.wbxml, ответ 10 799 091 байт (x1,33 к размеру), Data токен STR_I, после base64 8 099 263 байт, 1 302 мс
+    вложение 8 105 418 байт: HTTP 200, top=1, fetch=1, Content-Type application/vnd.ms-sync.wbxml, ответ 10 802 495 байт (x1,33 к размеру), Data токен STR_I, после base64 8 101 816 байт, 1 362 мс
+    вложение 8 673 113 байт: HTTP 200, top=1, fetch=1, Content-Type application/vnd.ms-sync.wbxml, ответ 11 564 139 байт (x1,33 к размеру), Data токен STR_I, после base64 8 673 049 байт, 1 284 мс
+    вложение 8 991 818 байт: HTTP 200, top=1, fetch=1, Content-Type application/vnd.ms-sync.wbxml, ответ 11 989 079 байт (x1,33 к размеру), Data токен STR_I, после base64 8 991 754 байт, 1 381 мс
+    вложение 12 329 983 байт: HTTP 200, top=1, fetch=11, Content-Type application/vnd.ms-sync.wbxml, ответ 41 байт (x0,00 к размеру), Data токен -, после base64 -1 байт, 51 мс
+    вложение 16 664 064 байт: HTTP 200, top=1, fetch=11, Content-Type application/vnd.ms-sync.wbxml, ответ 41 байт (x0,00 к размеру), Data токен -, после base64 -1 байт, 43 мс
+    вложение 18 628 856 байт: HTTP 200, top=1, fetch=11, Content-Type application/vnd.ms-sync.wbxml, ответ 41 байт (x0,00 к размеру), Data токен -, после base64 -1 байт, 46 мс
+    вложение 30 577 203 байт: HTTP 200, top=1, fetch=11, Content-Type application/vnd.ms-sync.wbxml, ответ 40 байт (x0,00 к размеру), Data токен -, после base64 -1 байт, 51 мс
+
+=== G3. GetAttachment POST (Content-Type message/rfc822) для вложений, которые ItemOperations отдаёт со Status 11 ===
+    вложение 12 329 983 байт: HTTP 413, 0 байт (ожидалось ~12 329 983), Content-Type null
+      время 112 мс
+    вложение 16 664 064 байт: HTTP 413, 0 байт (ожидалось ~16 664 064), Content-Type null
+      время 51 мс
+    вложение 18 628 856 байт: HTTP 413, 0 байт (ожидалось ~18 628 856), Content-Type null
+      время 47 мс
+    вложение 30 577 203 байт: HTTP 413, 0 байт (ожидалось ~30 577 203), Content-Type null
+      время 52 мс
+
+=== G2. GetAttachment: варианты запроса ===
+  Вложение 1 045 байт; вид FileReference: x%xxxxx%xxx
+    POST, User с доменом, имя как прислал сервер: HTTP 200, 980 байт (ожидалось ~1 045), Content-Type image/png
+    POST, User с доменом, имя после decode: HTTP 200, 980 байт (ожидалось ~1 045), Content-Type image/png
+    POST, User без домена, имя как прислал сервер: HTTP 200, 980 байт (ожидалось ~1 045), Content-Type image/png
+    POST, User без домена, имя после decode: HTTP 200, 980 байт (ожидалось ~1 045), Content-Type image/png
+    GET, User с доменом, имя как прислал сервер: HTTP 501, 0 байт (ожидалось ~1 045), Content-Type null
+    GET, User с доменом, имя после decode: HTTP 501, 0 байт (ожидалось ~1 045), Content-Type null
+    GET, User без домена, имя как прислал сервер: HTTP 501, 0 байт (ожидалось ~1 045), Content-Type null
+    GET, User без домена, имя после decode: HTTP 501, 0 байт (ожидалось ~1 045), Content-Type null

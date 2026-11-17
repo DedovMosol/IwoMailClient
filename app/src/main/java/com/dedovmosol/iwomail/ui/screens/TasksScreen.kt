@@ -1653,19 +1653,12 @@ private fun CreateTaskDialog(
                             },
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
                         )
-                        OutlinedTextField(
+                        com.dedovmosol.iwomail.ui.components.TimeTextField(
                             value = startTimeText,
-                            onValueChange = { newValue ->
-                                val digits = newValue.filter { it.isDigit() }.take(4)
-                                startTimeText = when {
-                                    digits.length <= 2 -> digits
-                                    else -> "${digits.substring(0, 2)}:${digits.substring(2)}"
-                                }
-                            },
+                            onValueChange = { startTimeText = it },
                             placeholder = { Text(Strings.timePlaceholder, style = MaterialTheme.typography.bodySmall, maxLines = 1) },
                             textStyle = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f).height(48.dp),
-                            singleLine = true,
                             trailingIcon = {
                                 IconButton(onClick = { showStartTimePicker = true }) {
                                     Icon(AppIcons.Schedule, null, modifier = Modifier.size(18.dp))
@@ -1719,19 +1712,12 @@ private fun CreateTaskDialog(
                             },
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
                         )
-                        OutlinedTextField(
+                        com.dedovmosol.iwomail.ui.components.TimeTextField(
                             value = dueTimeText,
-                            onValueChange = { newValue ->
-                                val digits = newValue.filter { it.isDigit() }.take(4)
-                                dueTimeText = when {
-                                    digits.length <= 2 -> digits
-                                    else -> "${digits.substring(0, 2)}:${digits.substring(2)}"
-                                }
-                            },
+                            onValueChange = { dueTimeText = it },
                             placeholder = { Text(Strings.timePlaceholder, style = MaterialTheme.typography.bodySmall, maxLines = 1) },
                             textStyle = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f).height(48.dp),
-                            singleLine = true,
                             trailingIcon = {
                                 IconButton(onClick = { showDueTimePicker = true }) {
                                     Icon(AppIcons.Schedule, null, modifier = Modifier.size(18.dp))
@@ -1785,19 +1771,12 @@ private fun CreateTaskDialog(
                             },
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
                         )
-                        OutlinedTextField(
+                        com.dedovmosol.iwomail.ui.components.TimeTextField(
                             value = reminderTimeText,
-                            onValueChange = { newValue ->
-                                val digits = newValue.filter { it.isDigit() }.take(4)
-                                reminderTimeText = when {
-                                    digits.length <= 2 -> digits
-                                    else -> "${digits.substring(0, 2)}:${digits.substring(2)}"
-                                }
-                            },
+                            onValueChange = { reminderTimeText = it },
                             placeholder = { Text(Strings.timePlaceholder, style = MaterialTheme.typography.bodySmall, maxLines = 1) },
                             textStyle = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f).height(48.dp),
-                            singleLine = true,
                             trailingIcon = {
                                 IconButton(onClick = { showReminderTimePicker = true }) {
                                     Icon(AppIcons.Schedule, null, modifier = Modifier.size(18.dp))
@@ -1927,8 +1906,7 @@ private fun CreateTaskDialog(
     }
 
     if (showStartTimePicker) {
-        val h = try { startTimeText.split(":")[0].toInt() } catch (_: Exception) { 9 }
-        val m = try { startTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
+        val (h, m) = com.dedovmosol.iwomail.ui.utils.TimeInput.hourMinute(startTimeText, defaultHour = 9)
         val state = rememberTimePickerState(initialHour = h, initialMinute = m, is24Hour = true)
         BasicAlertDialog(onDismissRequest = { showStartTimePicker = false }) {
             Surface(shape = RoundedCornerShape(28.dp)) {
@@ -1947,8 +1925,7 @@ private fun CreateTaskDialog(
     }
 
     if (showDueTimePicker) {
-        val h = try { dueTimeText.split(":")[0].toInt() } catch (_: Exception) { 18 }
-        val m = try { dueTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
+        val (h, m) = com.dedovmosol.iwomail.ui.utils.TimeInput.hourMinute(dueTimeText, defaultHour = 18)
         val state = rememberTimePickerState(initialHour = h, initialMinute = m, is24Hour = true)
         BasicAlertDialog(onDismissRequest = { showDueTimePicker = false }) {
             Surface(shape = RoundedCornerShape(28.dp)) {
@@ -1967,8 +1944,7 @@ private fun CreateTaskDialog(
     }
 
     if (showReminderTimePicker) {
-        val h = try { reminderTimeText.split(":")[0].toInt() } catch (_: Exception) { 9 }
-        val m = try { reminderTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
+        val (h, m) = com.dedovmosol.iwomail.ui.utils.TimeInput.hourMinute(reminderTimeText, defaultHour = 9)
         val state = rememberTimePickerState(initialHour = h, initialMinute = m, is24Hour = true)
         BasicAlertDialog(onDismissRequest = { showReminderTimePicker = false }) {
             Surface(shape = RoundedCornerShape(28.dp)) {

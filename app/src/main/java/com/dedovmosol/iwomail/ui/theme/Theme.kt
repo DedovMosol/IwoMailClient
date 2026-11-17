@@ -662,8 +662,9 @@ fun SimpleTimeInputDialog(
     val context = LocalContext.current
     val is24Hour = remember(context) { DateFormat.is24HourFormat(context) }
     val timeState = rememberTimePickerState(
-        initialHour = initialHour,
-        initialMinute = initialMinute,
+        // Material3: require(initialHour in 0..23) / (initialMinute in 0..59) — иначе краш в композиции (PIM-04)
+        initialHour = initialHour.coerceIn(0, 23),
+        initialMinute = initialMinute.coerceIn(0, 59),
         is24Hour = is24Hour
     )
 

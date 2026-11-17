@@ -67,11 +67,32 @@ object ShareIntentData {
     @Volatile
     var attachments: List<android.net.Uri> = emptyList()
     
-    fun copyToLocal(context: android.content.Context, uris: List<android.net.Uri>): List<android.net.Uri> = synchronized(this) {
+    /** Сколько файлов из последнего «Поделиться» не добавлено (больше лимита письма, не читаются). */
+    @Volatile
+    var skippedCount: Int = 0
+
+    /**
+     * Копирует файлы «Поделиться» в кэш приложения. Блокирующая (ContentResolver, до 10 МБ на файл) — только
+     * вне главного потока (NAV-12: раньше вызывалась из LaunchedEffect на главном потоке — ANR на медленном
+     * облачном провайдере). Копирование останавливается на общем лимите вложений письма: дальше файлы всё равно
+     * не отправить, а их копии заняли бы место (SEND_MULTIPLE без ограничения числа файлов).
+     */
+    @androidx.annotation.WorkerThread
+    fun copyToLocal(
+        context: android.content.Context,
+        uris: List<android.net.Uri>,
+        uriFor: (java.io.File) -> android.net.Uri = { file ->
+            androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        }
+    ): List<android.net.Uri> = synchronized(this) {
         val shareDir = java.io.File(context.cacheDir, com.dedovmosol.iwomail.util.SHARE_ATTACHMENTS_DIR)
         shareDir.mkdirs()
         val usedNames = mutableSetOf<String>()
-        uris.mapNotNull { uri ->
+        var total = 0L
+        var skipped = 0
+        val copied = mutableListOf<android.net.Uri>()
+        for (uri in uris) {
+            if (total >= com.dedovmosol.iwomail.ui.screens.MAX_TOTAL_ATTACHMENT_BYTES) { skipped++; continue }
             try {
                 val baseName = com.dedovmosol.iwomail.util.queryOpenableFileMeta(context.contentResolver, uri)?.name
                     ?: "share_${System.nanoTime()}"
@@ -84,22 +105,25 @@ object ShareIntentData {
                     unique
                 }
                 val localFile = java.io.File(shareDir, name)
-                if (!com.dedovmosol.iwomail.util.copyUriLimited(
-                        context.contentResolver, uri, localFile,
-                        com.dedovmosol.iwomail.util.MAX_PICKED_FILE_BYTES
-                    )
-                ) {
-                    return@mapNotNull null
-                }
-                androidx.core.content.FileProvider.getUriForFile(
-                    context, "${context.packageName}.fileprovider", localFile
+                val result = com.dedovmosol.iwomail.util.copyOpenableToFile(
+                    context.contentResolver, uri, localFile,
+                    com.dedovmosol.iwomail.util.MAX_PICKED_FILE_BYTES,
+                    total, com.dedovmosol.iwomail.ui.screens.MAX_TOTAL_ATTACHMENT_BYTES
                 )
-            } catch (_: Exception) { null }
+                if (result !is com.dedovmosol.iwomail.util.LimitedCopyResult.Ok) { skipped++; continue }
+                copied += uriFor(localFile)
+                total += result.bytesCopied
+            } catch (_: Exception) {
+                skipped++
+            }
         }
+        skippedCount = skipped
+        copied
     }
     
     fun clear() {
         attachments = emptyList()
+        skippedCount = 0
     }
 }
 
@@ -467,12 +491,15 @@ fun AppNavigation(
         if (composeIntentId > 0 && composeIntentId != lastHandledComposeId &&
             (composeToEmail != null || composeSubject != null || composeBody != null || composeAttachments.isNotEmpty()) && 
             hasCheckedAccounts && startDestination == Screen.Main.route) {
-            lastHandledComposeId = composeIntentId
-            
-            // Сохраняем вложения в глобальное хранилище
+            // Сохраняем вложения в глобальное хранилище. Отметка «обработано» — после копирования: копирование
+            // прерываемо (смена ключей эффекта), и повторный запуск должен скопировать файлы заново
             if (composeAttachments.isNotEmpty()) {
-                ShareIntentData.attachments = ShareIntentData.copyToLocal(context, composeAttachments)
+                val appContext = context.applicationContext
+                ShareIntentData.attachments = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    ShareIntentData.copyToLocal(appContext, composeAttachments)
+                }
             }
+            lastHandledComposeId = composeIntentId
             
             withTimeoutOrNull(2000L) {
                 snapshotFlow { navController.currentBackStackEntry }.first { it != null }

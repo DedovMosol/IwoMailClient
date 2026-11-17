@@ -54,7 +54,8 @@ class OfflineMailChangesTest {
     private var accountId = 0L
     private val inbox get() = "${accountId}_2"
     private val trash get() = "${accountId}_3"
-    private val on = MailFlag(MailFlag.STATUS_ACTIVE)
+    // Звезда ставит флаг «Сегодня» с датами: Exchange 2007 отклоняет флаг без дат (Sync Status 6), см. FlagPresets.toggled
+    private val on get() = com.dedovmosol.iwomail.domain.FlagPresets.toggled(MailFlag.NONE)
     private val offline = EasResult.Error("[NET:TIMEOUT] SocketTimeoutException: timeout")
 
     @Before

@@ -755,31 +755,7 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
         return createEasClient(account.id)
     }
     
-    /**
-     * Форматирует ошибку подключения в понятное сообщение
-     */
-    private fun formatConnectionError(e: Throwable, protocol: String): String {
-        val message = e.message ?: "Неизвестная ошибка"
-        return when {
-            message.contains("Authentication failed", ignoreCase = true) ||
-            message.contains("AUTHENTICATIONFAILED", ignoreCase = true) -> 
-                "Неверный логин или пароль"
-            message.contains("Connection refused", ignoreCase = true) -> 
-                "Сервер недоступен. Проверьте адрес и порт."
-            message.contains("Connection timed out", ignoreCase = true) ||
-            message.contains("timeout", ignoreCase = true) -> 
-                "Превышено время ожидания. Проверьте подключение к сети."
-            message.contains("UnknownHostException", ignoreCase = true) ||
-            message.contains("Unable to resolve host", ignoreCase = true) -> 
-                "Сервер не найден. Проверьте адрес."
-            message.contains("SSL", ignoreCase = true) ||
-            message.contains("certificate", ignoreCase = true) -> 
-                "Ошибка SSL. Попробуйте включить 'Принимать все сертификаты'."
-            message.contains("STARTTLS", ignoreCase = true) -> 
-                "Сервер требует STARTTLS. Попробуйте другой порт."
-            else -> "Ошибка $protocol: $message"
-        }
-    }
+    private fun formatConnectionError(e: Throwable, protocol: String): String = mailConnectionErrorMessage(e, protocol)
     
     /**
      * Выполняет операцию с EasClient, инкапсулируя бойлерплейт-проверки

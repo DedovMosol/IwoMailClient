@@ -1,0 +1,19 @@
+TEST-01 | HTTP 200 | keyword found | Compose UI testing (semantics, createComposeRule) | https://developer.android.com/develop/ui/compose/testing
+TEST-02 | HTTP 200 | keyword found | Compose accessibility testing | https://developer.android.com/develop/ui/compose/accessibility/testing
+TEST-03 | HTTP 200 | keyword found | Macrobenchmark overview | https://developer.android.com/topic/performance/benchmarking/macrobenchmark-overview
+TEST-04 | HTTP 200 | keyword found | Local (JVM) tests | https://developer.android.com/training/testing/local-tests
+TEST-05 | HTTP 200 | keyword found | Instrumented tests | https://developer.android.com/training/testing/instrumented-tests
+TEST-06 | HTTP 200 | keyword found | Room migration testing | https://developer.android.com/training/data-storage/room/migrating-db-versions
+TEST-07 | HTTP 200 | keyword found | Testing coroutines on Android | https://developer.android.com/kotlin/coroutines/test
+TEST-08 | HTTP 200 | keyword found | Baseline Profiles overview | https://developer.android.com/topic/performance/baselineprofiles/overview
+TEST-09 | HTTP 200 | keyword found | Android Lint: baseline and severity | https://developer.android.com/studio/write/lint
+TEST-10 | HTTP 200 | keyword found | Fundamentals of testing Android apps | https://developer.android.com/training/testing/fundamentals
+TEST-11 | HTTP 200 | keyword found | OWASP MASVS (storage / platform / resilience) | https://mas.owasp.org/MASVS/
+TEST-12 | HTTP 200 | keyword found | Paparazzi screenshot tests (project page) | https://github.com/cashapp/paparazzi
+TEST-13 | HTTP 200 | keyword found | Roborazzi screenshot tests (project page) | https://github.com/takahirom/roborazzi
+TEST-14 | HTTP 200 | keyword found | Kover coverage verification rules | https://kotlin.github.io/kotlinx-kover/gradle-plugin/
+TEST-15 | HTTP 200 | keyword found | detekt static analysis | https://detekt.dev/docs/intro
+TEST-16 | HTTP 200 | keyword found | Gradle dependency verification | https://docs.gradle.org/current/userguide/dependency_verification.html
+TEST-17 | HTTP 200 | keyword found | Android app signing in CI (apksigner / signingConfigs) | https://developer.android.com/build/building-cmdline#sign_cmdline
+TEST-18 | HTTP 200 | keyword found | GitHub Actions: least-privilege GITHUB_TOKEN permissions | https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication
+DONE

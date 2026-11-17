@@ -274,9 +274,12 @@ fun ComposeScreen(
 
     // Загрузка вложений из Share intent
     var shareAttachmentsLoaded by rememberSaveable { mutableStateOf(false) }
+    val shareSkippedMsg = Strings.shareFilesSkipped
     LaunchedEffect(Unit) {
-        if (!shareAttachmentsLoaded && com.dedovmosol.iwomail.ui.navigation.ShareIntentData.attachments.isNotEmpty()) {
+        val shared = com.dedovmosol.iwomail.ui.navigation.ShareIntentData
+        if (!shareAttachmentsLoaded && (shared.attachments.isNotEmpty() || shared.skippedCount > 0)) {
             val shareUris = com.dedovmosol.iwomail.ui.navigation.ShareIntentData.attachments
+            val shareSkipped = com.dedovmosol.iwomail.ui.navigation.ShareIntentData.skippedCount
 
             // ContentResolver — кросс-процессные binder-вызовы (DocumentsProvider бывает
             // медленным) — выполняем вне главного потока
@@ -296,6 +299,8 @@ fun ComposeScreen(
             if (newAttachmentStrings.isNotEmpty()) {
                 attachmentStrings = attachmentStrings + newAttachmentStrings
             }
+            // Часть файлов не поместилась в лимит письма или не читается — сказать, а не терять молча
+            if (shareSkipped > 0) SafeToast.long(context, shareSkippedMsg)
         }
     }
 

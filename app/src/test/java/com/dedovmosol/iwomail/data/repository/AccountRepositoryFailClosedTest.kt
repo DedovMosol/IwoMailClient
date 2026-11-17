@@ -26,6 +26,8 @@ class AccountRepositoryFailClosedTest {
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
+        // Синглтон БД из другого Robolectric-теста этой JVM привязан к прежнему приложению
+        MailDatabase.resetForTesting()
         EncryptedStoreProvider.forceInsecureForTesting = true
         PasswordStorage.resetForTesting()
         SecurityTelemetry.resetForTesting()
@@ -38,6 +40,7 @@ class AccountRepositoryFailClosedTest {
         EncryptedStoreProvider.forceInsecureForTesting = false
         PasswordStorage.resetForTesting()
         SecurityTelemetry.resetForTesting()
+        MailDatabase.resetForTesting()
     }
 
     @Test

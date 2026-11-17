@@ -4,6 +4,7 @@ import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.database.FolderEntity
 import com.dedovmosol.iwomail.shared.MailClient
+import com.dedovmosol.iwomail.shared.MailSessionProperties
 import com.dedovmosol.iwomail.shared.MessageToEntityConverter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -22,39 +23,17 @@ class Pop3Client(
     
     private var store: Store? = null
     
-    private fun getSession(): Session {
-        val protocol = if (account.useSSL) "pop3s" else "pop3"
-        val props = Properties().apply {
-            put("mail.store.protocol", protocol)
-            // Устанавливаем properties для ОБОИХ протоколов (pop3 и pop3s),
-            // т.к. JavaMail использует prefix "mail.pop3s.*" для SSL-протокола
-            put("mail.pop3.host", account.serverUrl)
-            put("mail.pop3s.host", account.serverUrl)
-            put("mail.pop3.port", account.incomingPort.toString())
-            put("mail.pop3s.port", account.incomingPort.toString())
-            put("mail.pop3.ssl.enable", account.useSSL.toString())
-            put("mail.pop3s.ssl.enable", account.useSSL.toString())
-            put("mail.pop3.starttls.enable", "false")
-            put("mail.pop3s.starttls.enable", "false")
-            if (account.acceptAllCerts) {
-                put("mail.pop3.ssl.trust", "*")
-                put("mail.pop3s.ssl.trust", "*")
-                put("mail.pop3.ssl.checkserveridentity", "false")
-                put("mail.pop3s.ssl.checkserveridentity", "false")
-            }
-            // Таймауты для обоих протоколов
-            put("mail.pop3.connectiontimeout", "15000")
-            put("mail.pop3.timeout", "15000")
-            put("mail.pop3s.connectiontimeout", "15000")
-            put("mail.pop3s.timeout", "15000")
-        }
-        return Session.getInstance(props)
-    }
+    private fun getSession(): Session = Session.getInstance(
+        MailSessionProperties.build(
+            MailSessionProperties.Protocol.POP3, account.serverUrl, account.incomingPort,
+            useSsl = account.useSSL, acceptAllCerts = account.acceptAllCerts
+        )
+    )
     
     override suspend fun connect(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val session = getSession()
-            val protocol = if (account.useSSL) "pop3s" else "pop3"
+            val protocol = MailSessionProperties.storeProtocol(MailSessionProperties.Protocol.POP3, account.useSSL)
             store = session.getStore(protocol).apply {
                 connect(account.serverUrl, account.incomingPort, account.username, password)
             }

@@ -1,0 +1,168 @@
+EasProbe, режим full, запуск Tue Nov 17 00:17:01 +04 2026, JDK 17.0.20
+Сервер https://192.0.2.10, пользователь DOMAIN\user, DeviceId IWOAUDITPROBE2026 (отдельное партнёрство аудита)
+
+=== T1. TLS и сертификат ===
+  только TLSv1.2 : ОТКАЗ (SSLHandshakeException)
+  только TLSv1.1 : ОТКАЗ (SSLHandshakeException)
+  только TLSv1   : рукопожатие OK, протокол=TLSv1, шифр=SSL_RSA_WITH_3DES_EDE_CBC_SHA
+  Subject: CN=mail.corp.example,O=Corp,C=RU
+  Issuer:  CN=corp-CA,DC=corp,DC=example
+  Срок:    Thu May 29 13:48:16 +04 2025 .. Sat May 29 13:48:16 +04 2027
+  Алгоритм подписи: SHA1withRSA, ключ: RSA 2048 бит
+  SAN: [[2, mail], [2, mail.corp.example], [2, corp2.example], [2, autodiscover.corp2.example]]
+  Совпадает ли CN с адресом подключения 192.0.2.10: нет (подключение по IP)
+  SHA-256 отпечаток: <sha256 hidden>
+  Самоподписан (issuer == subject): false
+
+=== T2. Почтовые порты (без отправки учётных данных) ===
+  порт 25   открыт; баннер: 220 mail.corp.example Microsoft ESMTP MAIL Service ready at Tue, 17 Nov 2026 00:17:00 +0400; EHLO: mail.corp.example Hello [192.0.2.20] SIZE 30720000 PIPELINING DSN ENHANCEDSTATUSCODES AUTH GSSAPI NTLM LOGIN 8BITMIME BINARYMIME CHUNKING
+  порт 110  открыт; баннер: +OK Microsoft Exchange Server 2007 POP3 service ready; CAPA: +OK TOP UIDL SASL NTLM GSSAPI PLAIN USER STLS
+  порт 143  открыт; баннер: * OK Microsoft Exchange Server 2007 IMAP4 service ready; CAPABILITY: * CAPABILITY IMAP4 IMAP4rev1 AUTH=NTLM AUTH=GSSAPI AUTH=PLAIN STARTTLS IDLE NAMESPACE LITERAL+ | a1 OK CAPABILITY completed. | 
+  порт 465  закрыт/фильтруется (ConnectException)
+  порт 587  открыт; баннер: 220 mail.corp.example Microsoft ESMTP MAIL Service ready at Tue, 17 Nov 2026 00:17:03 +0400; EHLO: mail.corp.example Hello [192.0.2.20] SIZE 30720000 PIPELINING DSN ENHANCEDSTATUSCODES AUTH GSSAPI NTLM LOGIN 8BITMIME BINARYMIME CHUNKING
+  порт 993  открыт
+  порт 995  открыт
+  порт 80   открыт
+
+=== T3. OPTIONS и схемы аутентификации ===
+  OPTIONS c Basic: HTTP 200 за 156 мс
+  MS-ASProtocolVersions: 1.0,2.0,2.1,2.5,12.0,12.1
+  MS-ASProtocolCommands: Sync,SendMail,SmartForward,SmartReply,GetAttachment,GetHierarchy,CreateCollection,DeleteCollection,MoveCollection,FolderSync,FolderCreate,FolderDelete,FolderUpdate,MoveItems,GetItemEstimate,MeetingResponse,Search,Settings,Ping,ItemOperations,Provision,ResolveRecipients,ValidateCert
+  MS-Server-ActiveSync: 8.2, Server: Microsoft-IIS/6.0
+  OPTIONS без учётных данных: HTTP 401, WWW-Authenticate: Basic realm="192.0.2.10"
+  EWS без учётных данных: HTTP 401, WWW-Authenticate: NTLM, Negotiate
+
+=== T4. Provision (двухфазный, MS-ASPROV) и политика сервера ===
+  FolderSync до Provision (без X-MS-PolicyKey): HTTP 200
+  Фаза 1: HTTP 200 за 36 мс, Status=1
+  Status политики: 1, временный PolicyKey получен: true
+  Элементы политики (EASProvisionDoc):
+    DevicePasswordEnabled                         = 0
+    AlphanumericDevicePasswordRequired            = 0
+    PasswordRecoveryEnabled                       = 0
+    RequireStorageCardEncryption                  = 0
+    AttachmentsEnabled                            = 1
+    MinDevicePasswordLength                       = 4
+    MaxInactivityTimeDeviceLock                   = 900
+    MaxDevicePasswordFailedAttempts               = 8
+    MaxAttachmentSize                             = (пусто)
+    AllowSimpleDevicePassword                     = 1
+    DevicePasswordExpiration                      = (пусто)
+    DevicePasswordHistory                         = 0
+    AllowStorageCard                              = 1
+    AllowCamera                                   = 1
+    RequireDeviceEncryption                       = 0
+    AllowUnsignedApplications                     = 1
+    AllowUnsignedInstallationPackages             = 1
+    MinDevicePasswordComplexCharacters            = 3
+    AllowWiFi                                     = 1
+    AllowTextMessaging                            = 1
+    AllowPOPIMAPEmail                             = 1
+    AllowBluetooth                                = 2
+    AllowIrDA                                     = 1
+    RequireManualSyncWhenRoaming                  = 0
+    AllowDesktopSync                              = 1
+    MaxCalendarAgeFilter                          = 0
+    AllowHTMLEmail                                = 1
+    MaxEmailAgeFilter                             = 0
+    MaxEmailBodyTruncationSize                    = -1
+    MaxEmailHTMLBodyTruncationSize                = -1
+    RequireSignedSMIMEMessages                    = 0
+    RequireEncryptedSMIMEMessages                 = 0
+    RequireSignedSMIMEAlgorithm                   = 0
+    RequireEncryptionSMIMEAlgorithm               = 0
+    AllowSMIMEEncryptionAlgorithmNegotiation      = 2
+    AllowSMIMESoftCerts                           = 1
+    AllowBrowser                                  = 1
+    AllowConsumerEmail                            = 1
+    AllowRemoteDesktop                            = 1
+    AllowInternetSharing                          = 1
+    UnapprovedInROMApplicationList                = (пусто)
+    ApprovedApplicationList                       = (пусто)
+  Фаза 2 (подтверждение): HTTP 200, Status=1, итоговый PolicyKey получен: true, совпадает с временным: false
+
+=== T5. FolderSync ===
+  HTTP 200 за 147 мс, 1071 байт, Status=1
+  Папок: 22, по типам (MS-ASCMD FolderHierarchy Type): {1=2, 2=1, 3=1, 4=1, 5=1, 6=1, 7=1, 8=1, 9=1, 10=1, 11=1, 12=7, 14=1, 18=2}
+  Junk найден по имени: true
+
+=== T6. Полная синхронизация папок как в приложении (FilterType=0, WindowSize=50, Type=2, TruncationSize=10240) ===
+  Входящие: элементов 978, страниц 20, байт 5 599 636, суммарно 44 192 мс, худшая страница 441 146 байт / 3 721 мс, Status=1, типы тел {Type 2=978}
+  Отправленные (MIMESupport=2, как при инкрементальной синхронизации): элементов 664, страниц 14, байт 2 856 660, суммарно 29 008 мс, худшая страница 372 407 байт / 3 064 мс, Status=1, типы тел {Type 2=664}
+  Черновики (как приложение: Type=2 без TruncationSize): элементов 4, страниц 1, байт 15 115, суммарно 318 мс, худшая страница 15 115 байт / 318 мс, Status=1, типы тел {Type 2=4}
+  Удалённые (Type=1, TruncationSize=0): элементов 0, страниц 1, байт 0, суммарно 115 мс, худшая страница 0 байт / 115 мс, пустой ответ 200, типы тел {}
+  Нежелательная (Type=1, TruncationSize=0): элементов 0, страниц 1, байт 0, суммарно 115 мс, худшая страница 0 байт / 115 мс, пустой ответ 200, типы тел {}
+  Удалённые: элементов 0
+  Нежелательная: элементов 0
+  Входящие: тело HTML EstimatedDataSize медиана 4 623, p95 43 069, макс 171 366 байт; тел > 1 МиБ: 0; > 12 МБ: 0
+  Входящие: писем с вложениями 392; крупнейшее вложение 30 577 203 байт; вложений > 12 МБ: 1, > 16 МБ: 1
+  Входящие: InternetCPID {1251=54, 20127=3, 20866=180, 28595=1, 65001=740}; NativeBodyType {1=153, 2=822, 3=3}
+  Входящие: MessageClass {IPM.Note=964, IPM.Schedule.Meeting.Request=3, IPM.Sharing=3, REPORT.IPM.Note.DR=1, REPORT.IPM.Note.Delayed.DR=1, REPORT.IPM.Note.NDR=6}
+  Отправленные: тело HTML EstimatedDataSize медиана 3 340, p95 26 307, макс 107 561 байт; тел > 1 МиБ: 0; > 12 МБ: 0
+  Отправленные: писем с вложениями 403; крупнейшее вложение 18 628 856 байт; вложений > 12 МБ: 3, > 16 МБ: 2
+  Отправленные: InternetCPID {1251=67, 20127=6, 20866=375, 65001=215, 936=1}; NativeBodyType {1=21, 2=643}
+  Отправленные: MessageClass {IPM.Note=663, IPM.Sharing=1}
+
+=== T7. GetItemEstimate (формат 12.x: CollectionId, FilterType, SyncKey) ===
+  тип 2: HTTP 200, Status=1, Estimate=978
+  тип 4: HTTP 200, Status=1, Estimate=0
+  тип 12: HTTP 200, Status=1, Estimate=0
+
+=== T9. Крупные тела: ItemOperations Fetch Type=2, TruncationSize=1 048 576 (как loadEmailBody) ===
+  #1: EstimatedDataSize 171 366; получено Data 0 байт; Truncated=null; ответ 38 байт за 35 мс; top=1, fetch=6
+  #2: EstimatedDataSize 149 183; получено Data 0 байт; Truncated=null; ответ 38 байт за 28 мс; top=1, fetch=6
+  #3: EstimatedDataSize 121 367; получено Data 0 байт; Truncated=null; ответ 38 байт за 29 мс; top=1, fetch=6
+  #4: EstimatedDataSize 117 515; получено Data 0 байт; Truncated=null; ответ 38 байт за 30 мс; top=1, fetch=6
+  #5: EstimatedDataSize 117 283; получено Data 0 байт; Truncated=null; ответ 38 байт за 30 мс; top=1, fetch=6
+  #6: EstimatedDataSize 113 941; получено Data 0 байт; Truncated=null; ответ 38 байт за 30 мс; top=1, fetch=6
+  Контроль: EstimatedDataSize 171 366, TruncationSize 10 240 -> Data 0 байт, Truncated=null
+
+=== T10. MIME через ItemOperations (MIMESupport=2, Type=4): токен WBXML и валидность UTF-8 (PROTO-02) ===
+  Входящие: проверено 200; Data как OPAQUE 0, как STR_I 0, без Data 200; MIME обрезан на 256 КБ: 0
+  Входящие: с 8-битными байтами 0; из них НЕвалидный UTF-8 0 (после new String(bytes, UTF_8) появляется U+FFFD: 0)
+  Входящие: charset в MIME {}
+  Входящие: Content-Transfer-Encoding {}
+  Входящие: charset у писем с невалидным UTF-8 {}
+  Отправленные: проверено 60; Data как OPAQUE 0, как STR_I 60, без Data 0; MIME обрезан на 256 КБ: 0
+  Отправленные: с 8-битными байтами 0; из них НЕвалидный UTF-8 0 (после new String(bytes, UTF_8) появляется U+FFFD: 0)
+  Отправленные: charset в MIME {3dkoi8-r=43, 3dw=1, 3dwindows-1=3, 3dwindows-1251=4, koi8-r=44, utf-8=8, windows-1251=8}
+  Отправленные: Content-Transfer-Encoding {base64=47, quoted-printable=52}
+  Отправленные: charset у писем с невалидным UTF-8 {}
+  Контроль Type=2 (HTML) на 40 письмах: валидный UTF-8 0, невалидный 0
+
+=== T11. Вложения: ItemOperations по FileReference, GetAttachment, MultiPart (PROTO-13, MAIL-04) ===
+  Малое вложение 372 байт; FileReference содержит %-кодирование: true
+    ItemOperations, ref как прислал сервер: HTTP 200, top=1, fetch=6, Content-Type application/vnd.ms-sync.wbxml, ответ 39 байт (x0,10 к размеру), Data токен -, после base64 -1 байт, 31 мс
+    ItemOperations, ref после URLDecoder (как 2-я попытка приложения): HTTP 200, top=1, fetch=6, Content-Type application/vnd.ms-sync.wbxml, ответ 35 байт (x0,09 к размеру), Data токен -, после base64 -1 байт, 28 мс
+    ItemOperations, ref после URLDecoder.decode как в коде ('+' станет пробелом): HTTP 200, top=1, fetch=6, Content-Type application/vnd.ms-sync.wbxml, ответ 35 байт (x0,09 к размеру), Data токен -, после base64 -1 байт, 28 мс
+    GetAttachment GET, User без домена, имя как decode() (как приложение, 1-я попытка): HTTP 501, 0 байт (ожидалось ~372)
+    GetAttachment GET, User без домена, имя как прислал сервер (как приложение, 2-я попытка): HTTP 501, 0 байт (ожидалось ~372)
+    GetAttachment POST, User=домен\пользователь, имя URL-кодировано (по MS-ASCMD): HTTP 400, 0 байт (ожидалось ~372)
+  Крупнейшее вложение во Входящих: 30 577 203 байт
+    ItemOperations, обычный ответ: HTTP 200, top=1, fetch=6, Content-Type application/vnd.ms-sync.wbxml, ответ 39 байт (x0,00 к размеру), Data токен -, после base64 -1 байт, 36 мс
+    ItemOperations, MS-ASAcceptMultiPart: T: HTTP 200, multipart, 51 байт, Content-Type application/vnd.ms-sync.multipart, ответ 51 байт (x0,00 к размеру), Data токен -, после base64 -1 байт, 45 мс
+
+=== T8. Стабильность ServerId после сброса SyncKey=0 (основа PROTO-08 и reconcile) ===
+  Повторный проход Входящих: элементов 978, страниц 20, байт 5 599 630, суммарно 9 383 мс, худшая страница 441 146 байт / 695 мс, Status=1, типы тел {Type 2=978}
+  Совпали по отпечатку: ServerId тот же 976, ServerId другой 2, нет пары 0 (неуникальных отпечатков 2)
+  ItemOperations Fetch по ServerId первого прохода после сброса: Status=top=1, fetch=1
+  ItemOperations Fetch по несуществующему ServerId: Status=top=1, fetch=6 (приложение при 6 удаляет письмо локально)
+
+=== T12. Ошибочные состояния протокола (PROTO-03, PROTO-04/05) ===
+  Sync с чужим SyncKey: HTTP 200, Status=3
+  Sync несуществующей папки: HTTP 200, Status=4
+  FolderSync с неверным X-MS-PolicyKey: HTTP 449
+  FolderSync без X-MS-PolicyKey после Provision: HTTP 200
+  FolderSync с верным PolicyKey: HTTP 200
+  Обрезанный WBXML в запросе: HTTP 400, 0 байт ответа
+
+=== T13. Ping: допустимые границы HeartbeatInterval (BG-06/07) ===
+  HeartbeatInterval=1: HTTP 200 за 66 мс, Status=5, сервер предлагает HeartbeatInterval=60
+  HeartbeatInterval=100000: HTTP 200 за 27 мс, Status=5, сервер предлагает HeartbeatInterval=3540
+
+=== T14. EWS: какие ответы приложение принимает за повод повторить запрос через NTLM (PROTO-06) ===
+  GetFolder inbox (корректный запрос): HTTP 401 за 7 мс; ResponseClass=null, ResponseCode=null, faultcode=null
+  GetItem с битым ItemId (ошибка уровня операции): HTTP 401 за 14 мс; ResponseClass=null, ResponseCode=null, faultcode=null
+  Нарушение схемы (неизвестный элемент): HTTP 401 за 10 мс; ResponseClass=null, ResponseCode=null, faultcode=null
+
+Готово Tue Nov 17 00:18:46 +04 2026

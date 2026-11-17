@@ -18,6 +18,9 @@ import java.util.*
 object RecurrenceHelper {
     
     private const val MAX_OCCURRENCES = 500
+    private const val DAY_MS = 24L * 60 * 60 * 1000
+    /** Предохранитель недельного цикла (серия с COUNT перебирается от начала): ~380 лет. */
+    private const val MAX_WEEKS = 20_000
     private const val DEFAULT_HORIZON_MS = 365L * 24 * 60 * 60 * 1000
     
     /** MS-ASCAL ExceptionStartTime (UTC) vs locally generated occurrence time
@@ -278,8 +281,8 @@ object RecurrenceHelper {
         val results = mutableListOf<Long>()
         
         when (rule.type) {
-            0 -> generateDaily(cal, rule.interval, rangeStart, effectiveEnd, maxCount, results)
-            1 -> generateWeekly(cal, rule.interval, rule.dayOfWeek, rangeStart, effectiveEnd, maxCount, results)
+            0 -> generateDaily(cal, rule.interval, rangeStart, effectiveEnd, rule.occurrences, results)
+            1 -> generateWeekly(cal, rule.interval, rule.dayOfWeek, rangeStart, effectiveEnd, rule.occurrences, results)
             2 -> generateMonthlyAbsolute(cal, rule.interval, rule.dayOfMonth, rangeStart, effectiveEnd, maxCount, results)
             3 -> generateMonthlyRelative(cal, rule.interval, rule.dayOfWeek, rule.weekOfMonth, rangeStart, effectiveEnd, maxCount, results)
             5 -> generateYearlyAbsolute(cal, rule.dayOfMonth, rule.monthOfYear, rangeStart, effectiveEnd, maxCount, results)
@@ -289,91 +292,104 @@ object RecurrenceHelper {
         return results
     }
     
-    /** Daily: каждые N дней */
+    /**
+     * Daily: каждые N дней.
+     *
+     * PIM-02: [MAX_OCCURRENCES] ограничивает число ВЫДАННЫХ вхождений окна, а [occurrences] правила (COUNT, 0 — без
+     * ограничения) — номер вхождения от начала серии. Раньше общий счётчик начинался с числа пропущенных интервалов,
+     * и у серии старше ~135 дней лимит 500 тратился на прошлое: будущие вхождения пропадали, с 591 дня — все.
+     */
     private fun generateDaily(
         cal: Calendar, interval: Int,
-        rangeStart: Long, rangeEnd: Long, maxCount: Int,
+        rangeStart: Long, rangeEnd: Long, occurrences: Int,
         results: MutableList<Long>
     ) {
-        // Fast-forward: пропускаем даты до rangeStart
-        var skippedCount = 0
-        if (cal.timeInMillis < rangeStart && interval > 0) {
-            val diffDays = (rangeStart - cal.timeInMillis) / (24L * 60 * 60 * 1000)
-            val skipIntervals = (diffDays / interval).toInt()
+        val step = interval.coerceAtLeast(1)
+        // Fast-forward: пропускаем даты до rangeStart; index — номер вхождения от начала серии
+        var index = 0
+        if (cal.timeInMillis < rangeStart) {
+            val diffDays = (rangeStart - cal.timeInMillis) / DAY_MS
+            val skipIntervals = (diffDays / step).toInt()
             if (skipIntervals > 1) {
-                cal.add(Calendar.DAY_OF_YEAR, (skipIntervals - 1) * interval)
-                skippedCount = skipIntervals - 1
+                cal.add(Calendar.DAY_OF_YEAR, (skipIntervals - 1) * step)
+                index = skipIntervals - 1
             }
         }
-        
-        // count учитывает пропущенные occurrence для корректного ограничения при occurrences > 0
-        var count = skippedCount
-        while (cal.timeInMillis <= rangeEnd && count < maxCount) {
+
+        while (cal.timeInMillis <= rangeEnd && results.size < MAX_OCCURRENCES) {
+            if (occurrences > 0 && index >= occurrences) break
             if (cal.timeInMillis >= rangeStart) {
                 results.add(cal.timeInMillis)
             }
-            cal.add(Calendar.DAY_OF_YEAR, interval)
-            count++
+            cal.add(Calendar.DAY_OF_YEAR, step)
+            index++
         }
     }
-    
-    /** Weekly: каждые N недель по указанным дням (bitmask) */
+
+    /**
+     * Weekly: каждые N недель по указанным дням (bitmask, бит 0 — воскресенье).
+     *
+     * PIM-12: неделя отсчитывается от воскресенья в ЛЮБОЙ локали. Без [Calendar.setFirstDayOfWeek] в локали с
+     * понедельником (ru, de) `set(DAY_OF_WEEK, SUNDAY)` уводил на воскресенье в КОНЦЕ недели: цикл заканчивался раньше
+     * последней недели окна, и серия «Пн-Пт» теряла вхождения (в 17 окнах из 21). Вхождения раньше начала серии
+     * не выдаются; [occurrences] считается от начала серии (тогда без быстрой перемотки — у серии с COUNT её длина
+     * и так ограничена), лимит [MAX_OCCURRENCES] — по выданным (PIM-02).
+     */
     private fun generateWeekly(
         cal: Calendar, interval: Int, dayOfWeekMask: Int,
-        rangeStart: Long, rangeEnd: Long, maxCount: Int,
+        rangeStart: Long, rangeEnd: Long, occurrences: Int,
         results: MutableList<Long>
     ) {
+        val step = interval.coerceAtLeast(1)
+        val seriesStart = cal.timeInMillis
         // Если маска пуста — берём день недели из начального события
-        val mask = if (dayOfWeekMask == 0) {
+        val mask = if (dayOfWeekMask and 0x7F == 0) {
             1 shl (cal.get(Calendar.DAY_OF_WEEK) - 1) // Calendar.SUNDAY=1 → bit 0
         } else {
-            dayOfWeekMask
+            dayOfWeekMask and 0x7F
         }
-        
+
         // Сохраняем время дня из исходного события
         val hourOfDay = cal.get(Calendar.HOUR_OF_DAY)
         val minute = cal.get(Calendar.MINUTE)
         val second = cal.get(Calendar.SECOND)
-        
-        // Переходим к началу недели серии
+
+        // Переходим к началу (воскресенью) недели серии
         val startOfWeek = cal.clone() as Calendar
+        startOfWeek.firstDayOfWeek = Calendar.SUNDAY
         startOfWeek.set(Calendar.DAY_OF_WEEK, Calendar.SUNDAY)
-        
-        // Fast-forward: пропускаем недели до rangeStart
-        var skippedOccurrences = 0
-        if (startOfWeek.timeInMillis < rangeStart && interval > 0) {
-            val diffWeeks = (rangeStart - startOfWeek.timeInMillis) / (7L * 24 * 60 * 60 * 1000)
-            val skipIntervals = (diffWeeks / interval).toInt()
+
+        // Fast-forward: пропускаем недели до rangeStart (только без COUNT — иначе номер вхождения неизвестен)
+        if (occurrences <= 0 && startOfWeek.timeInMillis < rangeStart) {
+            val diffWeeks = (rangeStart - startOfWeek.timeInMillis) / (7 * DAY_MS)
+            val skipIntervals = (diffWeeks / step).toInt()
             if (skipIntervals > 1) {
-                startOfWeek.add(Calendar.WEEK_OF_YEAR, (skipIntervals - 1) * interval)
-                // Количество дней в неделе по маске (для корректного ограничения при occurrences > 0)
-                val daysPerWeek = (0..6).count { mask and (1 shl it) != 0 }
-                skippedOccurrences = (skipIntervals - 1) * daysPerWeek
+                startOfWeek.add(Calendar.WEEK_OF_YEAR, (skipIntervals - 1) * step)
             }
         }
-        
-        var count = skippedOccurrences
-        var safetyCounter = 0
-        
-        while (startOfWeek.timeInMillis <= rangeEnd && count < maxCount && safetyCounter < MAX_OCCURRENCES) {
+
+        var index = 0
+        var weeks = 0
+        while (startOfWeek.timeInMillis <= rangeEnd && results.size < MAX_OCCURRENCES && weeks < MAX_WEEKS) {
             for (dayBit in 0..6) {
-                if (mask and (1 shl dayBit) != 0) {
-                    val dayCal = startOfWeek.clone() as Calendar
-                    dayCal.set(Calendar.DAY_OF_WEEK, dayBit + 1) // Calendar.SUNDAY = 1
-                    dayCal.set(Calendar.HOUR_OF_DAY, hourOfDay)
-                    dayCal.set(Calendar.MINUTE, minute)
-                    dayCal.set(Calendar.SECOND, second)
-                    
-                    val time = dayCal.timeInMillis
-                    if (time >= rangeStart && time <= rangeEnd && count < maxCount) {
-                        results.add(time)
-                        count++
-                    }
+                if (mask and (1 shl dayBit) == 0) continue
+                val dayCal = startOfWeek.clone() as Calendar
+                dayCal.set(Calendar.DAY_OF_WEEK, dayBit + 1) // Calendar.SUNDAY = 1
+                dayCal.set(Calendar.HOUR_OF_DAY, hourOfDay)
+                dayCal.set(Calendar.MINUTE, minute)
+                dayCal.set(Calendar.SECOND, second)
+
+                val time = dayCal.timeInMillis
+                if (time < seriesStart) continue
+                if (occurrences > 0 && index >= occurrences) return
+                index++
+                if (time in rangeStart..rangeEnd) {
+                    results.add(time)
+                    if (results.size >= MAX_OCCURRENCES) return
                 }
             }
-            
-            startOfWeek.add(Calendar.WEEK_OF_YEAR, interval)
-            safetyCounter++
+            startOfWeek.add(Calendar.WEEK_OF_YEAR, step)
+            weeks++
         }
     }
     

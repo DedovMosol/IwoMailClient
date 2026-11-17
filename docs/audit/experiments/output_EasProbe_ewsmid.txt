@@ -1,0 +1,23 @@
+EasProbe, режим ewsmid, запуск Tue Nov 17 10:24:24 +04 2026, JDK 17.0.20
+Сервер и учётная запись — из IWO_AUDIT_*, DeviceId IWOAUDITPROBE2026 (отдельное партнёрство аудита)
+
+=== T1. TLS и сертификат ===
+  только TLSv1.2 : ОТКАЗ (SSLHandshakeException)
+  только TLSv1.1 : ОТКАЗ (SSLHandshakeException)
+  только TLSv1   : рукопожатие OK, протокол=TLSv1, шифр=SSL_RSA_WITH_3DES_EDE_CBC_SHA
+  Subject совпадает с IWO_AUDIT_CERT_CN: да; выпущен внутренним CA: true
+  Срок:    Thu May 29 13:48:16 +04 2025 .. Sat May 29 13:48:16 +04 2027
+  Алгоритм подписи: SHA1withRSA, ключ: RSA 2048 бит
+  SAN: DNS-имён 4, IP-адресов 0
+  Адрес подключения в SAN: нет (подключение по IP)
+  Самоподписан (issuer == subject): false
+
+=== I1. EWS FindItem по Message-ID ===
+  FindItem с AdditionalProperties InternetMessageId: HTTP 200, ResponseCode=NoError
+  Message-ID получен: true, вид: &xx;xxxxxxxxxxxx.xxxxxxxxxxxxx@xxxxxxxxxxxxxxx&xx;
+  GetItem [message:InternetMessageId,message:InReplyTo,item:Subject,item:DateTimeReceived,item:DateTimeSent]: HTTP 500, ResponseClass=null, ResponseCode=null, faultstring=Запрос не прошел проверку на соответствие схеме: The 'FieldURI' attribute is invalid - The value 'message:InReplyTo' is invalid according to its datatype 'http:, t:Body есть: false
+  GetItem [message:InternetMessageId,item:Subject,item:DateTimeReceived,item:DateTimeSent]: HTTP 200, ResponseClass=Success, ResponseCode=NoError, faultstring=null, t:Body есть: true
+  GetItem [item:InReplyTo]: HTTP 200, ResponseClass=Success, ResponseCode=NoError, faultstring=null, t:Body есть: true
+  GetItem [message:References]: HTTP 200, ResponseClass=Success, ResponseCode=NoError, faultstring=null, t:Body есть: true
+  FieldURI message:InternetMessageId IsEqualTo (как приложение): HTTP 200, ResponseClass=Success, ResponseCode=NoError, MessageText=null, найдено 1
+  ExtendedFieldURI PR_INTERNET_MESSAGE_ID 0x1035 IsEqualTo: HTTP 200, ResponseClass=Success, ResponseCode=NoError, MessageText=null, найдено 1

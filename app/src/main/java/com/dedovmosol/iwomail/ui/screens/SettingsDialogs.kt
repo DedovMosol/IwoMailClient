@@ -209,6 +209,13 @@ fun AutoCleanupDialog(
                     onDaysChange = onSpamDaysChange
                 )
 
+                Text(
+                    text = Strings.autoCleanupFoldersHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 36.dp, top = 4.dp)
+                )
+
                 Spacer(modifier = Modifier.height(12.dp))
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(4.dp))

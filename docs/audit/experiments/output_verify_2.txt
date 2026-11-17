@@ -1,0 +1,104 @@
+=== PIM-04 | TimePickerState validates initialHour range (source)
+URL: https://android.googlesource.com/platform/frameworks/support/+/refs/heads/androidx-main/compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/TimePicker.kt?format=TEXT
+RESULT: FOUND (175086 chars fetched, 17 hit(s))
+SNIPPET: ... periodSelectorContentColor = periodSelectorContentColor, timeTextFieldColors = textFieldColors, ) } /** * Creates a [TimePickerState] for a time picker that is remembered across compositions and * configuration changes. * * @param initialHour starting hour for this state, will be displayed in the time picker when * launched. Ranges from 0 to 23 * @param initialMinute starting minute for this state, will be displayed in the time picker when * launched. Ranges from 0 to 59 * @param...
+SNIPPET: ... 0 to 59 * @param is24Hour The format for this time picker. `false` for 12 hour format with an AM/PM toggle * or `true` for 24 hour format without toggle. Defaults to follow system setting. */ @Composable public fun rememberTimePickerState( initialHour: Int = 0, initialMinute: Int = 0, is24Hour: Boolean = is24HourFormat, ): TimePickerState { val state: TimePickerStateImpl = rememberSaveable(saver = TimePickerStateImpl.Saver()) { TimePickerStateImpl( ...
+SNIPPET: ...: Int = 0, initialMinute: Int = 0, is24Hour: Boolean = is24HourFormat, ): TimePickerState { val state: TimePickerStateImpl = rememberSaveable(saver = TimePickerStateImpl.Saver()) { TimePickerStateImpl( initialHour = initialHour, initialMinute = initialMinute, is24Hour = is24Hour, ) } return state } /** Represents the different configurations for the layout of the Time Picker */ @Immutable @JvmInline pu...
+
+=== PIM-04 | TimePickerState validates initialMinute range (source)
+URL: https://android.googlesource.com/platform/frameworks/support/+/refs/heads/androidx-main/compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/TimePicker.kt?format=TEXT
+RESULT: FOUND (175086 chars fetched, 1 hit(s))
+SNIPPET: ...lectionMode = TimePickerSelectionMode.Hour, ) : TimePickerState { init { require(initialHour in 0..MaxHourValue) { "initialHour should in [0..23] range" } require(initialMinute in 0..MaxMinuteValue) { "initialMinute should be in [0..59] range" } } override var is24hour: Boolean = is24Hour override var selection by mutableStateOf(initialSelection) val hourState = mutableIntStateOf(initialHour) val minuteState = mutableIntStateOf(initialMinute) val hourI...
+
+=== PIM-03 | DatePickerState.selectedDateMillis is UTC midnight (source KDoc)
+URL: https://android.googlesource.com/platform/frameworks/support/+/refs/heads/androidx-main/compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/DatePicker.kt?format=TEXT
+RESULT: FOUND (118876 chars fetched, 24 hit(s))
+SNIPPET: ... } } /** * A state object that can be hoisted to observe the date picker state. See * [rememberDatePickerState]. */ @Stable public interface DatePickerState { /** * A timestamp that represents the selected date _start_ of the day in _UTC_ milliseconds from * the epoch. * * @throws IllegalArgumentException in case the value is set with a timestamp that does not fall * within the [yearRange]. */ @get:Suppress("AutoBoxing") public var selectedDateMillis: ...
+SNIPPET: ...value is set with a timestamp that does not fall * within the [yearRange]. */ @get:Suppress("AutoBoxing") public var selectedDateMillis: Long? /** * A timestamp that represents the currently displayed month _start_ date in _UTC_ milliseconds * from the epoch. * * @throws IllegalArgumentException in case the value is set with a timestamp that does not fall * within the [yearRange]. */ public var displayedMonthMillis: Long /** A [DisplayMo...
+SNIPPET: ...ore. */ public val locale: CalendarLocale } /** An interface that controls the selectable dates and years in the date pickers UI. */ @Stable public interface SelectableDates { /** * Returns true if the date item representing the [utcTimeMillis] should be enabled for * selection in the UI. */ public fun isSelectableDate(utcTimeMillis: Long): Boolean = true /** * Returns true if a given [year] should be enabled for selection in the UI. When a year is *...
+
+=== NAV-02/SET-04 | Activity.setRecentsScreenshotEnabled (AOSP source)
+URL: https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/app/Activity.java?format=TEXT
+RESULT: FOUND (441941 chars fetched, 1 hit(s))
+SNIPPET: ...tivity in other contexts; for example, when the user takes a * screenshot of the entire screen, or when the active * {@link android.service.voice.VoiceInteractionService} requests a screenshot via * {@link android.service.voice.VoiceInteractionSession#SHOW_WITH_SCREENSHOT}. * * @param enabled {@code true} to enable recents screenshots; {@code false} otherwise. */ public void setRecentsScreenshotEnabled(boolean enabled) { ActivityClient.getInstance().setRecentsScreenshotEnabled(mToken, enabled); } /** * Specifies whether an {@link Activity} should be shown on top of the lock screen whenever * the lockscreen is up and the activity is resumed. Normally an activity will be transitioned * to the stopped state if it is started while the lockscreen is up, but with this ...
+
+=== NAV-02/SET-04 | FLAG_SECURE hides the app from Recents / screenshots
+URL: https://developer.android.com/reference/android/view/WindowManager.LayoutParams
+RESULT: FOUND (264936 chars fetched, 6 hit(s))
+SNIPPET: ...USABLE is not set), allow any pointer events outside of the window to be sent to the windows behind it. int FLAG_SCALED Window flag: a special mode where the layout parameters are used to perform scaling of the surface when it is composited to the screen. int FLAG_SECURE Window flag: treat the content of the window as secure, preventing it from appearing in screenshots or from being viewed on non-secure displays. int FLAG_SHOW_WALLPAPER Window flag: ask that the system wallpaper be shown behind your window. int FLAG_SHOW_WHEN...
+
+=== NAV-18 | dataSync foreground service timeout (FGS types page)
+URL: https://developer.android.com/develop/background-work/services/fgs/service-types
+RESULT: FOUND (27600 chars fetched, 1 hit(s))
+SNIPPET: ...ING Runtime prerequisites None Description Service for performing time-consuming operations on media assets, like converting media to different formats. The system allows this service a limited time to run; under normal circumstances, this time limit would be 6 hours out of every 24. (This limit is shared by all of an app's mediaProcessing foreground services.) Your app should manually stop the media processing service in the following scenario: When the transcoding operation finishes or reaches a failure state, have the ...
+
+=== NAV-18 | Foreground service timeouts (Android 15 behaviour changes)
+URL: https://developer.android.com/about/versions/15/behavior-changes-15
+RESULT: FOUND (43512 chars fetched, 14 hit(s))
+SNIPPET: ...n BOOT_COMPLETED broadcast receivers launching foreground services Restrictions on starting foreground services while an app holds the SYSTEM_ALERT_WINDOW permission Data sync foreground service timeout behavior Android 15 introduces a new timeout behavior to dataSync for apps targeting Android 15 (API level 35) or higher. This behavior also applies to the new mediaProcessing foreground service type . The system permits an app's dataSync services to run for a total of 6 hours in a 24-hour period, after which the system cal...
+
+=== ONB-22 | Compose: WindowInsets.ime / imePadding (insets page)
+URL: https://developer.android.com/develop/ui/compose/system/insets
+RESULT: FOUND (22783 chars fetched, 13 hit(s))
+SNIPPET: ...nd opinionated guidance. Games Camera & media Social & messaging Health & fitness Productivity Enterprise apps Get the latest Stay in touch with the latest releases throughout the year, join our preview programs, and give us your feedback. Latest updates Experimental updates Android Studio preview Jetpack & Compose libraries Wear OS releases Privacy Sandbox ↗️ Design & Plan Excellent Experiences Build the best experiences for your best users. Learn more UI Design Design a beautiful user interface using Android best pr...
+SNIPPET: ...tion button Icon button Segmented button Card Carousel Checkbox Chip Date pickers Dialog Divider Menus Navigation bar Navigation drawer Navigation rail Progress indicators Pull to refresh Radio button Resources Scaffold Search bar Slider Snackbar Switch Tabs Time pickers Overview Time picker dialogs Tooltip Theming Overview Material Design 3 Migrate from Material 2 to Material 3 Material Design 2 Custom theming Anatomy of a theme Migrating XML themes to Compose Styles Styles update Text and typography Overview Display...
+
+=== NAV-19/SET-26 | Handle configuration changes yourself: android:configChanges
+URL: https://developer.android.com/guide/topics/resources/runtime-changes
+RESULT: FOUND (29585 chars fetched, 7 hit(s))
+SNIPPET: ... of transient UI state loss during an event like screen rotation. Note that you must still handle state preservation for system-initiated process death. To disable activity recreation for particular configuration changes, add the configuration type to android:configChanges in the <activity> entry in your AndroidManifest.xml file. Possible values appear in the documentation for the android:configChanges attribute. The following manifest code disables Activity recreation for MyActivity when the screen orientation and keyboard ava...
+
+=== ONB-03 | Coroutine cancellation is cooperative (kotlinx.coroutines docs source)
+URL: https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/master/docs/topics/cancellation-and-timeouts.md
+RESULT: PATTERN NOT FOUND (14 chars fetched)
+
+=== ONB-03 | OkHttp Call.cancel() on a running call (source)
+URL: https://raw.githubusercontent.com/square/okhttp/master/okhttp/src/commonJvmAndroid/kotlin/okhttp3/Call.kt
+RESULT: FOUND (6938 chars fetched, 1 hit(s))
+SNIPPET: ...seCallback` with either an HTTP response or a failure * exception. * * @throws IllegalStateException when the call has already been executed. */ fun enqueue(responseCallback: Callback) /** Cancels the request, if possible. Requests that are already complete cannot be canceled. */ fun cancel() /** * Returns true if this call has been either [executed][execute] or [enqueued][enqueue]. It is an * error to execute a call more than once. */ fun isExecuted(): Boolean fun isCanceled(): Boolean /** * Returns a timeout that spans the entire call: resolving DNS, connectin...
+
+=== MAIL-19/SET-12 | Touch target size 48dp (Compose accessibility page)
+URL: https://developer.android.com/develop/ui/compose/accessibility/api-defaults
+RESULT: FOUND (27405 chars fetched, 5 hit(s))
+SNIPPET: ...omponents. Minimum touch target sizes Any on-screen element that someone can click, touch, or interact with must be large enough for reliable interaction. When sizing these elements, make sure to set the minimum size to 48dp to correctly follow the Material Design accessibility guidelines . Material components—like Checkbox , RadioButton , Switch , Slider , and Surface —set this minimum size internally, but only when the component can rec...
+
+=== MAIL-19/SET-12 | Touch target size 48dp (accessibility help)
+URL: https://support.google.com/accessibility/android/answer/7101858
+RESULT: FOUND (4440 chars fetched, 11 hit(s))
+SNIPPET: ... Touch target size Any on-screen element that someone can click, touch, or otherwise interact with should be large enough for reliable interaction. Consider making sure these elements have a width and height of at least 48dp, as described in the Material Design Accessibility guidelines . Implementation View When you implement clickable or touchable elements in a layout, consider using dimensions that meet or exceed the recommended size fo...
+
+=== CMP-05/NAV-14 | Intent redirection / unsafe intent launch (Android security guidance)
+URL: https://developer.android.com/privacy-and-security/risks/unsafe-intent-launch
+RESULT: PATTERN NOT FOUND (7915 chars fetched)
+
+=== NAV-11/BLD-10 | Content URI / file:// exposure (FileUriExposed)
+URL: https://developer.android.com/reference/android/os/FileUriExposedException
+RESULT: FOUND (168430 chars fetched, 147 hit(s))
+SNIPPET: ... FileUriExposedException | API reference | Android Developers Skip to main content Essentials Build AI experiences Build AI-powered Android apps with Gemini APIs and more. Get started Get started Create your first app. Use Co...
+
+=== ONB-05 | ACTION_REQUEST_INSTALL_PACKAGES / canRequestPackageInstalls
+URL: https://developer.android.com/reference/android/content/pm/PackageManager
+RESULT: FOUND (442733 chars fetched, 3 hit(s))
+SNIPPET: ...ce package is able to query for details about the target package. boolean[] canPackageQuery ( String sourcePackageName, String[] targetPackageNames) Same as canPackageQuery(String,String) but accepts an array of target packages to be queried. abstract boolean canRequestPackageInstalls () Checks whether the calling package is allowed to request package installs through package installer. abstract String[] canonicalToCurrentPackageNames ( String[] packageNames) Map from a packages canonical name to the current name in use on the device. abst...
+
+=== NAV-25 | Compose LaunchedEffect: effect cancelled when leaving composition
+URL: https://developer.android.com/develop/ui/compose/side-effects
+RESULT: FOUND (34132 chars fetched, 15 hit(s))
+SNIPPET: ...nsive UI is inherently asynchronous, and Jetpack Compose solves this by embracing coroutines at the API level instead of using callbacks. To learn more about coroutines, check out the Kotlin coroutines on Android guide. LaunchedEffect : run suspend functions in the scope of a composable To perform work over the life of a composable and have the ability to call suspend functions, use the LaunchedEffect composable. When LaunchedEffect enters the Compos...
+
+=== MAIL-02 | Compose: avoid heavy work in composition (performance best practices)
+URL: https://developer.android.com/develop/ui/compose/performance/bestpractices
+RESULT: FOUND (31733 chars fetched, 6 hit(s))
+SNIPPET: ...low best practices to optimize your app on Compose. For empirical benchmark data showing Compose scrolling and startup performance when built with R8 and Baseline Profiles, see Hero benchmarks . Use remember to minimize expensive calculations Composable functions can run very frequently , as often as for every frame of an animation. For this reason, you should do as little calculation in the body of your composable as you can. An important techn...
+
+=== CMP-12 | Android: onStop/onPause is the place to persist unsaved user data
+URL: https://developer.android.com/guide/components/activities/activity-lifecycle
+RESULT: FOUND (42649 chars fetched, 19 hit(s))
+SNIPPET: ...tion with architecture components, see Guide to app architecture . Activity-lifecycle concepts To navigate transitions between stages of the activity lifecycle, the Activity class provides a core set of six callbacks: onCreate , onStart , onResume , onPause , onStop , and onDestroy . The system invokes each of these callbacks as the activity enters a new state. Figure 1 presents a visual representation of this paradigm. Figure 1. A simplified illustration of the activity lifecycle. As the user begins to leave the activit...
+
+=== NAV-26 | android:enableOnBackInvokedCallback manifest attribute (predictive back)
+URL: https://developer.android.com/guide/navigation/custom-back/predictive-back-gesture
+RESULT: FOUND (25933 chars fetched, 1 hit(s))
+SNIPPET: ...OnBackInvokedCallback set to enable the back-to-home system animation from the MainActivity : <manifest ...> <application . . . android:enableOnBackInvokedCallback="false"> <activity android:name=".MainActivity" android:enableOnBackInvokedCallback="true" ... </activity> <activity android:name=".SecondActivity" android:enableOnBackInvokedCallback="false" ... </activity> </application> </manifest> Keep in mind the following considerations when using the android:enableOnBa...
+
+DONE
