@@ -883,6 +883,20 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
     }
 
     /**
+     * Сертификат сервера подтверждает система (УЦ устройства и имя): «Принимать все» выключается без закрепления
+     * ключа. Системная проверка строже пина (имя, срок, УЦ) и переживает смену ключа при продлении сертификата.
+     */
+    suspend fun useSystemTrust(accountId: Long) {
+        val account = accountDao.getAccount(accountId) ?: return
+        // Импортированный файл сертификата — отдельный режим, его пин не трогаем
+        val updated = if (account.certificatePath == null) CertificatePins.withoutPrimaryPin(account) else account
+        accountDao.update(updated.copy(acceptAllCerts = false))
+        com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.clearChange(accountId)
+        clearEasClientCache(accountId)
+        AccountServerHealthRepository.resetHealth(accountId)
+    }
+
+    /**
      * Увеличивает счётчик ошибок проверки сертификата
      */
     suspend fun incrementCertificatePinningFailCount(accountId: Long) {

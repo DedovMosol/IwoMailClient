@@ -127,19 +127,23 @@ class EasTransport(
      * [Response] не буферизуется, его тело читает и закрывает вызывающий. HTTP 449 — Provision и один повтор,
      * как в [executeEasCommand]. Ошибка — только сетевая или Provision; коды HTTP разбирает вызывающий.
      */
-    suspend fun openEasCommand(
+    suspend fun <T> openEasCommand(
         command: String,
         xml: String,
-        extraHeaders: Map<String, String> = emptyMap()
-    ): EasResult<Response> = withContext(Dispatchers.IO) {
+        extraHeaders: Map<String, String> = emptyMap(),
+        read: (Response) -> EasResult<T>
+    ): EasResult<T> = withContext(Dispatchers.IO) {
+        // Ответ читается и закрывается в том же withContext, где получен: между получением и use нет точки
+        // приостановки, поэтому отмена корутины не оставляет открытого соединения (executeRequest при отмене
+        // во время resume закрывает ответ сам)
         try {
             val wbxml = wbxmlParser.generate(xml)
             val first = executeRequest(buildEasRequest(command, wbxml, withPolicyKey = true, extraHeaders))
-            if (first.code != 449 || command == "Provision") return@withContext EasResult.Success(first)
+            if (first.code != 449 || command == "Provision") return@withContext first.use(read)
             first.close()
             when (val prov = provision()) {
-                is EasResult.Success -> EasResult.Success(executeRequest(buildEasRequest(command, wbxml, withPolicyKey = true, extraHeaders)))
-                is EasResult.Error -> prov
+                is EasResult.Success -> executeRequest(buildEasRequest(command, wbxml, withPolicyKey = true, extraHeaders)).use(read)
+                is EasResult.Error -> EasResult.Error(prov.message)
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e

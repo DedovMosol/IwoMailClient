@@ -40,6 +40,8 @@ backups/
 
 # Local AI/IDE tool directories
 .kiro/
+# Local code review reports (tooling output)
+semantic-review/
 
 # Room database schemas (generated)
 app/schemas/

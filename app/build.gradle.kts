@@ -19,8 +19,9 @@ android {
         applicationId = "com.dedovmosol.iwomail"
         minSdk = 26  // Android 8.0
         targetSdk = 36  // Android 16
-        versionCode = 26
-        versionName = "1.6.3b"
+        // 27: выше бета-сборок 1.6.2–1.6.3b (до 26), иначе Android отказал бы в установке поверх них как в понижении
+        versionCode = 27
+        versionName = "1.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         

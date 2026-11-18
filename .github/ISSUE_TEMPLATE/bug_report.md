@@ -17,7 +17,7 @@ Steps to reproduce the behavior:
 What you expected to happen.
 
 **Environment**
-- App version: (e.g. 1.6.3b)
+- App version: (e.g. 1.7.0)
 - Android version: (e.g. 12)
 - Device: (e.g. Pixel 6)
 - Server: (e.g. Exchange 2010 SP3, protocol EAS 14.1 / EWS)

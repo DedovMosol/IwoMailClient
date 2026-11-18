@@ -16,6 +16,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.dedovmosol.iwomail.network.HttpClientProvider
 import com.dedovmosol.iwomail.network.HttpClientProvider.ServerCertificate
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog
@@ -31,8 +32,11 @@ fun ServerCertificateDialog(
     certificate: ServerCertificate,
     serverLabel: String,
     onTrust: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** Системе сертификат доверяет — вместо закрепления предложить системную проверку (null — не предлагать). */
+    onUseSystem: (() -> Unit)? = null
 ) {
+    val systemTrusted = certificate.systemTrust == HttpClientProvider.SystemTrust.TRUSTED && onUseSystem != null
     val now = remember { System.currentTimeMillis() }
     val dateFormat = remember { java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM) }
     val info = certificate.info
@@ -43,7 +47,15 @@ fun ServerCertificateDialog(
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(serverLabel, style = MaterialTheme.typography.titleSmall, textAlign = TextAlign.Start, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
-                Text(Strings.certTrustExplain, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Start)
+                Text(
+                    when {
+                        systemTrusted -> Strings.certSystemTrusted
+                        certificate.systemTrust == HttpClientProvider.SystemTrust.NAME_MISMATCH -> Strings.certNameMismatch + " " + Strings.certTrustExplain
+                        else -> Strings.certTrustExplain
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Start
+                )
                 Spacer(Modifier.height(12.dp))
                 CertificateField(Strings.certIssuedTo, info.cn)
                 CertificateField(Strings.certIssuedBy, if (certificate.selfSigned) Strings.certSelfSigned else certificate.issuerName)
@@ -66,7 +78,13 @@ fun ServerCertificateDialog(
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(Strings.cancel) } },
-        confirmButton = { ThemeOutlinedButton(onClick = onTrust, text = Strings.certTrustAction) }
+        confirmButton = {
+            if (systemTrusted) {
+                ThemeOutlinedButton(onClick = { onUseSystem?.invoke() }, text = Strings.certUseSystemAction)
+            } else {
+                ThemeOutlinedButton(onClick = onTrust, text = Strings.certTrustAction)
+            }
+        }
     )
 }
 

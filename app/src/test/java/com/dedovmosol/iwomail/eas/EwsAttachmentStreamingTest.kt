@@ -51,6 +51,25 @@ class EwsAttachmentStreamingTest {
     }
 
     @Test
+    fun `an empty attachment is an empty file, not not-found`() {
+        for (body in listOf("<t:Content></t:Content>", "<t:Content/>")) {
+            val xml = getAttachmentResponse(ByteArray(0)).replace("<t:Content></t:Content>", body)
+            val out = ByteArrayOutputStream()
+            assertThat(EwsAttachmentContent.extract(ByteArrayInputStream(xml.toByteArray()), out))
+                .isEqualTo(EwsAttachmentContent.Result.Written(0))
+            assertThat(out.size()).isEqualTo(0)
+        }
+    }
+
+    @Test
+    fun `a response cut inside Content is an error, never a shorter file`() {
+        val xml = getAttachmentResponse(file)
+        val cut = xml.substring(0, xml.indexOf("<t:Content>") + 5_000).toByteArray()
+        val error = runCatching { EwsAttachmentContent.extract(Trickle(cut, 777), ByteArrayOutputStream()) }.exceptionOrNull()
+        assertThat(error).isInstanceOf(EOFException::class.java)
+    }
+
+    @Test
     fun `an error response message and a SOAP fault are errors, not empty files`() {
         // Ответ 2007 на неверный AttachmentId (проверено на сервере: HTTP 200, ResponseClass=Error)
         val error = """<s:Envelope><s:Body><m:GetAttachmentResponse><m:ResponseMessages><m:GetAttachmentResponseMessage ResponseClass="Error">""" +

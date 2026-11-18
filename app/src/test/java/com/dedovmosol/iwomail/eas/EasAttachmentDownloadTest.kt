@@ -55,7 +55,7 @@ class EasAttachmentDownloadTest {
         val transport = exchange.transport(easVersion)
         return EasAttachmentService(EasAttachmentService.AttachmentServiceDependencies(
             executeRequest = { transport.executeRequest(it) },
-            openEasCommand = { command, xml, headers -> transport.openEasCommand(command, xml, headers) },
+            openEasCommand = { command, xml, headers, read -> transport.openEasCommand(command, xml, headers, read) },
             parseWbxml = { WbxmlParser().parse(it) },
             buildUrl = { transport.buildUrl(it) },
             getAuthHeader = { transport.getAuthHeader() },

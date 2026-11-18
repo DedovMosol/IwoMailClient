@@ -73,6 +73,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -496,7 +497,8 @@ internal fun <T> SettingsChoiceRow(
     highlight: String = ""
 ) {
     var open by rememberSaveable { mutableStateOf(false) }
-    val dropdown = options.size <= SettingsTokens.DROPDOWN_MAX_OPTIONS
+    // Внутри нижнего листа — всегда список у строки: лист поверх листа даёт два затемнения и двойное «Назад»
+    val dropdown = options.size <= SettingsTokens.DROPDOWN_MAX_OPTIONS || LocalInSettingsSheet.current
     Box(modifier = Modifier.fillMaxWidth()) {
         SettingsNavRow(
             title = title,
@@ -583,6 +585,9 @@ internal fun <T> SettingsChoiceRow(
     }
 }
 
+/** true внутри [SettingsSheet]: выбор там открывается списком у строки, не вторым листом. */
+internal val LocalInSettingsSheet = androidx.compose.runtime.staticCompositionLocalOf { false }
+
 /** Нижний лист настроек: заголовок и содержимое; [content] получает close — закрыть с анимацией. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -613,9 +618,11 @@ internal fun SettingsSheet(
             Text(
                 title,
                 style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp)
+                modifier = Modifier
+                    .padding(start = 24.dp, end = 24.dp, bottom = 8.dp)
+                    .semantics { heading() }
             )
-            content(close)
+            CompositionLocalProvider(LocalInSettingsSheet provides true) { content(close) }
             Spacer(Modifier.height(8.dp))
         }
     }

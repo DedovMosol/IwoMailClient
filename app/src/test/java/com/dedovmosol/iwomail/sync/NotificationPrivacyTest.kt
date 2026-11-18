@@ -117,6 +117,28 @@ class NotificationPrivacyTest {
     }
 
     @Test
+    fun `turning the lock on re-posts notifications already in the shade without content`() {
+        try {
+            postMail(lockOn = false)
+            NotificationPrivacy.hideActiveContent(context)
+            val nm = context.getSystemService(android.app.NotificationManager::class.java)
+            val shown = org.robolectric.Shadows.shadowOf(nm).allNotifications
+            assertThat(shown).isNotEmpty()
+            for (n in shown) {
+                val all = n.allText().joinToString()
+                assertThat(all).doesNotContain("Ivan")
+                assertThat(all).doesNotContain("Salary")
+                assertThat(all).doesNotContain("example.com")
+            }
+            // Действие «Прочитано» и переход в письмо сохраняются
+            assertThat(shown.last().actions).hasLength(1)
+            assertThat(shown.last().contentIntent).isNotNull()
+        } finally {
+            com.dedovmosol.iwomail.data.security.AppLockManager.resetForTesting()
+        }
+    }
+
+    @Test
     fun `public version without text has only the title`() {
         val n = NotificationPrivacy.apply(context, mail(), "ch", R.drawable.ic_task, "Task reminder", hidden = false).build()
         assertThat(n.publicVersion.title()).isEqualTo("Task reminder")

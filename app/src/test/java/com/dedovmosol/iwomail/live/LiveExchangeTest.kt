@@ -402,10 +402,13 @@ class LiveExchangeTest {
         val seen = endpoints.map { (label, e) ->
             val cert = provider.fetchServerCertificate(e.host, e.port, e.startTls)
             // Отпечатки в отчёт не пишем — только их совпадение
-            println("$label: certificate fetched, self-signed=${cert.selfSigned}, valid now=${cert.isValidAt(System.currentTimeMillis())}, SHA-256 groups=${cert.sha256.split(':').size}, SHA-1 groups=${cert.sha1.split(':').size}, DNS names=${cert.dnsNames.size}")
+            println("$label: certificate fetched, self-signed=${cert.selfSigned}, valid now=${cert.isValidAt(System.currentTimeMillis())}, SHA-256 groups=${cert.sha256.split(':').size}, SHA-1 groups=${cert.sha1.split(':').size}, DNS names=${cert.dnsNames.size}, system verdict=${cert.systemTrust}")
             cert
         }
         assertThat(seen.map { it.info.hash }.toSet()).hasSize(1)
+        // Внутренний УЦ и адрес IP: система не доверяет — приложение предложит закрепить ключ, а не системную проверку
+        assertThat(seen.map { it.systemTrust }.toSet())
+            .doesNotContain(com.dedovmosol.iwomail.network.HttpClientProvider.SystemTrust.TRUSTED)
         val trusted = seen.first().info
         val wrong = trusted.copy(hash = "0".repeat(64))
 

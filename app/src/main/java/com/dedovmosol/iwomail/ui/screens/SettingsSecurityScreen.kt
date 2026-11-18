@@ -44,9 +44,15 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit, highlight: String =
     var failClosed by remember { mutableStateOf(telemetry.isFailClosedEnabled()) }
 
     // SET-01: виджет сразу скрывает или снова показывает письма, события и задачи
+    // BG-08: и уведомления, уже лежащие в шторке, — без содержимого
     suspend fun setLockEnabled(enabled: Boolean) {
         settingsRepo.setAppLockEnabled(enabled)
         com.dedovmosol.iwomail.widget.updateMailWidget(context)
+        if (enabled) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.dedovmosol.iwomail.sync.NotificationPrivacy.hideActiveContent(context.applicationContext)
+            }
+        }
     }
 
     when (lockDialog) {

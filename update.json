@@ -9,8 +9,8 @@
     "x86": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.6.1/iwo.Mail.Client.1.6.1.x86.x32.apk",
     "universal": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.6.1/iwo.Mail.Client.1.6.1.universal.apk"
   },
-  "changelogRu": "Последний опубликованный релиз — 1.6.1. Сборки 1.6.2 в GitHub Releases нет.",
-  "changelogEn": "The latest published release is 1.6.1. There is no 1.6.2 build on GitHub Releases.",
+  "changelogRu": "Новый пакет com.dedovmosol.iwomail: нужна переустановка.\n• Редактор с форматированием и HTML-подписи\n• Встроенные картинки в письмах, ответах и черновиках\n• Пользовательские папки\n• Клиентские сертификаты (.p12/.pfx) и закрепление сертификата\n• Проверка обновлений\n• Исправления синхронизации, черновиков, удаления и стабильности",
+  "changelogEn": "New package com.dedovmosol.iwomail: reinstall required.\n• Rich text editor and HTML signatures\n• Inline pictures in messages, replies and drafts\n• User folders\n• Client certificates (.p12/.pfx) and certificate pinning\n• Update check\n• Sync, draft, delete and stability fixes",
   "minSdk": 26,
   "previous": {
     "versionCode": 23,

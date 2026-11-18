@@ -276,11 +276,12 @@ internal fun formatSyncLabel(
 private val searchBg = Color.White
 private val searchHint = Color(0xFF757575)
 private val textWhite = Color.White
-private val textWhiteAlpha = Color(0xCCFFFFFF)
 private val darkBg = Color(0xE6181828)
 private val textLight = Color(0xFFEEEEEE)
 private val textLightAlpha = Color(0xB3EEEEEE)
-private val textDimmed = Color(0x80EEEEEE)
+// SET-08: текст прямо на цвете темы — сплошной белый. олупрозрачный давал 1,8-2,8:1 (норма 4,5:1, шрифт 9-13 sp);
+// иерархия — размером и начертанием, не прозрачностью
+private val textOnTheme = Color.White
 private val accentBlue = Color(0xFF448AFF)
 private val widgetUpdateMutex = Mutex()
 
@@ -401,7 +402,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                         Text(
                             text = "${data.totalUnread} ${context.getString(R.string.widget_unread)}",
                             style = TextStyle(
-                                color = ColorProvider(textWhiteAlpha),
+                                color = ColorProvider(textOnTheme),
                                 fontSize = primaryFontSize,
                                 fontWeight = FontWeight.Medium
                             )
@@ -435,24 +436,24 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     provider = ImageProvider(R.drawable.ic_calendar_month),
                     contentDescription = null,
                     modifier = GlanceModifier.size(iconSize),
-                    colorFilter = ColorFilter.tint(ColorProvider(textWhiteAlpha))
+                    colorFilter = ColorFilter.tint(ColorProvider(textOnTheme))
                 )
                 Spacer(modifier = GlanceModifier.width(iconGap))
                 if (data.nextEvent != null) {
                     Text(
                         text = "${context.getString(R.string.widget_calendar)}: ${data.calendarEventsCount}",
-                        style = TextStyle(color = ColorProvider(textWhiteAlpha), fontSize = primaryFontSize)
+                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = primaryFontSize)
                     )
                     Spacer(modifier = GlanceModifier.width(8.dp))
                     Text(
                         text = "• ${data.nextEvent.time} ${data.nextEvent.title}".trimEnd(),
-                        style = TextStyle(color = ColorProvider(textDimmed), fontSize = secondaryFontSize),
+                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = secondaryFontSize),
                         maxLines = 1
                     )
                 } else {
                     Text(
                         text = context.getString(R.string.widget_no_events_today),
-                        style = TextStyle(color = ColorProvider(textDimmed), fontSize = primaryFontSize)
+                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = primaryFontSize)
                     )
                 }
             }
@@ -483,26 +484,26 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     provider = ImageProvider(R.drawable.ic_task),
                     contentDescription = null,
                     modifier = GlanceModifier.size(iconSize),
-                    colorFilter = ColorFilter.tint(ColorProvider(textWhiteAlpha))
+                    colorFilter = ColorFilter.tint(ColorProvider(textOnTheme))
                 )
                 Spacer(modifier = GlanceModifier.width(iconGap))
                 if (taskCount > 0) {
                     Text(
                         text = "${context.getString(R.string.widget_tasks)}: $taskCount",
-                        style = TextStyle(color = ColorProvider(textWhiteAlpha), fontSize = primaryFontSize)
+                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = primaryFontSize)
                     )
                     if (data.nextTaskTitle.isNotBlank()) {
                         Spacer(modifier = GlanceModifier.width(8.dp))
                         Text(
                             text = "• ${data.nextTaskTitle}",
-                            style = TextStyle(color = ColorProvider(textDimmed), fontSize = secondaryFontSize),
+                            style = TextStyle(color = ColorProvider(textOnTheme), fontSize = secondaryFontSize),
                             maxLines = 1
                         )
                     }
                 } else {
                     Text(
                         text = context.getString(R.string.widget_no_tasks),
-                        style = TextStyle(color = ColorProvider(textDimmed), fontSize = primaryFontSize)
+                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = primaryFontSize)
                     )
                 }
             }
@@ -532,18 +533,18 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     provider = ImageProvider(R.drawable.ic_sticky_note),
                     contentDescription = null,
                     modifier = GlanceModifier.size(iconSize),
-                    colorFilter = ColorFilter.tint(ColorProvider(textWhiteAlpha))
+                    colorFilter = ColorFilter.tint(ColorProvider(textOnTheme))
                 )
                 Spacer(modifier = GlanceModifier.width(iconGap))
                 if (data.notesCount > 0) {
                     Text(
                         text = "${context.getString(R.string.widget_notes)}: ${data.notesCount}",
-                        style = TextStyle(color = ColorProvider(textWhiteAlpha), fontSize = primaryFontSize)
+                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = primaryFontSize)
                     )
                 } else {
                     Text(
                         text = context.getString(R.string.widget_no_notes),
-                        style = TextStyle(color = ColorProvider(textDimmed), fontSize = primaryFontSize)
+                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = primaryFontSize)
                     )
                 }
             }
@@ -659,7 +660,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                         modifier = GlanceModifier.defaultWeight(),
                         maxLines = 1,
                         style = TextStyle(
-                            color = ColorProvider(textDimmed),
+                            color = ColorProvider(textOnTheme),
                             fontSize = secondaryFontSize
                         )
                     )

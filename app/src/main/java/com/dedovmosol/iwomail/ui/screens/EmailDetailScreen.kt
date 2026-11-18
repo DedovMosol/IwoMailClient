@@ -121,19 +121,23 @@ fun EmailDetailScreen(
             val dir = File(context.cacheDir, dirName).apply { mkdirs() }
             File(dir, safeFileName) to File.createTempFile("att_", ".part", dir)
         }
-        return when (val result = actions.downloadAttachmentToFile(att, partial)) {
-            is EasResult.Success -> withContext(Dispatchers.IO) {
-                target.delete()
-                if (partial.renameTo(target)) target else { partial.delete(); null }
-            } ?: run {
-                SafeToast.long(context, NotificationStrings.getErrorWithMessage(isRussian, null))
-                null
+        // finally: отмена на любой точке (поиск письма, создание клиента, загрузка) не оставляет .part в кэше
+        try {
+            return when (val result = actions.downloadAttachmentToFile(att, partial)) {
+                is EasResult.Success -> withContext(Dispatchers.IO) {
+                    target.delete()
+                    if (partial.renameTo(target)) target else null
+                } ?: run {
+                    SafeToast.long(context, NotificationStrings.getErrorWithMessage(isRussian, null))
+                    null
+                }
+                is EasResult.Error -> {
+                    SafeToast.long(context, NotificationStrings.localizeError(result.message, isRussian))
+                    null
+                }
             }
-            is EasResult.Error -> {
-                withContext(Dispatchers.IO) { partial.delete() }
-                SafeToast.long(context, NotificationStrings.localizeError(result.message, isRussian))
-                null
-            }
+        } finally {
+            withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { partial.delete() }
         }
     }
 
@@ -242,46 +246,41 @@ fun EmailDetailScreen(
         pendingSaveAsAttachmentId = null
         val attachment = attachments.find { it.id == attachmentId }
             ?: return@rememberLauncherForActivityResult
+        if (uri == null) return@rememberLauncherForActivityResult
+        val savedMsg = if (isRussian) "Файл сохранён" else "File saved"
         scope.launch {
+            // CreateDocument уже создал пустой файл в выбранной папке: без записи он удаляется, иначе пользователь
+            // нашёл бы там файл в 0 байт с именем вложения
+            var saved = false
             try {
-                val sourceFile = if (attachment.downloaded && attachment.localPath != null) {
-                    File(attachment.localPath)
-                } else null
-                if (sourceFile != null && sourceFile.exists() && uri != null) {
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver.openOutputStream(uri)?.use { out ->
-                            sourceFile.inputStream().use { it.copyTo(out) }
-                        }
-                    }
-                    val savedMsg = if (isRussian) "Файл сохранён" else "File saved"
-                    SafeToast.short(context, savedMsg)
-                } else if (uri != null) {
+                val local = attachment.localPath?.let { File(it) }?.takeIf { attachment.downloaded && it.exists() }
+                val source = local ?: run {
                     downloadingId = attachment.id
-                    val tmpFile = withContext(Dispatchers.IO) {
-                        java.io.File.createTempFile("att_save_", ".tmp", context.cacheDir)
-                    }
-                    try {
-                        when (val result = actions.downloadAttachmentToFile(attachment, tmpFile)) {
-                            is EasResult.Success -> {
-                                withContext(Dispatchers.IO) {
-                                    context.contentResolver.openOutputStream(uri)?.use { out ->
-                                        tmpFile.inputStream().use { input -> input.copyTo(out) }
-                                    }
-                                }
-                                val savedMsg = if (isRussian) "Файл сохранён" else "File saved"
-                                SafeToast.short(context, savedMsg)
-                            }
-                            is EasResult.Error -> SafeToast.long(context, NotificationStrings.localizeError(result.message, isRussian))
-                        }
-                    } finally {
-                        withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { tmpFile.delete() }
-                    }
-                    downloadingId = null
+                    downloadAttachmentFile(attachment, "email_save") ?: return@launch
                 }
+                try {
+                    saved = withContext(Dispatchers.IO) {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            source.inputStream().use { it.copyTo(out, 64 * 1024) }
+                            true
+                        } ?: false
+                    }
+                } finally {
+                    if (local == null) withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { source.delete() }
+                }
+                SafeToast.short(context, if (saved) savedMsg else NotificationStrings.getErrorWithMessage(isRussian, null))
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                SafeToast.long(context, e.message ?: "")
+                SafeToast.long(context, NotificationStrings.localizeError(com.dedovmosol.iwomail.eas.AttachmentErrors.of(e), isRussian))
+            } finally {
                 downloadingId = null
+                if (!saved) withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
+                    try {
+                        android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri)
+                    } catch (_: Exception) {
+                        // Провайдер без удаления (редкие OEM) — остаётся пустой файл, тост об ошибке уже показан
+                    }
+                }
             }
         }
     }

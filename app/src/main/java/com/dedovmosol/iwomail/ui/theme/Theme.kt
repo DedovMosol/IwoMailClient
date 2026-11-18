@@ -55,12 +55,14 @@ enum class AppColorTheme(
         gradientStart = Color(0xFF1565C0),
         gradientEnd = Color(0xFF0D47A1)
     ),
+    // SET-08: белый текст панели (заголовок 22 sp — обычный текст по WCAG) на C77700 давал 3,5:1 при норме 4,5:1.
+    // Тот же янтарный тон темнее: A86400 — 4,7:1, 8F4F00 — 6,4:1 (AppColorSchemeContrastTest)
     YELLOW(
         code = "yellow",
-        primaryLight = Color(0xFFC77700),
+        primaryLight = Color(0xFFA86400),
         primaryDark = Color(0xFFFFCC80),
-        gradientStart = Color(0xFFC77700),
-        gradientEnd = Color(0xFFA85E00)
+        gradientStart = Color(0xFFA86400),
+        gradientEnd = Color(0xFF8F4F00)
     ),
     GREEN(
         code = "green",

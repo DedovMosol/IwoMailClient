@@ -1,4 +1,4 @@
-﻿package com.dedovmosol.iwomail.ui.screens
+package com.dedovmosol.iwomail.ui.screens
 
 import androidx.activity.compose.BackHandler
 import com.dedovmosol.iwomail.util.SafeToast
@@ -229,6 +229,26 @@ fun ContactsScreen(
     var editingContactId by rememberSaveable { mutableStateOf<String?>(null) }
     var showDeleteDialogId by rememberSaveable { mutableStateOf<String?>(null) }
     var showContactDetailsId by rememberSaveable { mutableStateOf<String?>(null) }
+    val contactHaptics = com.dedovmosol.iwomail.ui.utils.rememberAppHaptics()
+
+    // Одна реакция на касание строки для всех трёх списков (личные, Exchange, адресная книга). Тактильный отклик —
+    // как в письмах, заметках и задачах: тик при отметке, сильнее — при входе в выделение долгим нажатием
+    fun onContactTap(contact: com.dedovmosol.iwomail.data.database.ContactEntity) {
+        if (isSelectionMode) {
+            contactHaptics.tick()
+            selectedContactIds = if (contact.id in selectedContactIds) selectedContactIds - contact.id else selectedContactIds + contact.id
+        } else {
+            showContactDetailsId = contact.id
+        }
+    }
+
+    fun onContactLongPress(contact: com.dedovmosol.iwomail.data.database.ContactEntity) {
+        if (!isSelectionMode) {
+            contactHaptics.confirm()
+            isSelectionMode = true
+            selectedContactIds = setOf(contact.id)
+        }
+    }
     var showMoreMenu by rememberSaveable { mutableStateOf(false) }
     var showExportDialog by rememberSaveable { mutableStateOf(false) }
     var bulkDuplicateTotalCount by rememberSaveable { mutableIntStateOf(0) }
@@ -1520,23 +1540,9 @@ fun ContactsScreen(
                     onGroupRename = { groupToRenameId = it.id },
                     onGroupDelete = { groupToDeleteId = it.id },
                     groupedContacts = groupedContacts,
-                    onContactClick = {
-                        if (isSelectionMode) {
-                            selectedContactIds = if (it.id in selectedContactIds) {
-                                selectedContactIds - it.id
-                            } else {
-                                selectedContactIds + it.id
-                            }
-                        } else {
-                            showContactDetailsId = it.id
-                        }
-                    },
-                    onContactLongClick = {
-                        if (!isSelectionMode) {
-                            isSelectionMode = true
-                            selectedContactIds = setOf(it.id)
-                        }
-                    },
+                    onContactClick = ::onContactTap,
+                    onContactLongClick = ::onContactLongPress,
+
                     onContactMoveToGroup = { moveToGroupContactId = it.id },
                     onContactEdit = { editingContactId = it.id },
                     onContactDelete = { showDeleteDialogId = it.id },
@@ -1553,23 +1559,9 @@ fun ContactsScreen(
                     syncError = exchangeSyncError,
                     title = if (isRussian) "Контакты Exchange" else "Exchange Contacts",
                     emptySubtitle = if (isRussian) "Нажмите для синхронизации" else "Tap to sync",
-                    onContactClick = {
-                        if (isSelectionMode) {
-                            selectedContactIds = if (it.id in selectedContactIds) {
-                                selectedContactIds - it.id
-                            } else {
-                                selectedContactIds + it.id
-                            }
-                        } else {
-                            showContactDetailsId = it.id
-                        }
-                    },
-                    onContactLongClick = {
-                        if (!isSelectionMode) {
-                            isSelectionMode = true
-                            selectedContactIds = setOf(it.id)
-                        }
-                    },
+                    onContactClick = ::onContactTap,
+                    onContactLongClick = ::onContactLongPress,
+
                     onSyncClick = {
                         scope.launch {
                             isExchangeSyncing = true
@@ -1599,23 +1591,9 @@ fun ContactsScreen(
                     syncError = galSyncError,
                     title = com.dedovmosol.iwomail.ui.NotificationStrings.getOrganizationAddressBook(isRussian),
                     emptySubtitle = com.dedovmosol.iwomail.ui.NotificationStrings.getGlobalAddressList(isRussian),
-                    onContactClick = {
-                        if (isSelectionMode) {
-                            selectedContactIds = if (it.id in selectedContactIds) {
-                                selectedContactIds - it.id
-                            } else {
-                                selectedContactIds + it.id
-                            }
-                        } else {
-                            showContactDetailsId = it.id
-                        }
-                    },
-                    onContactLongClick = {
-                        if (!isSelectionMode) {
-                            isSelectionMode = true
-                            selectedContactIds = setOf(it.id)
-                        }
-                    },
+                    onContactClick = ::onContactTap,
+                    onContactLongClick = ::onContactLongPress,
+
                     onSyncClick = {
                         scope.launch {
                             isGalSyncing = true

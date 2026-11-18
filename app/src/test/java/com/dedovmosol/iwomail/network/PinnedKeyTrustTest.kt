@@ -48,6 +48,37 @@ class PinnedKeyTrustTest {
             .isInstanceOf(java.security.cert.CertificateException::class.java)
     }
 
+    private fun rootCert(name: String) = CertificateFactory.getInstance("X.509")
+        .generateCertificate(requireNotNull(javaClass.getResourceAsStream("/certs/$name.pem"))) as X509Certificate
+
+    private val acceptingTm = object : javax.net.ssl.X509TrustManager {
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+    }
+    private val refusingTm = object : javax.net.ssl.X509TrustManager {
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) =
+            throw java.security.cert.CertificateException("unknown CA")
+        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+    }
+
+    @Test
+    fun `system verdict - trusted only with a SAN for this host`() {
+        val san = rootCert("san_ok") // SAN dns:mail.company.local
+        assertThat(HttpClientProvider.systemTrustOf(arrayOf(san), "RSA", "mail.company.local", acceptingTm))
+            .isEqualTo(HttpClientProvider.SystemTrust.TRUSTED)
+        assertThat(HttpClientProvider.systemTrustOf(arrayOf(san), "RSA", "other.example", acceptingTm))
+            .isEqualTo(HttpClientProvider.SystemTrust.NAME_MISMATCH)
+        // Только CN: стандартный верификатор OkHttp в системном режиме CN не смотрит — «доверяет» нельзя обещать
+        assertThat(HttpClientProvider.systemTrustOf(arrayOf(rootCert("cn_ok")), "RSA", "mail.company.local", acceptingTm))
+            .isEqualTo(HttpClientProvider.SystemTrust.NAME_MISMATCH)
+        assertThat(HttpClientProvider.systemTrustOf(arrayOf(san), "RSA", "mail.company.local", refusingTm))
+            .isEqualTo(HttpClientProvider.SystemTrust.NOT_TRUSTED)
+        assertThat(HttpClientProvider.systemTrustOf(arrayOf(), "RSA", "mail.company.local", acceptingTm))
+            .isEqualTo(HttpClientProvider.SystemTrust.NOT_TRUSTED)
+    }
+
     @Test
     fun `trust mode - accept all wins, then the imported file, then the pinned key, else the system`() {
         val pin = HttpClientProvider.extractCertificateInfo(cert("tls_ok"))

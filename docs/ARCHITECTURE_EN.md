@@ -4,19 +4,19 @@
 
 **iwo Mail Client** is an Android client for Microsoft Exchange (EAS/EWS) with beta IMAP/POP3 support.
 
-**Version:** 1.6.3b
+**Version:** 1.7.0 (in preparation)
 **Package:** `com.dedovmosol.iwomail`
 **Gradle root:** `IwoMailClient`
 **Android module:** `:app`
 
 ---
 
-## 1. Project state v1.6.3b
+## 1. Project state v1.7.0
 
 | Area | Value |
 |------|-------|
 | Application ID / namespace | `com.dedovmosol.iwomail` |
-| Version | `versionName = 1.6.3b`, `versionCode = 26` |
+| Version | `versionName = 1.7.0`, `versionCode = 27` |
 | SDK | `minSdk = 26`, `compileSdk = 36`, `targetSdk = 36` |
 | JVM target | Java/Kotlin `17` |
 | Kotlin | `1.9.22` (Compose compiler extension `1.5.8`) |
@@ -27,8 +27,8 @@
 | Network and background | OkHttp `4.12.0`, Conscrypt `2.5.2`, WorkManager `2.9.0`, DataStore `1.1.1`, Glance `1.1.1`, JavaMail (`android-mail`) `1.6.7` |
 | Security | `security-crypto` `1.1.0-alpha06` (EncryptedSharedPreferences), `biometric` `1.1.0` |
 | APK architectures | `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64` + universal APK |
-| Tests | Unit tests in `app/src/test`: 184 `.kt` files, 1601 `@Test` annotations (counted in the sources); there is no `androidTest` directory |
-| Published release | GitHub Releases → `1.6.1` (`versionCode` 24); `1.6.3b` is a beta build |
+| Tests | Unit, Robolectric and Compose UI tests in `app/src/test` (about 1,930 in a `testDebugUnitTest` run), live tests on Exchange 2007 via environment variables; there is no `androidTest` directory |
+| Published release | GitHub Releases → `1.6.1` (`versionCode` 24); `1.7.0` is in preparation, no beta builds were published in between |
 | Runtime model | Offline-first: Room + Flow → UI, background sync updates the DB |
 
 The main production scenario is on-premise Exchange, especially Exchange 2007 SP1/SP2. IMAP/POP3 are implemented as beta clients for reading (folder list and the latest messages; IMAP can also create, rename and delete folders) and do not reach parity with Exchange features.
@@ -471,14 +471,25 @@ Supported network and security modes:
 - accept-all mode for legacy and self-signed environments;
 - a custom server certificate (`certificatePath`);
 - a PKCS#12 client certificate with mTLS;
-- certificate pinning with a saved SHA-256 and metadata (a separate pin for the alternate URL); the pin is checked after the standard validation;
+- certificate pinning with a saved SPKI SHA-256 and metadata (a separate pin for the alternate URL). `HttpClientProvider.trustModeOf` picks the mode: `ACCEPT_ALL` → `IMPORTED` (certificate file, the pin is checked after chain validation) → `PINNED_KEY` → `SYSTEM`;
+- trust by fingerprint (TOFU, `PINNED_KEY`): when the system cannot verify the certificate, `fetchServerCertificate` gets it by a handshake without credentials (STARTTLS/STLS on 143/110) and returns the system verdict (`SystemTrust`). `ServerCertificateDialog` shows the fingerprints; Trust pins the key, and `createPinnedKeyTrustManager` accepts only that key, without CA, name or expiry checks. If the system trusts the certificate, the dialog offers the system check (`AccountRepository.useSystemTrust`) instead of a pin. An SSL setup error in `PINNED_KEY` and `IMPORTED` modes fails client creation (fail-closed);
 - the Conscrypt provider for legacy TLS compatibility; Exchange clients use `ConnectionSpec.COMPATIBLE_TLS` (TLS 1.0–1.3 in one handshake), the update channel uses `MODERN_TLS` and system roots only (`getSystemTrustOnlyClient`).
 
 Hostname verification: with an imported server certificate (`certificatePath`) the client uses `Rfc6125HostnameVerifier` (SAN dNSName/iPAddress per RFC 6125, CN fallback only when the certificate has no SAN, which is common for Exchange 2007 self-signed certificates); accept-all mode disables verification by the user's choice; otherwise OkHttp's default verifier is used.
 
-Cleartext traffic is disabled globally (`res/xml/network_security_config.xml`: `cleartextTrafficPermitted="false"`, only system certificates trusted in `base-config`). Exchange (EAS over OkHttp) is therefore HTTPS-only: the setup screen does not offer HTTP for Exchange accounts and forces `useSSL=true` on save. IMAP/POP3 run through JavaMail, not through `HttpClientProvider`: the session properties set `ssl.trust=*` and `ssl.checkserveridentity=false`, so the server certificate is not validated, and a non-SSL port (143/110) remains available.
+Cleartext traffic is disabled globally (`res/xml/network_security_config.xml`: `cleartextTrafficPermitted="false"`, only system certificates trusted in `base-config`). Exchange (EAS over OkHttp) is therefore HTTPS-only: the setup screen does not offer HTTP for Exchange accounts and forces `useSSL=true` on save. IMAP/POP3 run through JavaMail. `shared/MailSessionProperties.forAccount` builds the session properties: non-SSL ports require STARTTLS/STLS, the server name is checked (except with accept-all and a pinned key), and TLS 1.0 and 3DES are allowed last (Exchange 2007 on 993/995). Trust is the same as for EAS: `HttpClientProvider.mailSslContext` builds an `SSLContext` with the same TrustManager and client certificate, passed as an object in `ssl.socketFactory`. `socketFactory.fallback=false` is always set: otherwise JavaMail silently connected with the default factory when ours refused, and any certificate from a device CA bypassed the pin.
 
 `AccountRepository` caches `EasClient` per account (`EndpointClientCache`) and invalidates the cache when certificate or server settings change. Switching to the alternate Exchange URL is supported for connection-level errors, with a later probe and switch back to the primary.
+
+### Attachment download
+
+An attachment is streamed to a file and never read into memory whole (`EasAttachmentService.downloadAttachmentToFile`, `EasClient.downloadMailAttachmentToFile`). Order:
+
+1. ItemOperations Fetch with `MS-ASAcceptMultiPart: T`: the file arrives as a separate binary part of the response ([MS-ASCMD] MultiPartResponse), and `EasMultipart.Reader` checks the part header and copies the part to the file. The response is read and closed inside `EasTransport.openEasCommand` in the same `withContext`, so coroutine cancellation leaves no open connection.
+2. On EAS 12.x, GetAttachment as POST (Exchange 2007 rejects GET with 501; 14.0+ has no such command). It is skipped after Status 11: the server limit is shared.
+3. EWS: the message is found by Message-ID or subject, folder and date (`EwsMailLocator`), the attachment by name, and among duplicates by Content-ID (`EwsAttachments.match`; size is not used because EWS 2007 has no `t:Size`). `EwsClient.executeStreaming` (Basic, then NTLM) hands the stream to `EwsAttachmentContent`, which decodes base64 on the fly. A cut inside `Content` is an error, `<t:Content/>` is an empty file.
+
+Errors are `AttachmentErrors` codes (TOO_LARGE, NOT_FOUND, NO_SPACE, TOO_LARGE_FOR_MEMORY); network, 401, 403 and out-of-space errors are not retried. The message screen writes to a temporary `att_*.part` and renames it on success, and the file is deleted on cancellation. Save: on Android 10+ `DownloadsSaver` (MediaStore, `IS_PENDING`), on 8–9 the SAF system dialog; on failure the created empty document is deleted. In-memory download (`downloadAttachment`) is capped at 16 MB.
 
 ### Email body rendering (WebView)
 
@@ -507,7 +518,19 @@ The `Subject` header is encoded as an RFC 2047 encoded-word and, when long, is f
 
 Passwords are persisted by `data/security/PasswordStorage` through `EncryptedSharedPreferences` (keys AES256-SIV, values AES256-GCM, master key in Android Keystore), created by `EncryptedStoreProvider`. When Keystore is unavailable or corrupted, the provider falls back to `ObfuscatedSharedPreferences`: values are XOR-ed with a key derived by PBKDF2-HMAC-SHA256 (10 000 iterations, static salt) from `ANDROID_ID`. This is obfuscation, not encryption. `SecurityTelemetry` logs the fallback (that flag is a journal, not the live backend). The live backend is `PasswordStorage.isUsingInsecureStorage()` and `AppLockManager.isUsingInsecureStorage()`. A one-time toast uses `AppLanguageCode` (loaded in `Application` before `AppLockManager.init`). When encryption is down, Security settings show a fail-closed switch (off by default): do not write new mailbox passwords or the app-lock password to obfuscation. A new mailbox that cannot store its password is rolled back (`FAIL_CLOSED`). Password char arrays are zeroed (`fill('\u0000')`) after use in `HttpClientProvider`.
 
-The app-lock password (`AppLockManager`) is stored only as a PBKDF2-HMAC-SHA256 hash (600 000 iterations, 16-byte random salt, format `v1:iterations:b64salt:b64hash`, constant-time comparison) in the same `EncryptedStoreProvider`. `setPassword` honours fail-closed. Fingerprint unlock uses `BiometricPrompt` (`BIOMETRIC_WEAK`), which is why `MainActivity` extends `FragmentActivity`. Settings: hub `SettingsScreen` (`SettingsGroup` / `SettingsHubRow` cards), mail, notifications, personalization, security, About (`SettingsScrollScaffold` with a `footer` slot for the easter egg, not `Modifier.weight` inside `verticalScroll`).
+The app-lock password (`AppLockManager`) is stored only as a PBKDF2-HMAC-SHA256 hash (600 000 iterations, 16-byte random salt, format `v1:iterations:b64salt:b64hash`, constant-time comparison) in the same `EncryptedStoreProvider`. `setPassword` honours fail-closed. Fingerprint unlock uses `BiometricPrompt` (`BIOMETRIC_WEAK`), which is why `MainActivity` extends `FragmentActivity`.
+
+Brute-force protection (`AppLockManager.attempt`): 5 attempts, then pauses of 30 s, 1 min, 5 min, 15 min. The attempt is written with `commit()` before PBKDF2, and the pause is counted on `elapsedRealtime` with the boot number (`Settings.Global.BOOT_COUNT`): after a reboot it starts over. A successful password or fingerprint unlock, setting and removing the password reset the counter. The change and disable password dialogs share the counter.
+
+Privacy while the lock is on:
+
+- `LockWindowPolicy`: on API 33+ `setRecentsScreenshotEnabled(false)` (no snapshot in Recents, screenshots inside the app still work), FLAG_SECURE only on the lock screen; on API 26–32 FLAG_SECURE for as long as the lock is on.
+- `LockPrivacy`: the widget hides messages, event and task titles; toggling the lock refreshes the widget.
+- `NotificationPrivacy.apply`: every notification with content is VISIBILITY_PRIVATE with a contentless publicVersion (the lock screen shows content only if the phone settings allow it). With the lock on the full notification is neutral too, and `hideActiveContent` re-posts notifications already shown.
+
+### Settings UI
+
+HyperOS-style settings (`SettingsScaffold.kt`): `SettingsLargeTopBar` (`LargeTopAppBar` + `exitUntilCollapsedScrollBehavior` on the theme gradient), `SettingsGroup` cards without dividers, `SettingsSectionTitle`, `SettingsIconTile` (one shape), `SettingsNavRow` with the value on the right. List choices use `SettingsChoiceRow<T>`: up to 5 options a `DropdownMenu` at the row, more a `SettingsSheet` (`ModalBottomSheet`); inside a sheet always a dropdown (`LocalInSettingsSheet`). Tokens (`SettingsTokens`) and the scheme without dynamic color (`appColorScheme`) are contrast-checked by `AppColorSchemeContrastTest`. About uses `SettingsScrollScaffold` with a `footer` slot for the easter egg (not `Modifier.weight` inside `verticalScroll`).
 
 ---
 
@@ -580,10 +603,16 @@ Server mode stores drafts through EWS (with attachments, in a single MIME `Creat
 - Folder operations are serialized per account (`FolderSyncService`) to protect the SyncKey state.
 - EAS Sync requests are serialized per folder (`FolderSyncGate`); optimistic flag writes are tracked by `FlagWriteTracker` (lock order: folder gate, then tracker).
 - Calendar, task and note repositories use per-account sync locks; calendar delete, restore, permanent delete and trash operations take the same lock as calendar sync.
+- The EWS supplement of series exceptions is computed from a snapshot taken before the network request and written only if the series exceptions have not changed since (`CalendarRepository.supplementToWrite`, PIM-28). An edit of one occurrence (`updateSingleOccurrence`, which proceeds without the lock when it is busy) is merged into the fresh row inside a transaction.
 - `EasTransport` runs Provision under `provisionMutex`; the NTLM handshake of `EwsClient` runs under `ntlmLock`.
 - Notification display uses a shared mutex across the push and worker paths (`NotificationHelper.notificationMutex`).
 - Scheduled send is guarded by a lock on the message directory (`ScheduledSend.lock`): the alarm, the backup and cancel cannot send a message twice.
 - Glance widget updates are serialized through `widgetUpdateMutex`.
+
+### Haptics
+
+`ui/utils/AppHaptics` is one process-wide instance over `Vibrator` (`VibratorManager` on API 31+): `tick()` when a row is toggled and when the row under the finger changes during drag selection, `confirm()` when a long press enters selection and when an attachment drag starts. API 29+ uses `EFFECT_TICK`/`EFFECT_CLICK`, 26–28 a short one-shot, 33+ with `USAGE_TOUCH`. Compose `HapticFeedbackType` is not used: some firmwares (Samsung, Xiaomi) ignore it. With system haptics off or no vibrator nothing plays. A second `confirm()` within 150 ms is dropped, because a long press is caught both by the row (`combinedClickable`) and by list drag selection (`rememberDragSelectModifier`).
+
 
 ### UI state preservation across configuration changes
 
@@ -663,7 +692,7 @@ On Windows:
 .\gradlew.bat assembleRelease
 ```
 
-Unit tests are run with `./gradlew testDebugUnitTest` (the same command runs in CI, `.github/workflows/ci.yml`; on Windows there is `run-tests.bat`). Coverage is measured by Kover.
+Unit tests are run with `./gradlew testDebugUnitTest` (the same command runs in CI, `.github/workflows/ci.yml`). Coverage is measured by Kover.
 
 | Directory | Content |
 |-----------|---------|

@@ -4,19 +4,19 @@
 
 **iwo Mail Client** — Android-клиент для Microsoft Exchange (EAS/EWS) с beta-поддержкой IMAP/POP3.
 
-**Версия:** 1.6.3b
+**Версия:** 1.7.0 (готовится)
 **Пакет:** `com.dedovmosol.iwomail`
 **Gradle root:** `IwoMailClient`
 **Android-модуль:** `:app`
 
 ---
 
-## 1. Состояние проекта v1.6.3b
+## 1. Состояние проекта v1.7.0
 
 | Область | Значение |
 |---------|----------|
 | Application ID / namespace | `com.dedovmosol.iwomail` |
-| Версия | `versionName = 1.6.3b`, `versionCode = 26` |
+| Версия | `versionName = 1.7.0`, `versionCode = 27` |
 | SDK | `minSdk = 26`, `compileSdk = 36`, `targetSdk = 36` |
 | JVM target | Java/Kotlin `17` |
 | Kotlin | `1.9.22` (расширение компилятора Compose `1.5.8`) |
@@ -27,8 +27,8 @@
 | Сеть и фон | OkHttp `4.12.0`, Conscrypt `2.5.2`, WorkManager `2.9.0`, DataStore `1.1.1`, Glance `1.1.1`, JavaMail (`android-mail`) `1.6.7` |
 | Безопасность | `security-crypto` `1.1.0-alpha06` (EncryptedSharedPreferences), `biometric` `1.1.0` |
 | Архитектуры APK | `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64` + универсальный APK |
-| Тесты | Unit-тесты в `app/src/test`: 184 файла `.kt`, 1601 аннотация `@Test` (подсчёт по исходникам); каталога `androidTest` нет |
-| Опубликованный релиз | GitHub Releases → `1.6.1` (`versionCode` 24); `1.6.3b` — beta-сборка |
+| Тесты | Unit-, Robolectric- и Compose UI-тесты в `app/src/test` (около 1 930 в прогоне `testDebugUnitTest`), live-тесты на Exchange 2007 по переменным окружения; каталога `androidTest` нет |
+| Опубликованный релиз | GitHub Releases → `1.6.1` (`versionCode` 24); `1.7.0` готовится, бета-сборок между ними не публиковалось |
 | Модель работы | Offline-first: Room + Flow → UI, фоновая синхронизация обновляет БД |
 
 Основной production-сценарий — on-premise Exchange, особенно Exchange 2007 SP1/SP2. IMAP/POP3 реализованы как beta-клиенты для чтения (список папок и последние письма; IMAP дополнительно создаёт, переименовывает и удаляет папки) и не дают паритета с функциями Exchange.
@@ -472,14 +472,25 @@ SyncKey ([MS-ASCMD] Sync) образует цепочку: каждый отве
 - режим «принимать любые сертификаты» для устаревших/самоподписанных окружений;
 - собственный серверный сертификат (`certificatePath`);
 - клиентский сертификат PKCS#12 с mTLS;
-- закрепление сертификата (certificate pinning) с сохранённым SHA-256 и метаданными (отдельный пин для альтернативного URL); пин проверяется после стандартной валидации;
+- закрепление сертификата (certificate pinning) с сохранённым SPKI SHA-256 и метаданными (отдельный пин для альтернативного URL). Режим выбирает `HttpClientProvider.trustModeOf`: `ACCEPT_ALL` → `IMPORTED` (файл сертификата, пин проверяется после проверки цепочки) → `PINNED_KEY` → `SYSTEM`;
+- доверие по отпечатку (TOFU, `PINNED_KEY`): если система не подтверждает сертификат, `fetchServerCertificate` получает его рукопожатием без учётных данных (на 143/110 через STARTTLS/STLS) и возвращает вердикт системной проверки (`SystemTrust`). `ServerCertificateDialog` показывает отпечатки; «Доверять» закрепляет ключ, и `createPinnedKeyTrustManager` принимает только его, без проверки УЦ, имени и срока. Если система сертификату доверяет, предлагается системная проверка (`AccountRepository.useSystemTrust`), а не пин. Ошибка настройки SSL в режимах `PINNED_KEY` и `IMPORTED` прерывает создание клиента (fail-closed);
 - провайдер Conscrypt для совместимости со старым TLS; Exchange-клиенты используют `ConnectionSpec.COMPATIBLE_TLS` (TLS 1.0–1.3 в одном рукопожатии), канал обновлений — `MODERN_TLS` и только системные корни (`getSystemTrustOnlyClient`).
 
 Проверка имени хоста: при импортированном серверном сертификате (`certificatePath`) клиент использует `Rfc6125HostnameVerifier` (SAN dNSName/iPAddress по RFC 6125, откат на CN только если в сертификате нет SAN — типично для самоподписанных сертификатов Exchange 2007); режим «принимать любые сертификаты» отключает проверку по выбору пользователя; в остальных случаях действует стандартный верификатор OkHttp.
 
-Открытый трафик запрещён глобально (`res/xml/network_security_config.xml`: `cleartextTrafficPermitted="false"`, доверие только системным сертификатам в `base-config`). Поэтому Exchange (EAS через OkHttp) работает только по HTTPS: экран настройки не предлагает HTTP для Exchange-аккаунтов и принудительно ставит `useSSL=true` при сохранении. IMAP/POP3 идут через JavaMail, а не через `HttpClientProvider`: в свойствах сессии заданы `ssl.trust=*` и `ssl.checkserveridentity=false`, то есть сертификат сервера не проверяется, а порт без SSL (143/110) остаётся доступным.
+Открытый трафик запрещён глобально (`res/xml/network_security_config.xml`: `cleartextTrafficPermitted="false"`, доверие только системным сертификатам в `base-config`). Поэтому Exchange (EAS через OkHttp) работает только по HTTPS: экран настройки не предлагает HTTP для Exchange-аккаунтов и принудительно ставит `useSSL=true` при сохранении. IMAP/POP3 идут через JavaMail. Свойства сессии собирает `shared/MailSessionProperties.forAccount`: на портах без SSL обязательны STARTTLS/STLS, имя сервера проверяется (кроме «принимать все» и закреплённого ключа), TLS 1.0 и 3DES разрешены последними (Exchange 2007 на 993/995). Доверие то же, что у EAS: `HttpClientProvider.mailSslContext` строит `SSLContext` с тем же TrustManager и клиентским сертификатом и передаётся объектом в `ssl.socketFactory`. `socketFactory.fallback=false` всегда: иначе при отказе нашей фабрики JavaMail молча подключался стандартной, и пин обходился любым сертификатом от УЦ устройства.
 
 `AccountRepository` кэширует `EasClient` по аккаунту (`EndpointClientCache`) и сбрасывает кэш при изменении сертификата или настроек сервера. Для ошибок уровня соединения поддержан переход на альтернативный URL Exchange с последующей пробой и возвратом на основной.
+
+### Загрузка вложений
+
+Вложение пишется потоком в файл, в память целиком не читается (`EasAttachmentService.downloadAttachmentToFile`, `EasClient.downloadMailAttachmentToFile`). Порядок:
+
+1. ItemOperations Fetch с `MS-ASAcceptMultiPart: T`: файл приходит отдельной двоичной частью ответа ([MS-ASCMD] MultiPartResponse), `EasMultipart.Reader` проверяет заголовок частей и копирует нужную в файл. Ответ читается и закрывается внутри `EasTransport.openEasCommand` в том же `withContext`, поэтому отмена корутины не оставляет открытого соединения.
+2. На EAS 12.x — GetAttachment методом POST (GET Exchange 2007 отвергает с 501, в 14.0+ команды нет). После Status 11 не пробуется: лимит сервера общий.
+3. EWS: письмо находится по Message-ID или теме, папке и дате (`EwsMailLocator`), вложение — по имени, при дублях по Content-ID (`EwsAttachments.match`; размер не используется — в EWS 2007 нет `t:Size`). `EwsClient.executeStreaming` (Basic, затем NTLM) отдаёт поток в `EwsAttachmentContent`, который декодирует base64 на лету. Обрыв внутри `Content` — ошибка, `<t:Content/>` — пустой файл.
+
+Ошибки — коды `AttachmentErrors` (TOO_LARGE, NOT_FOUND, NO_SPACE, TOO_LARGE_FOR_MEMORY); сеть, 401, 403 и нехватка места повторов не вызывают. Экран письма пишет во временный `att_*.part` и переименовывает после успеха, при отмене файл удаляется. «Сохранить»: на Android 10+ `DownloadsSaver` (MediaStore, `IS_PENDING`), на 8–9 системный диалог SAF; при ошибке созданный пустой документ удаляется. Вложение в память (`downloadAttachment`) ограничено 16 МБ.
 
 ### Отображение тела письма (WebView)
 
@@ -508,7 +519,19 @@ HTML тел писем очищается перед загрузкой в `WebV
 
 Пароли хранит `data/security/PasswordStorage` через `EncryptedSharedPreferences` (ключи AES256-SIV, значения AES256-GCM, мастер-ключ в Android Keystore), которое создаёт `EncryptedStoreProvider`. Если Keystore недоступен или повреждён, провайдер переключается на `ObfuscatedSharedPreferences`: значения XOR-ятся с ключом, выведенным PBKDF2-HMAC-SHA256 (10 000 итераций, статическая соль) из `ANDROID_ID`. Это обфускация, а не шифрование. `SecurityTelemetry` пишет журнал деградации (это не текущий бэкенд). Живой бэкенд — `PasswordStorage.isUsingInsecureStorage()` и `AppLockManager.isUsingInsecureStorage()`. Один Toast на языке `AppLanguageCode` (кэш читается в `Application` до `AppLockManager.init`). Если шифрование упало, в «Безопасности» есть переключатель fail-closed (по умолчанию выкл.): не писать новые пароли ящиков и пароль блокировки в обфускацию. Новый ящик при отказе записи откатывается (`FAIL_CLOSED`). Массивы символов паролей обнуляются (`fill('\u0000')`) после использования в `HttpClientProvider`.
 
-Пароль блокировки приложения (`AppLockManager`) хранится только как хеш PBKDF2-HMAC-SHA256 (600 000 итераций, случайная соль 16 байт, формат `v1:iterations:b64salt:b64hash`, сравнение за постоянное время) в том же `EncryptedStoreProvider`. `setPassword` уважает fail-closed. Разблокировка отпечатком использует `BiometricPrompt` (`BIOMETRIC_WEAK`), поэтому `MainActivity` наследует `FragmentActivity`. Настройки: корень `SettingsScreen` (карточки `SettingsGroup` / `SettingsHubRow`), разделы почты, уведомлений, персонализации, безопасности, «О приложении» (`SettingsScrollScaffold` с `footer` для пасхалки, не `Modifier.weight` внутри `verticalScroll`).
+Пароль блокировки приложения (`AppLockManager`) хранится только как хеш PBKDF2-HMAC-SHA256 (600 000 итераций, случайная соль 16 байт, формат `v1:iterations:b64salt:b64hash`, сравнение за постоянное время) в том же `EncryptedStoreProvider`. `setPassword` уважает fail-closed. Разблокировка отпечатком использует `BiometricPrompt` (`BIOMETRIC_WEAK`), поэтому `MainActivity` наследует `FragmentActivity`.
+
+Защита от перебора (`AppLockManager.attempt`): 5 попыток, затем паузы 30 с, 1 мин, 5 мин, 15 мин. Попытка записывается `commit()` до PBKDF2, пауза отсчитывается по `elapsedRealtime` с номером загрузки (`Settings.Global.BOOT_COUNT`): после перезагрузки начинается заново. Успешный вход паролем или отпечатком, установка и удаление пароля сбрасывают счётчик. Тот же счётчик у диалогов смены и отключения пароля.
+
+Приватность при включённой блокировке:
+
+- `LockWindowPolicy`: на API 33+ `setRecentsScreenshotEnabled(false)` (в «Недавних» нет снимка, скриншоты в приложении остаются), FLAG_SECURE только на экране блокировки; на API 26–32 FLAG_SECURE всё время, пока блокировка включена.
+- `LockPrivacy`: виджет без писем, названий событий и задач; переключение блокировки обновляет виджет.
+- `NotificationPrivacy.apply`: все уведомления с содержимым — VISIBILITY_PRIVATE с publicVersion без содержимого (на экране блокировки содержимое покажется, только если это разрешено в настройках телефона). При включённой блокировке и полное уведомление нейтральное, а `hideActiveContent` перевыпускает уже показанные.
+
+### Интерфейс настроек
+
+Настройки в стиле HyperOS (`SettingsScaffold.kt`): `SettingsLargeTopBar` (`LargeTopAppBar` + `exitUntilCollapsedScrollBehavior` на градиенте темы), карточки `SettingsGroup` без разделителей, `SettingsSectionTitle`, `SettingsIconTile` (одна форма), `SettingsNavRow` со значением справа. Выбор из списка — `SettingsChoiceRow<T>`: до 5 вариантов `DropdownMenu` у строки, больше — `SettingsSheet` (`ModalBottomSheet`); внутри листа всегда выпадающий список (`LocalInSettingsSheet`). Токены (`SettingsTokens`) и схема без dynamic color (`appColorScheme`) проверены на контраст тестом `AppColorSchemeContrastTest`. «О приложении» — `SettingsScrollScaffold` с `footer` для пасхалки (не `Modifier.weight` внутри `verticalScroll`).
 
 ---
 
@@ -581,10 +604,16 @@ UI читает Room/Flow, сетевые операции обновляют л
 - Операции с папками сериализуются по аккаунту (`FolderSyncService`) для защиты состояния SyncKey.
 - EAS Sync-запросы сериализуются по папкам (`FolderSyncGate`); оптимистичные записи флагов отслеживает `FlagWriteTracker` (порядок блокировок: шлюз папки, затем трекер).
 - Репозитории календаря, задач и заметок используют блокировки синхронизации по аккаунту; удаление, восстановление, окончательное удаление и очистка корзины календаря берут ту же блокировку, что и синхронизация календаря.
+- EWS-дополнение исключений серий считается от снимка до сетевого запроса и записывается, только если исключения серии с тех пор не менялись (`CalendarRepository.supplementToWrite`, PIM-28). Правка одного вхождения (`updateSingleOccurrence`, при занятой блокировке идёт без неё) сливается со свежей строкой внутри транзакции.
 - `EasTransport` выполняет Provision под `provisionMutex`; NTLM-рукопожатие `EwsClient` идёт под `ntlmLock`.
 - Показ уведомлений использует общий мьютекс для путей Push и воркеров (`NotificationHelper.notificationMutex`).
 - Отложенная отправка защищена блокировкой на каталог письма (`ScheduledSend.lock`): будильник, страховка и отмена не отправят письмо дважды.
 - Обновления Glance-виджета сериализуются через `widgetUpdateMutex`.
+
+### Тактильный отклик
+
+`ui/utils/AppHaptics` — один экземпляр на процесс поверх `Vibrator` (`VibratorManager` на API 31+): `tick()` при отметке строки и смене строки при протягивании, `confirm()` при входе в выделение долгим нажатием и начале перетаскивания вложения. API 29+ — `EFFECT_TICK`/`EFFECT_CLICK`, 26–28 — короткий one-shot, на 33+ с `USAGE_TOUCH`. Compose `HapticFeedbackType` не используется: на части прошивок (Samsung, Xiaomi) он молчит. Выключен системный виброотклик или нет вибратора — тишина. Повторный `confirm()` в пределах 150 мс гасится: долгое нажатие ловят и строка (`combinedClickable`), и drag-выделение списка (`rememberDragSelectModifier`).
+
 
 ### Сохранение состояния UI при смене конфигурации
 
@@ -664,7 +693,7 @@ viewModelScope.launch {
 .\gradlew.bat assembleRelease
 ```
 
-Unit-тесты запускаются командой `./gradlew testDebugUnitTest` (она же выполняется в CI, `.github/workflows/ci.yml`; в Windows есть `run-tests.bat`). Покрытие считает Kover.
+Unit-тесты запускаются командой `./gradlew testDebugUnitTest` (она же выполняется в CI, `.github/workflows/ci.yml`). Покрытие считает Kover.
 
 | Каталог | Содержимое |
 |---------|------------|

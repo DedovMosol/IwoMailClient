@@ -96,6 +96,29 @@ class AppHapticsTest {
     }
 
     @Test
+    fun `two confirms of one long press vibrate once, a later press vibrates again`() {
+        var clock = 1_000L
+        var played = 0
+        val haptics = AppHaptics(
+            hasVibrator = true,
+            systemEnabled = { true },
+            sdk = 34,
+            playEffect = { played++ },
+            now = { clock }
+        )
+        haptics.confirm()
+        clock += 40 // drag-выделение и combinedClickable в одном жесте
+        haptics.confirm()
+        assertThat(played).isEqualTo(1)
+        clock += AppHaptics.CONFIRM_DEDUP_MS
+        haptics.confirm()
+        assertThat(played).isEqualTo(2)
+        // Тики при протягивании не гасятся
+        haptics.tick(); haptics.tick()
+        assertThat(played).isEqualTo(4)
+    }
+
+    @Test
     fun `player exception is swallowed`() {
         val haptics = AppHaptics(
             hasVibrator = true,

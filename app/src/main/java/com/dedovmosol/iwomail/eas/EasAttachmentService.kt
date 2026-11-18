@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.eas
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.*
@@ -26,7 +27,9 @@ class EasAttachmentService internal constructor(
     class AttachmentServiceDependencies(
         val executeRequest: suspend (Request) -> Response,
         /** Команда EAS с ответом-потоком ([EasTransport.openEasCommand]). */
-        val openEasCommand: suspend (command: String, xml: String, headers: Map<String, String>) -> EasResult<Response>,
+        val openEasCommand: suspend (
+            command: String, xml: String, headers: Map<String, String>, read: (Response) -> EasResult<Unit>
+        ) -> EasResult<Unit>,
         val parseWbxml: (ByteArray) -> String,
         val buildUrl: (String) -> String,
         val getAuthHeader: () -> String,
@@ -329,50 +332,50 @@ class EasAttachmentService internal constructor(
         (deps.getEasVersion().substringBefore('.').toIntOrNull() ?: 12) < 14
 
     private suspend fun itemOperationsFetch(xml: String, open: () -> java.io.OutputStream): EasResult<Unit> {
-        val opened = deps.openEasCommand("ItemOperations", xml, mapOf("MS-ASAcceptMultiPart" to "T"))
-        val response = when (opened) {
-            is EasResult.Success -> opened.data
-            is EasResult.Error -> return opened
-        }
-        return withContext(Dispatchers.IO) {
-            val job = coroutineContext[kotlinx.coroutines.Job]
+        val job = currentCoroutineContext()[kotlinx.coroutines.Job]
+        return deps.openEasCommand("ItemOperations", xml, mapOf("MS-ASAcceptMultiPart" to "T")) { resp ->
             try {
-                response.use { resp ->
-                    httpError(resp.code)?.let { return@withContext EasResult.Error(it) }
-                    val body = resp.body ?: return@withContext EasResult.Error(NOT_FOUND)
-                    val contentType = resp.header("Content-Type").orEmpty()
-                    if (contentType.contains("multipart", ignoreCase = true)) {
-                        val reader = EasMultipart.Reader(body.byteStream())
-                        android.util.Log.d(TAG, "multipart parts: ${reader.readHeader()}")
-                        val reply = EasMultipart.fetchReply(deps.parseWbxml(reader.readFirstPart()))
-                        statusError(reply)?.let { return@withContext EasResult.Error(it) }
-                        val part = reply.part ?: return@withContext EasResult.Error(NOT_FOUND)
-                        val written = open().use { out -> reader.copyPart(part, out) { job?.ensureActive() } }
-                        if (written > 0) EasResult.Success(Unit) else EasResult.Error(NOT_FOUND)
-                    } else {
-                        // Сервер не поддержал multipart: base64 внутри WBXML. Ответ читается с пределом — длина
-                        // может быть неизвестна (chunked); больше предела — к EWS, там поток.
-                        val raw = BoundedBuffer(MAX_INLINE_RESPONSE_BYTES)
-                        try {
-                            copy(body.byteStream(), raw) { job?.ensureActive() }
-                        } catch (_: BoundedBuffer.Overflow) {
-                            return@withContext EasResult.Error(TOO_LARGE)
-                        }
-                        val reply = deps.parseWbxml(raw.toByteArray())
-                        statusError(EasMultipart.fetchReply(reply))?.let { return@withContext EasResult.Error(it) }
-                        val base64 = (EasPatterns.ITEM_OPS_DATA.find(reply) ?: EasPatterns.ITEM_OPS_PROPS_DATA.find(reply))
-                            ?.groupValues?.get(1)?.trim()
-                        if (base64.isNullOrEmpty()) return@withContext EasResult.Error(NOT_FOUND)
-                        val data = java.util.Base64.getMimeDecoder().decode(base64)
-                        open().use { it.write(data) }
-                        if (data.isNotEmpty()) EasResult.Success(Unit) else EasResult.Error(NOT_FOUND)
-                    }
-                }
+                readFetchResponse(resp, open) { job?.ensureActive() }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(downloadError(e))
             }
         }
+    }
+
+    /** Разбор ответа Fetch; [checkActive] бросает при отмене (ответ закроет вызывающий через use). */
+    private fun readFetchResponse(resp: Response, open: () -> java.io.OutputStream, checkActive: () -> Unit): EasResult<Unit> {
+        httpError(resp.code)?.let { return EasResult.Error(it) }
+        val body = resp.body ?: return EasResult.Error(NOT_FOUND)
+        val contentType = resp.header("Content-Type").orEmpty()
+        if (contentType.contains("multipart", ignoreCase = true)) {
+            val reader = EasMultipart.Reader(body.byteStream())
+            android.util.Log.d(TAG, "multipart parts: ${reader.readHeader()}")
+            val reply = EasMultipart.fetchReply(deps.parseWbxml(reader.readFirstPart()))
+            statusError(reply)?.let { return EasResult.Error(it) }
+            val part = reply.part ?: return EasResult.Error(NOT_FOUND)
+            val written = open().use { out -> reader.copyPart(part, out, checkActive) }
+            // Exchange 2007 на раскодированную ссылку отвечает «пустым Success»: ноль байт по EAS — не файл.
+            // Настоящее пустое вложение подтверждает EWS (вложение найдено по Id, Content пустой)
+            return if (written > 0) EasResult.Success(Unit) else EasResult.Error(NOT_FOUND)
+        }
+        // Сервер не поддержал multipart: base64 внутри WBXML. Ответ читается с пределом — длина может быть
+        // неизвестна (chunked); больше предела — к EWS, там поток.
+        val raw = BoundedBuffer(MAX_INLINE_RESPONSE_BYTES)
+        try {
+            copy(body.byteStream(), raw, checkActive)
+        } catch (_: BoundedBuffer.Overflow) {
+            return EasResult.Error(TOO_LARGE)
+        }
+        val reply = deps.parseWbxml(raw.toByteArray())
+        statusError(EasMultipart.fetchReply(reply))?.let { return EasResult.Error(it) }
+        val base64 = (EasPatterns.ITEM_OPS_DATA.find(reply) ?: EasPatterns.ITEM_OPS_PROPS_DATA.find(reply))
+            ?.groupValues?.get(1)?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return EasResult.Error(NOT_FOUND)
+        val data = java.util.Base64.getMimeDecoder().decode(base64)
+        open().use { it.write(data) }
+        return if (data.isNotEmpty()) EasResult.Success(Unit) else EasResult.Error(NOT_FOUND)
     }
 
     /** null — Fetch успешен. Status 11 «слишком большой» — к EWS; 6/15 и прочие — следующая попытка. */

@@ -282,7 +282,7 @@ class EasClient(
     val attachmentService: EasAttachmentService by lazy {
         EasAttachmentService(EasAttachmentService.AttachmentServiceDependencies(
             executeRequest = { request -> transport.executeRequest(request) },
-            openEasCommand = { command, xml, headers -> transport.openEasCommand(command, xml, headers) },
+            openEasCommand = { command, xml, headers, read -> transport.openEasCommand(command, xml, headers, read) },
             parseWbxml = { bytes -> wbxmlParser.parse(bytes) },
             buildUrl = { command -> transport.buildUrl(command) },
             getAuthHeader = { transport.getAuthHeader() },
@@ -1299,8 +1299,8 @@ class EasClient(
                 val result: EasResult<java.io.File> = when (streamed) {
                     is EasResult.Error -> EasResult.Error(streamed.message)
                     is EasResult.Success -> when (val r = streamed.data) {
-                        is EwsAttachmentContent.Result.Written ->
-                            if (r.bytes > 0) EasResult.Success(destFile) else EasResult.Error(AttachmentErrors.NOT_FOUND)
+                        // Вложение найдено по Id: ноль байт — пустой файл, а не «не найдено»
+                        is EwsAttachmentContent.Result.Written -> EasResult.Success(destFile)
                         // ErrorItemNotFound, ErrorInvalidIdMalformed (проверено на 2007) — вложения нет
                         is EwsAttachmentContent.Result.Error -> EasResult.Error(
                             if (r.code.startsWith("ErrorItemNotFound") || r.code.startsWith("ErrorInvalidId")) AttachmentErrors.NOT_FOUND

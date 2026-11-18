@@ -501,7 +501,15 @@ object HttpClientProvider {
             if (e is IllegalArgumentException && e.message == "CLIENT_CERT_LOAD_FAILED") {
                 throw e
             }
-            android.util.Log.e("HttpClientProvider", "SSL setup error: ${e.message}")
+            android.util.Log.e("HttpClientProvider", "SSL setup error: ${e.javaClass.simpleName}")
+            // Fail-closed: для закреплённого ключа и импортированного сертификата имя хоста выше уже ослаблено
+            // или подменено — системное доверие с таким верификатором приняло бы любой сертификат от УЦ на
+            // любое имя. Продолжать можно только там, где проверка и так выключена пользователем.
+            // SYSTEM продолжает безопасно: верификатор имени стандартный, доверие — системное.
+            val mode = trustModeOf(acceptAllCerts, certificatePath, pinnedCertInfo)
+            if (mode == TrustMode.PINNED_KEY || mode == TrustMode.IMPORTED) {
+                throw java.security.GeneralSecurityException("SSL setup failed", e)
+            }
         }
         
         return builder.build()
@@ -701,7 +709,9 @@ object HttpClientProvider {
         /** SHA-1 сертификата: так Exchange и IIS показывают отпечаток (Get-ExchangeCertificate Thumbprint). */
         val sha1: String,
         val dnsNames: List<String>,
-        val selfSigned: Boolean
+        val selfSigned: Boolean,
+        /** Что скажет обычная проверка приложения (центры сертификации устройства и имя сервера). */
+        val systemTrust: SystemTrust = SystemTrust.NOT_TRUSTED
     ) {
         fun isValidAt(timeMs: Long): Boolean = timeMs in info.validFrom..info.validTo
 
@@ -731,16 +741,41 @@ object HttpClientProvider {
     enum class StartTls { NONE, IMAP, POP3 }
 
     /**
+     * Вердикт системной проверки для сертификата из [fetchServerCertificate]. TRUSTED — закреплять ключ не нужно:
+     * системная проверка строже (имя, срок, УЦ) и переживает смену ключа при продлении.
+     */
+    enum class SystemTrust { TRUSTED, NAME_MISMATCH, NOT_TRUSTED }
+
+    /**
+     * TRUSTED только при SAN с этим именем: системный режим проверяет имя стандартным верификатором OkHttp, а он
+     * не смотрит в CN (Rfc6125HostnameVerifier смотрит — для импортированных сертификатов Exchange 2007).
+     */
+    internal fun systemTrustOf(chain: Array<X509Certificate>, authType: String, host: String, trustManager: X509TrustManager): SystemTrust {
+        val leaf = chain.firstOrNull() ?: return SystemTrust.NOT_TRUSTED
+        try {
+            trustManager.checkServerTrusted(chain, authType)
+        } catch (_: Exception) {
+            return SystemTrust.NOT_TRUSTED
+        }
+        val hasSan = try { !leaf.subjectAlternativeNames.isNullOrEmpty() } catch (_: Exception) { false }
+        return if (hasSan && Rfc6125HostnameVerifier.matchesHostname(host, leaf)) SystemTrust.TRUSTED else SystemTrust.NAME_MISMATCH
+    }
+
+    /**
      * Рукопожатие TLS только ради сертификата сервера: учётные данные не отправляются, HTTP-запроса нет,
      * сертификат ничем не проверяется — его проверяет пользователь по отпечатку. Протоколы и шифры — как у
      * почтового клиента (TLS 1.0 и 3DES для Exchange 2007). Блокирующий вызов — с IO-потока.
      */
     @androidx.annotation.WorkerThread
     fun fetchServerCertificate(host: String, port: Int, startTls: StartTls = StartTls.NONE, timeoutMs: Int = 15_000): ServerCertificate {
-        var seen: X509Certificate? = null
+        var seenChain: Array<X509Certificate>? = null
+        var seenAuthType = "RSA"
         val capture = object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) { seen = chain.firstOrNull() }
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+                seenChain = chain
+                seenAuthType = authType
+            }
             override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
         }
         val context = createSslContext().apply { init(null, arrayOf(capture), SecureRandom()) }
@@ -749,10 +784,18 @@ object HttpClientProvider {
             plain.soTimeout = timeoutMs
             if (startTls != StartTls.NONE) negotiateStartTls(plain, startTls)
             (TlsSocketFactory(context.socketFactory).createSocket(plain, host, port, true) as SSLSocket).use { tls ->
-                tls.startHandshake()
+                try {
+                    tls.startHandshake()
+                } catch (e: javax.net.ssl.SSLException) {
+                    // IIS с «Требовать клиентский сертификат» обрывает рукопожатие уже после своего сертификата:
+                    // сертификат получен — его и показать
+                    if (seenChain.isNullOrEmpty()) throw e
+                }
             }
         }
-        return describeCertificate(seen ?: throw java.security.cert.CertificateException("Server sent no certificate"))
+        val chain = seenChain?.takeIf { it.isNotEmpty() }
+            ?: throw java.security.cert.CertificateException("Server sent no certificate")
+        return describeCertificate(chain[0]).copy(systemTrust = systemTrustOf(chain, seenAuthType, host, createSystemTrustManager()))
     }
 
     /** Приветствие и STARTTLS/STLS до рукопожатия (RFC 3501 §6.2.1, RFC 2595 §4); отказ сервера — IOException. */

@@ -40,6 +40,7 @@ fun AttachmentsSection(
             modifier = Modifier.padding(bottom = 8.dp)
         )
 
+        val haptics = com.dedovmosol.iwomail.ui.utils.rememberAppHaptics()
         attachments.forEach { attachment ->
             val isDownloading = downloadingId == attachment.id
             var showSaveMenu by remember { mutableStateOf(false) }
@@ -52,7 +53,8 @@ fun AttachmentsSection(
                         .combinedClickable(
                             enabled = !isDownloading,
                             onClick = { onAttachmentClick(attachment) },
-                            onLongClick = { onDragAttachment(attachment) }
+                            // Начало перетаскивания — тот же отклик, что у долгого нажатия в списках
+                            onLongClick = { haptics.confirm(); onDragAttachment(attachment) }
                         )
                 ) {
                     Row(

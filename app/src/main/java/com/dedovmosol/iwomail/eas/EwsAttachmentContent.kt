@@ -37,7 +37,9 @@ internal object EwsAttachmentContent {
             when {
                 name == "faultstring" -> return Result.Error(source.readText().ifBlank { "SOAP Fault" })
                 name == "ResponseCode" && error -> return Result.Error(source.readText().ifBlank { "Error" })
-                name == "Content" && !error && !tag.endsWith("/") -> return Result.Written(decode(source, out, onChunk))
+                // `<t:Content/>` — вложение найдено, но пустое
+                name == "Content" && !error && tag.endsWith("/") -> return Result.Written(0)
+                name == "Content" && !error -> return Result.Written(decode(source, out, onChunk))
             }
         }
     }
@@ -112,7 +114,8 @@ internal object EwsAttachmentContent {
         /** Байты до [delim] (сам он не отдаётся; дальше — конец). */
         fun readUntil(delim: Byte, b: ByteArray, off: Int, len: Int): Int {
             if (stopped || len == 0) return if (stopped) -1 else 0
-            if (!fill()) { stopped = true; return -1 }
+            // Конец потока до `</Content>` — ответ оборван: недописанный файл не должен сойти за целый
+            if (!fill()) throw java.io.EOFException("EWS GetAttachment: response ended inside Content")
             var n = 0
             while (n < len && pos < lim) {
                 val c = buf[pos]

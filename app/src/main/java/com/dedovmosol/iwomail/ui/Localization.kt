@@ -1460,10 +1460,54 @@ object Strings {
     val certSelfSigned: String @Composable get() = if (isRussian()) "Самоподписанный" else "Self-signed"
     val certTrustAction: String @Composable get() = if (isRussian()) "Доверять" else "Trust"
     val certFetching: String @Composable get() = if (isRussian()) "Получаем сертификат сервера…" else "Fetching the server certificate…"
-    val certTrustFromServer: String @Composable get() = if (isRussian()) "Доверять сертификату сервера" else "Trust the server certificate"
+    val certTrustFromServer: String @Composable get() = if (isRussian()) "Проверить сертификат сервера" else "Check the server certificate"
     val certTrustFromServerDesc: String @Composable get() = if (isRussian())
-        "Получить сертификат с сервера и закрепить его по отпечатку вместо «Принимать все сертификаты»"
-        else "Get the certificate from the server and pin it by fingerprint instead of “Accept all certificates”"
+        "Получить сертификат с сервера: если система ему доверяет — проверять системой, если нет — закрепить по отпечатку. Вместо «Принимать все сертификаты»"
+        else "Get the certificate from the server: if the system trusts it, let the system check it; if not, pin it by fingerprint. Replaces “Accept all certificates”"
+    val certSystemTrustDone: String @Composable get() = if (isRussian()) "Сертификат проверяет система" else "The system now checks the certificate"
+    val certVerifiedBySystem: String @Composable get() = if (isRussian())
+        "Сертификат проверяется системой: центры сертификации устройства и имя сервера. Действий не нужно."
+        else "The certificate is checked by the system: the device certificate authorities and the server name. No action needed."
+    val certSystemTrusted: String @Composable get() = if (isRussian())
+        "Система доверяет этому сертификату. Закреплять ключ не нужно: системная проверка строже и не сломается при продлении сертификата."
+        else "The system trusts this certificate. There is no need to pin the key: the system check is stricter and survives certificate renewal."
+    val certNameMismatch: String @Composable get() = if (isRussian())
+        "Центр сертификации известен системе, но имя сервера не совпадает с сертификатом."
+        else "The certificate authority is known to the system, but the server name does not match the certificate."
+    val certUseSystemAction: String @Composable get() = if (isRussian()) "Проверять системой" else "Use system check"
+
+    // SET-14: карточка «Защита от подмены сервера»
+    val certProtectionTitle: String @Composable get() = if (isRussian()) "Защита от подмены сервера" else "Server impersonation protection"
+    val certProtectionOn: String @Composable get() = if (isRussian()) "Защита включена" else "Protection on"
+    val certProtectionOff: String @Composable get() = if (isRussian()) "Защита выключена" else "Protection off"
+    val certProtectionOffDesc: String @Composable get() = if (isRussian())
+        "Соединение примет и подменённый сертификат, если его подпишет центр из этого файла."
+        else "The connection will also accept a substituted certificate signed by the authority in this file."
+    val certEnableProtection: String @Composable get() = if (isRussian()) "Включить защиту" else "Turn on protection"
+    val certPinningExplain: String @Composable get() = if (isRussian())
+        "Приложение запомнит открытый ключ сервера. Продление сертификата с тем же ключом проходит без действий, смена ключа — с предупреждением."
+        else "The app remembers the server public key. A renewal with the same key needs no action; a key change shows a warning."
+    val certNewDetected: String @Composable get() = if (isRussian()) "Сервер предъявил другой сертификат" else "The server presented a different certificate"
+    val certServer: String @Composable get() = if (isRussian()) "Сервер" else "Server"
+    val certBackupServer: String @Composable get() = if (isRussian()) "Резервный сервер" else "Backup server"
+    val certOld: String @Composable get() = if (isRussian()) "Прежний сертификат" else "Previous certificate"
+    val certNew: String @Composable get() = if (isRussian()) "Новый сертификат" else "New certificate"
+    val certChangeAdvice: String @Composable get() = if (isRussian())
+        "Это может быть плановая замена или перехват соединения. Уточните у администратора сервера, прежде чем принимать."
+        else "This may be a planned replacement or an intercepted connection. Check with the server administrator before accepting."
+    val certFirstBackupNote: String @Composable get() = if (isRussian())
+        "Первое подключение к резервному серверу: у него свой сертификат. «Принять» сохранит его отдельно, сертификат основного сервера не изменится."
+        else "First connection to the backup server: it has its own certificate. Accept stores it separately; the primary server certificate stays unchanged."
+    val certDualUrlNote: String @Composable get() = if (isRussian())
+        "Сертификаты основного и резервного серверов хранятся отдельно: принятие одного не меняет другой."
+        else "Primary and backup server certificates are stored separately: accepting one does not change the other."
+    val certAccept: String @Composable get() = if (isRussian()) "Принять" else "Accept"
+    val certDisable: String @Composable get() = if (isRussian()) "Отключить" else "Disable"
+    val certUpdate: String @Composable get() = if (isRussian()) "Обновить" else "Update"
+    val certOrganization: String @Composable get() = if (isRussian()) "Организация" else "Organization"
+    val certIssuedOn: String @Composable get() = if (isRussian()) "Выдан" else "Issued"
+    val certExpires: String @Composable get() = if (isRussian()) "Истекает" else "Expires"
+    val certUnknown: String @Composable get() = if (isRussian()) "неизвестно" else "unknown"
     val certTrustDone: String @Composable get() = if (isRussian()) "Сертификат закреплён: принимается только он" else "Certificate pinned: only this one is accepted"
     val certAcceptAllWarning: String @Composable get() = if (isRussian())
         "Включено «Принимать все сертификаты»: соединение шифруется, но подлинность сервера не проверяется."
@@ -2130,6 +2174,14 @@ object NotificationStrings {
         return if (isRussian) "Неверный формат файла" else "Invalid file format"
     }
 
+    fun getCertProtectionEnabled(isRussian: Boolean): String =
+        if (isRussian) "Защита включена" else "Protection on"
+    fun getCertProtectionError(raw: String, isRussian: Boolean): String =
+        (if (isRussian) "Защита не включена: " else "Protection not turned on: ") + localizeError(raw, isRussian)
+    fun getCertLoadedProtected(isRussian: Boolean): String =
+        if (isRussian) "Сертификат загружен, защита включена" else "Certificate loaded, protection on"
+    fun getCertLoadedUnprotected(raw: String, isRussian: Boolean): String =
+        (if (isRussian) "Сертификат загружен, но защита не включена: " else "Certificate loaded, but protection is off: ") + localizeError(raw, isRussian)
     fun getCertificateUpdated(isRussian: Boolean): String {
         return if (isRussian) "Сертификат обновлён" else "Certificate updated"
     }

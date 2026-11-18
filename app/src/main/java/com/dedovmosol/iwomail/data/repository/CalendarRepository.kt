@@ -38,6 +38,18 @@ class CalendarRepository(private val context: Context) {
         private const val MEETING_STATUS_RECEIVED = 2
 
         /**
+         * PIM-28: что записать по итогам EWS-дополнения исключений (null — ничего). Записывается, только если
+         * исключения серии с момента снимка не менялись ([current] == [snapshot]) и дополнение их действительно
+         * меняет. Иначе снимок устарел (пользователь изменил или удалил вхождение) — серия пропускается.
+         */
+        internal fun supplementToWrite(current: String, snapshot: String?, supplemented: String?): String? = when {
+            supplemented == null || snapshot == null -> null
+            current != snapshot -> null
+            current == supplemented -> null
+            else -> supplemented
+        }
+
+        /**
          * Участники из attendees-JSON по порядку, email обрезан. Записи без email пропускаются,
          * битый JSON — пустой список: одна плохая запись не обнуляет остальных.
          */
@@ -737,14 +749,16 @@ class CalendarRepository(private val context: Context) {
                             attachments = occurrenceAttachmentsJson,
                             attachmentsOverridden = attachmentsOverridden
                         )
-                        val updatedExceptionsJson = RecurrenceHelper.mergeException(
-                            masterEvent.exceptions, newException
-                        )
-                        val updatedEvent = masterEvent.copy(
-                            exceptions = updatedExceptionsJson,
-                            lastModified = System.currentTimeMillis()
-                        )
-                        calendarEventDao.update(updatedEvent)
+                        // PIM-28: сетевой запрос шёл без мьютекса синхронизации (tryLock не удался) — за это время
+                        // синхронизация могла обновить строку. Слияние — в свежую строку внутри транзакции, иначе
+                        // копия masterEvent, прочитанная до запроса, затёрла бы чужие исключения и поля серии
+                        val updatedEvent = database.withTransaction {
+                            val fresh = calendarEventDao.getEvent(masterEvent.id) ?: masterEvent
+                            fresh.copy(
+                                exceptions = RecurrenceHelper.mergeException(fresh.exceptions, newException),
+                                lastModified = System.currentTimeMillis()
+                            ).also { calendarEventDao.update(it) }
+                        }
 
                         kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                             kotlinx.coroutines.delay(2000)
@@ -1638,14 +1652,20 @@ class CalendarRepository(private val context: Context) {
                                 if (updatedExceptions.isNotEmpty()) {
                                     android.util.Log.d("CalendarRepository",
                                         "syncCalendar: EWS supplement updated exceptions for ${updatedExceptions.size} recurring events")
+                                    // PIM-28: дополнение посчитано от снимка до сетевого запроса. Если за это время
+                                    // пользователь изменил или удалил вхождение, запись снимка затёрла бы правку —
+                                    // такая серия пропускается и дополнится при следующей синхронизации.
+                                    val snapshot = recurringInfoListForSupplement.associate { it.uid to it.currentExceptions }
                                     database.withTransaction {
                                         val localRecurring = calendarEventDao.getEventsByAccountList(accountId)
                                             .filter { it.isRecurring && it.uid in updatedExceptions.keys && !it.isDeleted }
                                         for (event in localRecurring) {
-                                            val newExceptions = updatedExceptions[event.uid] ?: continue
-                                            if (event.exceptions != newExceptions) {
-                                                calendarEventDao.insert(event.copy(exceptions = newExceptions))
-                                            }
+                                            val newExceptions = supplementToWrite(
+                                                current = event.exceptions,
+                                                snapshot = snapshot[event.uid],
+                                                supplemented = updatedExceptions[event.uid]
+                                            ) ?: continue
+                                            calendarEventDao.insert(event.copy(exceptions = newExceptions))
                                         }
                                     }
                                 }
@@ -1668,6 +1688,7 @@ class CalendarRepository(private val context: Context) {
     }
 
     // === Утилиты ===
+
 
     /**
      * Выполняет операцию с одной повторной попыткой при ошибке.

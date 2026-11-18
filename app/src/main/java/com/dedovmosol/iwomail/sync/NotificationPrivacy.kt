@@ -47,6 +47,49 @@ object NotificationPrivacy {
         return builder
     }
 
+    /**
+     * Блокировку только что включили: уже показанные уведомления перевыпускаются без содержимого (иначе
+     * отправитель и тема остались бы в шторке разблокированного телефона). Свои уведомления с содержимым — те,
+     * у которых есть publicVersion (её ставит [apply]); заголовок и текст берутся из неё. Без звука повторно.
+     */
+    fun hideActiveContent(context: Context) {
+        val nm = context.getSystemService(android.app.NotificationManager::class.java) ?: return
+        val active = try { nm.activeNotifications } catch (_: Exception) { return }
+        for (sbn in active) {
+            val notification = sbn.notification ?: continue
+            val public = notification.publicVersion ?: continue
+            try {
+                val builder = android.app.Notification.Builder.recoverBuilder(context, notification)
+                    .setContentTitle(public.extras.getCharSequence(android.app.Notification.EXTRA_TITLE))
+                    .setContentText(public.extras.getCharSequence(android.app.Notification.EXTRA_TEXT))
+                    .setSubText(null)
+                    .setStyle(null)
+                    .setOnlyAlertOnce(true)
+                // setStyle(null) не стирает данные стиля из extras (build() сливает их с исходными): их читают
+                // слушатели уведомлений и часы — убираются из готового уведомления
+                val rebuilt = builder.build()
+                CONTENT_EXTRAS.forEach { rebuilt.extras.remove(it) }
+                nm.notify(sbn.tag, sbn.id, rebuilt)
+            } catch (e: Exception) {
+                // Не удалось перевыпустить (OEM) — убрать: содержимое не должно остаться видимым
+                android.util.Log.w("NotificationPrivacy", "re-post failed: ${e.javaClass.simpleName}")
+                nm.cancel(sbn.tag, sbn.id)
+            }
+        }
+    }
+
+    private val CONTENT_EXTRAS = listOf(
+        android.app.Notification.EXTRA_BIG_TEXT,
+        android.app.Notification.EXTRA_TEMPLATE,
+        android.app.Notification.EXTRA_TEXT_LINES,
+        android.app.Notification.EXTRA_SUMMARY_TEXT,
+        android.app.Notification.EXTRA_INFO_TEXT,
+        android.app.Notification.EXTRA_SUB_TEXT,
+        android.app.Notification.EXTRA_TITLE_BIG,
+        // NotificationCompat кладёт имя класса стиля под этим ключом
+        "androidx.core.app.extra.COMPAT_TEMPLATE"
+    )
+
     /** Блокировка приложения включена и пароль задан — содержимое не показывается и в шторке. */
     fun isContentHidden(context: Context): Boolean = try {
         LockPrivacy.contentHiddenSync(SettingsRepository.getInstance(context.applicationContext))

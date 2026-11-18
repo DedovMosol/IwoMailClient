@@ -37,7 +37,8 @@ class AppColorSchemeContrastTest {
             check("$tag onSecondaryContainer/secondaryContainer", s.onSecondaryContainer, s.secondaryContainer, 4.5)
             check("$tag onTertiaryContainer/tertiaryContainer", s.onTertiaryContainer, s.tertiaryContainer, 4.5)
             check("$tag error/card", s.error, card, 4.5)
-            check("$tag primary/card (switch, radio)", s.primary, card, 3.0)
+            // primary — ещё и цвет текста кнопок (TextButton) и ссылок: норма текста
+            check("$tag primary/card (text buttons, links)", s.primary, card, 4.5)
             check("$tag card/page (group edge)", card, page, 1.05)
             val success = if (dark) SettingsTokens.SUCCESS_DARK else SettingsTokens.SUCCESS_LIGHT
             val warning = if (dark) SettingsTokens.WARNING_DARK else SettingsTokens.WARNING_LIGHT
@@ -47,10 +48,12 @@ class AppColorSchemeContrastTest {
     }
 
     @Test
-    fun `white glyph on the gradient tile is visible`() {
+    fun `white text on the gradient bar and buttons meets 4_5 to 1 (SET-08)`() {
+        // Свёрнутый заголовок панели 22 sp и текст ThemeButton — обычный текст: норма 4,5:1 по всему градиенту
         for (theme in AppColorTheme.entries) {
-            check("${theme.code} white/gradientStart", Color.White, theme.gradientStart, 3.0)
-            check("${theme.code} white/gradientEnd", Color.White, theme.gradientEnd, 3.0)
+            check("${theme.code} white/gradientStart", Color.White, theme.gradientStart, 4.5)
+            check("${theme.code} white/gradientEnd", Color.White, theme.gradientEnd, 4.5)
+            check("${theme.code} white/primaryLight", Color.White, theme.primaryLight, 4.5)
         }
     }
 

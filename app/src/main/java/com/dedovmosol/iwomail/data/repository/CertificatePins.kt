@@ -62,6 +62,17 @@ internal object CertificatePins {
         certificatePinningFailCount = 0
     )
 
+    /** Без пина основного сервера: дальше сертификат проверяет система. */
+    fun withoutPrimaryPin(account: AccountEntity): AccountEntity = account.copy(
+        pinnedCertificateHash = null,
+        pinnedCertificateCN = null,
+        pinnedCertificateOrg = null,
+        pinnedCertificateValidFrom = null,
+        pinnedCertificateValidTo = null,
+        certificatePinningEnabled = false,
+        certificatePinningFailCount = 0
+    )
+
     private fun AccountEntity.primaryPin(): CertificateInfo? = pinnedCertificateHash?.let {
         CertificateInfo(
             hash = it,

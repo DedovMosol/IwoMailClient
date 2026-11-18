@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -116,6 +117,27 @@ class SettingsChoiceUiTest {
         rule.waitForIdle()
         assertThat(picked).containsExactly(15)
         rule.waitUntil(5_000) { rule.onAllNodes(hasText("How often to check mail")).fetchSemanticsNodes().isEmpty() }
+    }
+
+    @Test
+    fun `a long choice inside a sheet opens a dropdown, not a second sheet`() {
+        val colors = listOf("Blue", "Red", "Green", "Yellow", "Orange", "Pink", "Teal", "Gray")
+        val picked = mutableListOf<String>()
+        content {
+            SettingsSheet(title = "Daily themes", onDismiss = {}) {
+                SettingsChoiceRow(
+                    title = "Monday", options = colors, selected = "Blue",
+                    label = { it }, onSelect = { picked += it }
+                )
+            }
+        }
+        rule.onNodeWithText("Monday").performClick()
+        rule.waitForIdle()
+        // Лист один: его заголовок один раз, вариант выбирается из списка у строки
+        rule.onAllNodes(hasText("Daily themes")).assertCountEquals(1)
+        rule.onNodeWithText("Gray").performClick()
+        rule.waitForIdle()
+        assertThat(picked).containsExactly("Gray")
     }
 
     @Test

@@ -159,11 +159,11 @@ fun AccountSettingsScreen(
                     when (pinResult) {
                         is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                             account = accountRepo.getAccount(accountId)
-                            SafeToast.long(context, if (isRu) "Сертификат загружен, защита включена" else "Certificate loaded, protection enabled")
+                            SafeToast.long(context, NotificationStrings.getCertLoadedProtected(isRu))
                         }
                         is com.dedovmosol.iwomail.eas.EasResult.Error -> {
                             android.util.Log.w("AccountSettings", "Failed to auto-enable certificate pinning: ${pinResult.message}")
-                            SafeToast.long(context, if (isRu) "Сертификат загружен, но защита не включена: ${NotificationStrings.localizeError(pinResult.message, true)}" else "Certificate loaded, but protection not enabled: ${NotificationStrings.localizeError(pinResult.message, false)}")
+                            SafeToast.long(context, NotificationStrings.getCertLoadedUnprotected(pinResult.message, isRu))
                         }
                     }
                 } catch (e: Exception) {
@@ -722,7 +722,6 @@ fun AccountSettingsScreen(
                 CertificatePinningCard(
                     account = currentAccount,
                     accountRepo = accountRepo,
-                    isRu = isRu,
                     onAccountUpdated = { updatedAccount -> account = updatedAccount }
                 )
             }
@@ -747,13 +746,13 @@ fun AccountSettingsScreen(
 }
 
 /**
- * Card для отображения статуса Certificate Pinning и управления им
+ * Защита от подмены сервера: закрепление ключа сертификата и его состояние. Цвет плитки — состояние: смена
+ * сертификата — ошибка, ключ закреплён — успех, иначе — предупреждение.
  */
 @Composable
 fun CertificatePinningCard(
     account: AccountEntity,
     accountRepo: AccountRepository,
-    isRu: Boolean,
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
     var isLoading by remember { mutableStateOf(false) }
@@ -763,7 +762,6 @@ fun CertificatePinningCard(
     val certificateChanges by com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.changes.collectAsStateWithLifecycle()
     val certificateChange = certificateChanges[account.id]
 
-    // Состояние — цветом плитки: смена сертификата — ошибка, ключ закреплён — успех, иначе — предупреждение
     val statusColor = when {
         certificateChange != null -> MaterialTheme.colorScheme.error
         account.pinnedCertificateHash != null -> SettingsTokens.successColor
@@ -778,7 +776,6 @@ fun CertificatePinningCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Заголовок
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
@@ -795,24 +792,16 @@ fun CertificatePinningCard(
                     )
                 }
                 Spacer(Modifier.width(16.dp))
-                Text(
-                    text = if (isRu) "Защита от подмены сервера" else "Server impersonation protection",
-                    style = MaterialTheme.typography.titleSmall
-                )
+                Text(text = Strings.certProtectionTitle, style = MaterialTheme.typography.titleSmall)
             }
 
             Spacer(Modifier.height(12.dp))
 
-            // Без импортированного сертификата — доверие по отпечатку (ONB-08); смена закреплённого — предупреждение ниже
-            if (account.certificatePath == null && certificateChange == null) {
-                TrustByFingerprint(account = account, accountRepo = accountRepo, onAccountUpdated = onAccountUpdated)
-            } else if (certificateChange != null) {
-                // Предупреждение об изменении сертификата
-                CertificateChangeWarning(
+            when {
+                certificateChange != null -> CertificateChangeWarning(
                     certificateChange = certificateChange,
                     accountId = account.id,
                     accountRepo = accountRepo,
-                    isRu = isRu,
                     hasDualUrl = !account.alternateServerUrl.isNullOrBlank(),
                     isAlternate = com.dedovmosol.iwomail.data.repository.CertificatePins
                         .isAlternateEndpoint(account, certificateChange.hostname),
@@ -822,22 +811,18 @@ fun CertificatePinningCard(
                     canDisable = account.certificatePath != null,
                     onAccountUpdated = onAccountUpdated
                 )
-            } else if (account.pinnedCertificateHash != null) {
-                // Сертификат привязан - показываем информацию
-                CertificatePinnedInfo(
+                // Без импортированного сертификата — доверие по отпечатку (ONB-08)
+                account.certificatePath == null -> TrustByFingerprint(account, accountRepo, onAccountUpdated)
+                account.pinnedCertificateHash != null -> CertificatePinnedInfo(
                     account = account,
                     accountRepo = accountRepo,
-                    isRu = isRu,
                     isLoading = isLoading,
                     onLoadingChange = { isLoading = it },
                     onAccountUpdated = onAccountUpdated
                 )
-            } else {
-                // Защита отключена
-                CertificatePinningDisabled(
+                else -> CertificatePinningDisabled(
                     accountId = account.id,
                     accountRepo = accountRepo,
-                    isRu = isRu,
                     isLoading = isLoading,
                     onLoadingChange = { isLoading = it },
                     onAccountUpdated = onAccountUpdated
@@ -847,10 +832,22 @@ fun CertificatePinningCard(
     }
 }
 
+/** Строка «подпись: значение» в описании сертификата. */
+@Composable
+private fun CertLine(label: String, value: String, color: Color = Color.Unspecified, monospace: Boolean = false) {
+    Text(
+        "$label: $value",
+        style = MaterialTheme.typography.bodySmall,
+        color = color,
+        fontFamily = if (monospace) FontFamily.Monospace else null
+    )
+}
+
 /**
- * ONB-08: без импортированного сертификата — доверие ключу сервера по отпечатку (TOFU). Сертификат берётся
- * с сервера рукопожатием без учётных данных и показывается на сверку; «Доверять» закрепляет его ключ и
- * выключает «Принимать все сертификаты». Закреплён — показывает, чему доверяем, и даёт заменить.
+ * ONB-08: без импортированного сертификата. Ключ закреплён — чему доверяем и проверка заново. «Принимать все» —
+ * проверить сертификат сервера: система ему доверяет — перейти на системную проверку, нет — закрепить ключ
+ * после сверки отпечатка. Системная проверка (без «Принимать все» и без пина) — действий не нужно: закреплять
+ * ключ сертификата от доверенного УЦ хуже — продление со сменой ключа вызвало бы предупреждение.
  */
 @Composable
 private fun TrustByFingerprint(
@@ -864,23 +861,24 @@ private fun TrustByFingerprint(
     var fetching by remember { mutableStateOf(false) }
     var toConfirm by remember { mutableStateOf<com.dedovmosol.iwomail.network.HttpClientProvider.ServerCertificate?>(null) }
     val doneText = Strings.certTrustDone
+    val systemText = Strings.certSystemTrustDone
     val pinned = account.pinnedCertificateHash != null && !account.acceptAllCerts
 
     when {
         pinned -> {
             Text(Strings.certTrustDone, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
-            Text("${Strings.certIssuedTo}: ${account.pinnedCertificateCN ?: "—"}", style = MaterialTheme.typography.bodySmall)
+            CertLine(Strings.certIssuedTo, account.pinnedCertificateCN ?: Strings.certUnknown)
             account.pinnedCertificateValidTo?.let {
-                Text("${Strings.certValidity}: ${formatDate(account.pinnedCertificateValidFrom ?: 0L)} – ${formatDate(it)}", style = MaterialTheme.typography.bodySmall)
+                CertLine(Strings.certValidity, "${formatDate(account.pinnedCertificateValidFrom ?: 0L)} – ${formatDate(it)}")
             }
-            Text("SPKI SHA-256: ${account.pinnedCertificateHash?.take(16)}…", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+            CertLine("SPKI SHA-256", "${account.pinnedCertificateHash?.take(16)}…", monospace = true)
         }
         account.acceptAllCerts -> Text(Strings.certAcceptAllWarning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        else -> Text(
-            if (isRu) "Сертификат проверяется системой (центры сертификации устройства)." else "The certificate is verified by the system (device certificate authorities).",
-            style = MaterialTheme.typography.bodySmall
-        )
+        else -> {
+            Text(Strings.certVerifiedBySystem, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            return
+        }
     }
     Spacer(Modifier.height(12.dp))
     com.dedovmosol.iwomail.ui.theme.ThemeButton(
@@ -891,7 +889,7 @@ private fun TrustByFingerprint(
                 when (val result = accountRepo.fetchServerCertificate(account)) {
                     is com.dedovmosol.iwomail.eas.EasResult.Success -> toConfirm = result.data
                     is com.dedovmosol.iwomail.eas.EasResult.Error -> SafeToast.long(
-                        context, com.dedovmosol.iwomail.ui.NotificationStrings.localizeError(result.message, isRu)
+                        context, NotificationStrings.localizeError(result.message, isRu)
                     )
                 }
                 fetching = false
@@ -920,20 +918,25 @@ private fun TrustByFingerprint(
                     SafeToast.short(context, doneText)
                 }
             },
+            onUseSystem = {
+                toConfirm = null
+                scope.launch {
+                    accountRepo.useSystemTrust(account.id)
+                    accountRepo.getAccount(account.id)?.let(onAccountUpdated)
+                    SafeToast.short(context, systemText)
+                }
+            },
             onDismiss = { toConfirm = null }
         )
     }
 }
 
-/**
- * Предупреждение об изменении сертификата
- */
+/** Предупреждение об изменении сертификата: прежний и новый рядом, «Принять» или «Отключить». */
 @Composable
 private fun CertificateChangeWarning(
     certificateChange: com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.CertificateChange,
     accountId: Long,
     accountRepo: AccountRepository,
-    isRu: Boolean,
     hasDualUrl: Boolean = false,
     isAlternate: Boolean = false,
     isFirstAlternateCertificate: Boolean = false,
@@ -941,88 +944,35 @@ private fun CertificateChangeWarning(
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
+    val error = MaterialTheme.colorScheme.error
 
-    Text(
-        text = if (isRu) "Обнаружен новый сертификат" else "New certificate detected",
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.error
-    )
-
+    Text(Strings.certNewDetected, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = error)
     Spacer(Modifier.height(8.dp))
-
     Text(
-        text = "${when {
-            isAlternate -> if (isRu) "Резервный сервер" else "Backup server"
-            else -> if (isRu) "Сервер" else "Server"
-        }}: ${certificateChange.hostname}",
+        "${if (isAlternate) Strings.certBackupServer else Strings.certServer}: ${certificateChange.hostname}",
         style = MaterialTheme.typography.bodySmall,
         fontWeight = FontWeight.Bold
     )
-
     Spacer(Modifier.height(8.dp))
-
-    // Старый сертификат
-    Text(
-        text = if (isRu) "СТАРЫЙ СЕРТИФИКАТ:" else "OLD CERTIFICATE:",
-        style = MaterialTheme.typography.bodySmall,
-        fontWeight = FontWeight.Bold
-    )
-    CertificateDetails(certificateChange.oldCert, isRu, isOld = true)
-
+    Text(Strings.certOld, style = MaterialTheme.typography.labelMedium)
+    CertificateDetails(certificateChange.oldCert)
     Spacer(Modifier.height(8.dp))
-
-    // Новый сертификат
-    Text(
-        text = if (isRu) "НОВЫЙ СЕРТИФИКАТ:" else "NEW CERTIFICATE:",
-        style = MaterialTheme.typography.bodySmall,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.error
-    )
-    CertificateDetails(certificateChange.newCert, isRu, isOld = false)
-
+    Text(Strings.certNew, style = MaterialTheme.typography.labelMedium, color = error)
+    CertificateDetails(certificateChange.newCert, color = error)
     Spacer(Modifier.height(8.dp))
-
-    Text(
-        text = if (isRu)
-            "Это может быть плановое обновление или MITM-атака. Проверьте с администратором сервера."
-        else
-            "This could be a planned update or MITM attack. Check with your server administrator.",
-        style = MaterialTheme.typography.bodySmall,
-        fontWeight = FontWeight.Bold
-    )
-
-    if (isAlternate && isFirstAlternateCertificate) {
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = if (isRu)
-                "Первое подключение к резервному серверу: его сертификат отличается от основного. «Принять» сохранит его отдельно — сертификат основного сервера не изменится."
-            else
-                "First connection to the backup server: its certificate differs from the primary one. \"Accept\" stores it separately; the primary server certificate stays unchanged.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    } else if (hasDualUrl) {
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = if (isRu)
-                "Сертификаты основного и резервного серверов хранятся отдельно: принятие сертификата одного не меняет другой."
-            else
-                "Primary and backup server certificates are stored separately: accepting one does not change the other.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+    Text(Strings.certChangeAdvice, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+    val note = when {
+        isAlternate && isFirstAlternateCertificate -> Strings.certFirstBackupNote
+        hasDualUrl -> Strings.certDualUrlNote
+        else -> null
     }
-
+    if (note != null) {
+        Spacer(Modifier.height(4.dp))
+        Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
     Spacer(Modifier.height(12.dp))
-
-    // Кнопки действий
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        val actionTheme = LocalColorTheme.current
-        Button(
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        com.dedovmosol.iwomail.ui.theme.ThemeButton(
             onClick = {
                 scope.launch {
                     // В пин того сервера, где обнаружен сертификат (основной или резервный)
@@ -1030,105 +980,71 @@ private fun CertificateChangeWarning(
                     accountRepo.getAccount(accountId)?.let { onAccountUpdated(it) }
                 }
             },
-            modifier = Modifier.weight(1f),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = actionTheme.gradientStart,
-                contentColor = Color.White
-            )
+            modifier = Modifier.weight(1f)
         ) {
-            Text(if (isRu) "Принять" else "Accept", color = Color.White, style = MaterialTheme.typography.labelLarge)
+            Text(Strings.certAccept, color = Color.White, style = MaterialTheme.typography.labelLarge)
         }
-
-        if (canDisable) Button(
+        if (canDisable) DangerButton(
+            text = Strings.certDisable,
+            modifier = Modifier.weight(1f),
             onClick = {
                 scope.launch {
                     accountRepo.updatePinnedCertHash(accountId, null)
                     accountRepo.getAccount(accountId)?.let { onAccountUpdated(it) }
                 }
-            },
-            modifier = Modifier.weight(1f),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.error,
-                contentColor = Color.White
-            )
-        ) {
-            Text(if (isRu) "Отключить" else "Disable", color = Color.White, style = MaterialTheme.typography.labelLarge)
-        }
+            }
+        )
     }
 }
 
-/**
- * Информация о привязанном сертификате
- */
+/** Кнопка необратимого действия: цвет ошибки темы. */
+@Composable
+private fun DangerButton(text: String, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.error,
+            contentColor = MaterialTheme.colorScheme.onError
+        )
+    ) {
+        Text(text, style = MaterialTheme.typography.labelLarge)
+    }
+}
+
+/** Импортированный сертификат, ключ закреплён: сведения, «Обновить» (закрепить заново) и «Отключить». */
 @Composable
 private fun CertificatePinnedInfo(
     account: AccountEntity,
     accountRepo: AccountRepository,
-    isRu: Boolean,
     isLoading: Boolean,
     onLoadingChange: (Boolean) -> Unit,
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
+    val unknown = Strings.certUnknown
 
-    Text(
-        text = if (isRu) "Защита включена" else "Protection enabled",
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Bold,
-        color = SettingsTokens.successColor
-    )
-
+    Text(Strings.certProtectionOn, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = SettingsTokens.successColor)
     Spacer(Modifier.height(8.dp))
-
-    // Детали сертификата
-    Text("• CN: ${account.pinnedCertificateCN ?: "Unknown"}", style = MaterialTheme.typography.bodySmall)
-    Text("• ${if (isRu) "Организация" else "Organization"}: ${account.pinnedCertificateOrg ?: "Unknown"}", style = MaterialTheme.typography.bodySmall)
-
-    if (account.pinnedCertificateValidFrom != null) {
-        Text(
-            "• ${if (isRu) "Выдан" else "Issued"}: ${formatDate(account.pinnedCertificateValidFrom)}",
-            style = MaterialTheme.typography.bodySmall
-        )
-    }
-    if (account.pinnedCertificateValidTo != null) {
-        Text(
-            "• ${if (isRu) "Истекает" else "Expires"}: ${formatDate(account.pinnedCertificateValidTo)}",
-            style = MaterialTheme.typography.bodySmall
-        )
-    }
-
-    Text(
-        "• Hash: ${account.pinnedCertificateHash?.take(16)}...",
-        style = MaterialTheme.typography.bodySmall,
-        fontFamily = FontFamily.Monospace
-    )
-
+    CertLine("CN", account.pinnedCertificateCN ?: unknown)
+    CertLine(Strings.certOrganization, account.pinnedCertificateOrg ?: unknown)
+    account.pinnedCertificateValidFrom?.let { CertLine(Strings.certIssuedOn, formatDate(it)) }
+    account.pinnedCertificateValidTo?.let { CertLine(Strings.certExpires, formatDate(it)) }
+    CertLine("SPKI SHA-256", "${account.pinnedCertificateHash?.take(16)}…", monospace = true)
     // Сертификат резервного сервера (Dual-URL) хранится отдельно — см. CertificatePins
     account.alternatePinnedCertificateHash?.let { backupHash ->
         Spacer(Modifier.height(4.dp))
-        Text(
-            "• ${if (isRu) "Резервный сервер" else "Backup server"}: ${account.alternatePinnedCertificateCN ?: "Unknown"}" +
-                (account.alternatePinnedCertificateValidTo?.let { ", ${if (isRu) "истекает" else "expires"} ${formatDate(it)}" } ?: ""),
-            style = MaterialTheme.typography.bodySmall
+        CertLine(
+            Strings.certBackupServer,
+            (account.alternatePinnedCertificateCN ?: unknown) +
+                (account.alternatePinnedCertificateValidTo?.let { ", ${Strings.certExpires.lowercase()} ${formatDate(it)}" } ?: "")
         )
-        Text(
-            "• Hash: ${backupHash.take(16)}...",
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace
-        )
+        CertLine("SPKI SHA-256", "${backupHash.take(16)}…", monospace = true)
     }
-
-    // Обнаруженная смена сертификата показывается вместо этого блока — CertificateChangeWarning.
-
     Spacer(Modifier.height(12.dp))
-
-    // Кнопки управления
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        val actionTheme = LocalColorTheme.current
-        Button(
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        com.dedovmosol.iwomail.ui.theme.ThemeButton(
             onClick = {
                 scope.launch {
                     onLoadingChange(true)
@@ -1140,80 +1056,45 @@ private fun CertificatePinnedInfo(
                 }
             },
             enabled = !isLoading,
-            modifier = Modifier.weight(1f),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = actionTheme.gradientStart,
-                contentColor = Color.White
-            )
+            isLoading = isLoading,
+            modifier = Modifier.weight(1f)
         ) {
-            if (isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    strokeWidth = 2.dp,
-                    color = Color.White
-                )
-            } else {
-                Icon(AppIcons.Refresh, null, modifier = Modifier.size(18.dp), tint = Color.White)
-                Spacer(Modifier.width(4.dp))
-                Text(if (isRu) "Обновить" else "Update", color = Color.White, style = MaterialTheme.typography.labelLarge)
-            }
+            Icon(AppIcons.Refresh, null, modifier = Modifier.size(18.dp), tint = Color.White)
+            Spacer(Modifier.width(4.dp))
+            Text(Strings.certUpdate, color = Color.White, style = MaterialTheme.typography.labelLarge)
         }
-
-        Button(
+        DangerButton(
+            text = Strings.certDisable,
+            enabled = !isLoading,
+            modifier = Modifier.weight(1f),
             onClick = {
                 scope.launch {
                     accountRepo.updatePinnedCertHash(account.id, null)
                     accountRepo.getAccount(account.id)?.let { onAccountUpdated(it) }
                 }
-            },
-            enabled = !isLoading,
-            modifier = Modifier.weight(1f),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.error,
-                contentColor = Color.White,
-                disabledContainerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.38f),
-                disabledContentColor = Color.White.copy(alpha = 0.38f)
-            )
-        ) {
-            Text(if (isRu) "Отключить" else "Disable", color = Color.White, style = MaterialTheme.typography.labelLarge)
-        }
+            }
+        )
     }
 }
 
-/**
- * Защита отключена
- */
+/** Импортированный сертификат без закрепления: включить защиту. */
 @Composable
 private fun CertificatePinningDisabled(
     accountId: Long,
     accountRepo: AccountRepository,
-    isRu: Boolean,
     isLoading: Boolean,
     onLoadingChange: (Boolean) -> Unit,
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
-
-    Text(
-        text = if (isRu) "Защита отключена" else "Protection disabled",
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Bold,
-        color = SettingsTokens.warningColor
-    )
-
-    Spacer(Modifier.height(4.dp))
-
-    Text(
-        text = if (isRu) "Соединение уязвимо к MITM-атакам" else "Vulnerable to MITM attacks",
-        style = MaterialTheme.typography.bodySmall
-    )
-
-    Spacer(Modifier.height(12.dp))
-
     val context = androidx.compose.ui.platform.LocalContext.current
+    val isRu = isRussian()
 
-    val isActive = !isLoading
-    Button(
+    Text(Strings.certProtectionOff, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = SettingsTokens.warningColor)
+    Spacer(Modifier.height(4.dp))
+    Text(Strings.certProtectionOffDesc, style = MaterialTheme.typography.bodySmall)
+    Spacer(Modifier.height(12.dp))
+    com.dedovmosol.iwomail.ui.theme.ThemeButton(
         onClick = {
             scope.launch {
                 onLoadingChange(true)
@@ -1222,176 +1103,36 @@ private fun CertificatePinningDisabled(
                 when (result) {
                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                         accountRepo.getAccount(accountId)?.let { onAccountUpdated(it) }
-                        SafeToast.short(context, if (isRu) "Защита включена" else "Protection enabled")
+                        SafeToast.short(context, NotificationStrings.getCertProtectionEnabled(isRu))
                     }
-                    is com.dedovmosol.iwomail.eas.EasResult.Error -> {
-                        SafeToast.long(context, if (isRu) "Ошибка: ${NotificationStrings.localizeError(result.message, true)}" else "Error: ${NotificationStrings.localizeError(result.message, false)}")
-                    }
+                    is com.dedovmosol.iwomail.eas.EasResult.Error ->
+                        SafeToast.long(context, NotificationStrings.getCertProtectionError(result.message, isRu))
                 }
             }
         },
-        enabled = isActive,
-        modifier = Modifier.fillMaxWidth(),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = Color.Transparent,
-            disabledContainerColor = Color.Transparent
-        ),
-        contentPadding = PaddingValues(0.dp)
+        enabled = !isLoading,
+        isLoading = isLoading,
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    brush = Brush.horizontalGradient(
-                        colors = if (isActive) listOf(LocalColorTheme.current.gradientStart, LocalColorTheme.current.gradientEnd)
-                        else listOf(LocalColorTheme.current.gradientStart.copy(alpha = 0.38f), LocalColorTheme.current.gradientEnd.copy(alpha = 0.38f))
-                    ),
-                    shape = RoundedCornerShape(20.dp)
-                )
-                .padding(horizontal = 20.dp, vertical = 10.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            if (isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    strokeWidth = 2.dp,
-                    color = Color.White
-                )
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(AppIcons.Lock, null, modifier = Modifier.size(18.dp), tint = Color.White)
-                    Spacer(Modifier.width(4.dp))
-                    Text(if (isRu) "Включить защиту" else "Enable protection", color = Color.White, style = MaterialTheme.typography.labelLarge)
-                }
-            }
-        }
+        Icon(AppIcons.Lock, null, modifier = Modifier.size(18.dp), tint = Color.White)
+        Spacer(Modifier.width(4.dp))
+        Text(Strings.certEnableProtection, color = Color.White, style = MaterialTheme.typography.labelLarge)
     }
-
     Spacer(Modifier.height(8.dp))
-
-    Text(
-        text = if (isRu)
-            "Certificate Pinning защищает от MITM-атак, привязывая соединение к конкретному сертификату сервера."
-        else
-            "Certificate Pinning protects against MITM attacks by binding the connection to a specific server certificate.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-
-    Spacer(Modifier.height(12.dp))
-
-    // Подробное объяснение
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = SettingsTokens.pageColor
-        )
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Text(
-                text = if (isRu) "Подробнее о защите" else "Protection details",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                text = if (isRu) "Что защищено" else "What is protected",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Bold,
-                color = SettingsTokens.successColor
-            )
-            Text(
-                text = if (isRu)
-                    "• Шифрование трафика (HTTPS/TLS)\n• Проверка сертификата от доверенного CA\n• Защита от большинства MITM-атак"
-                else
-                    "• Traffic encryption (HTTPS/TLS)\n• Certificate verification from trusted CA\n• Protection from most MITM attacks",
-                style = MaterialTheme.typography.bodySmall
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                text = if (isRu) "Что добавляет закрепление" else "What pinning adds",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = if (isRu)
-                    "• Защиту от скомпрометированных CA\n• Проверку публичного ключа сервера\n• Обнаружение подмены сертификата"
-                else
-                    "• Protection from compromised CAs\n• Verification of server's public key\n• Detection of certificate substitution",
-                style = MaterialTheme.typography.bodySmall
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                text = if (isRu) "Не работает, если" else "Does not work if",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Bold,
-                color = SettingsTokens.warningColor
-            )
-            Text(
-                text = if (isRu)
-                    "• Публичный ключ сертификата изменился (смена ключевой пары)\n• Ошибка при получении сертификата"
-                else
-                    "• Certificate's public key changed (key pair rotation)\n• Error retrieving certificate",
-                style = MaterialTheme.typography.bodySmall
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                text = if (isRu) "Работает при" else "Works when",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Bold,
-                color = SettingsTokens.successColor
-            )
-            Text(
-                text = if (isRu)
-                    "• Обновлении сертификата с тем же ключом (продление срока)\n• Смене домена (внутренний ↔ внешний) с тем же ключом\n• Использовании разных CN в сертификате\n• Работе с разными доменами (внутренний/внешний)"
-                else
-                    "• Certificate renewal with same key (expiration extension)\n• Domain change (internal ↔ external) with same key\n• Using different CNs in certificate\n• Works with different domains (internal/external)",
-                style = MaterialTheme.typography.bodySmall
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                text = if (isRu) "Рекомендация" else "Recommendation",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = if (isRu)
-                    "Включите защиту для максимальной безопасности. Обновление сертификата (без смены ключа) не требует действий. При смене ключевой пары вы получите уведомление."
-                else
-                    "Enable protection for maximum security. Certificate renewal (without key change) requires no action. You'll be notified when key pair changes.",
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-    }
+    Text(Strings.certPinningExplain, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
-/**
- * Детали сертификата
- */
+/** Сведения о сертификате в предупреждении о смене. */
 @Composable
 private fun CertificateDetails(
     cert: com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo,
-    isRu: Boolean,
-    isOld: Boolean
+    color: Color = Color.Unspecified
 ) {
-    val textColor = if (isOld) Color.Unspecified else MaterialTheme.colorScheme.error
-
-    Text("• CN: ${cert.cn}", style = MaterialTheme.typography.bodySmall, color = textColor)
-    Text("• ${if (isRu) "Организация" else "Organization"}: ${cert.organization}", style = MaterialTheme.typography.bodySmall, color = textColor)
-    Text("• ${if (isRu) "Выдан" else "Issued"}: ${formatDate(cert.validFrom)}", style = MaterialTheme.typography.bodySmall, color = textColor)
-    Text("• ${if (isRu) "Истекает" else "Expires"}: ${formatDate(cert.validTo)}", style = MaterialTheme.typography.bodySmall, color = textColor)
-    Text("• Hash: ${cert.hash.take(16)}...", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = textColor)
+    CertLine("CN", cert.cn, color)
+    CertLine(Strings.certOrganization, cert.organization, color)
+    CertLine(Strings.certIssuedOn, formatDate(cert.validFrom), color)
+    CertLine(Strings.certExpires, formatDate(cert.validTo), color)
+    CertLine("SPKI SHA-256", "${cert.hash.take(16)}…", color, monospace = true)
 }
 
 private val ACCOUNT_DATE_FORMAT = java.lang.ThreadLocal.withInitial {
@@ -1447,9 +1188,7 @@ private fun ConnectionStatusBlock(
         endpointLabel(serverUrl)
     }
 
-    val backupLabel = if (health.isUsingFallback) {
-        if (isRu) " (резервный)" else " (backup)"
-    } else ""
+    val backupLabel = if (health.isUsingFallback) " (${Strings.certBackupServer.lowercase()})" else ""
 
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text(

@@ -18,9 +18,9 @@
 
 Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through **Exchange ActiveSync (EAS)** and **Exchange Web Services (EWS)**. IMAP/POP3 are present as a beta direction with limited functionality.
 
-> **Important:** 🚧 The project is under active development. The next release will be **1.7.0**. It will differ significantly from 1.6.1 and the subsequent beta builds.
+> **Important:** 🚧 The project is under active development. The next release is **1.7.0**, coming right after 1.6.1. See the [changelog](docs/CHANGELOG_EN.md) for what changes.
 
-**Version:** 1.6.3b (beta, versionCode 26; latest published release — 1.6.1) · **Package:** `com.dedovmosol.iwomail` · **Developer:** DedovMosol · **Telegram:** [@i_wantout](https://t.me/i_wantout) · **Email:** andreyid@outlook.com
+**Version:** 1.7.0 (in preparation, versionCode 27; latest published release — 1.6.1) · **Package:** `com.dedovmosol.iwomail` · **Developer:** DedovMosol · **Telegram:** [@i_wantout](https://t.me/i_wantout) · **Email:** andreyid@outlook.com
 
 ## 📖 About
 
@@ -42,8 +42,8 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **✅ Tasks:** active/completed/important/overdue tasks, due dates, priorities, assignment, reminders, trash and restore, reset and resync; edits and moves to trash made offline are kept on the device and sent when the connection is back (`pending_pim_changes`).
 - **🗒 Notes:** Exchange Notes sync, create/edit, trash and restore, reset and resync; offline edits and trash work as for tasks.
 - **🔔 Notifications:** Direct Push via EAS Ping, WorkManager sync, AlarmManager fallback, notifications for mail, calendar, tasks, flags, updates and outbox, a calendar/task/flag reminder tap switches to that account and opens the item, separate notification channels per account (sound and importance in system settings), quiet hours and VIP senders (their mail still sounds during quiet hours), server connection-loss notification.
-- **🔐 App lock:** password (only a PBKDF2-HMAC-SHA256 hash is stored, 600,000 iterations) and fingerprint; locks on cold start and when the app goes to the background.
-- **🎨 Interface:** Jetpack Compose, Material 3, RU/EN localization, light/dark/system theme, color schemes, daily themes, custom file icons, drag selection; settings split into Accounts, Mail, Notifications, Personalization, Security, About.
+- **🔐 App lock:** password (only a PBKDF2-HMAC-SHA256 hash is stored, 600,000 iterations) and fingerprint; locks on cold start and when the app goes to the background. Growing pauses after 5 wrong passwords. While the lock is on, messages are hidden in Recents, the widget and lock-screen notifications.
+- **🎨 Interface:** Jetpack Compose, Material 3, RU/EN localization, light/dark/system theme, color schemes, daily themes, custom file icons, drag selection with haptics, HyperOS-style settings (large title, cards, choices in a dropdown or bottom sheet) split into Accounts, Mail, Notifications, Personalization, Security, About.
 - **📊 Widget & shortcuts:** Glance home-screen widget, quick access to mail, search, calendar, tasks and compose; widget data is read via lightweight Room projections without loading heavy mail/event bodies.
 - **⬆️ Updates:** `update.json` check on GitHub, APK selection by ABI, download, install and rollback preparation.
 
@@ -124,7 +124,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **Conscrypt:** added for TLS 1.0/1.1 and compatibility with old Exchange 2007 installations.
 - **Server certificates:** system, user and self-signed certificate support.
 - **mTLS:** PKCS#12 client certificates (`.p12`/`.pfx`) with KeyManager caching.
-- **Certificate Pinning:** stores SHA-256, CN/O and certificate dates per account; the alternate server has its own pin.
+- **Trust by fingerprint:** if the system cannot verify the certificate (internal CA, IP address), the app shows its fingerprints and pins the public key (SPKI SHA-256) once the user confirms. This works for EAS, EWS, IMAP and POP3, and the backup server has its own key. "Accept all certificates" stays optional.
 - **Hostname verification:** for an imported server certificate — `Rfc6125HostnameVerifier` (SAN dNSName/iPAddress, CN only when there is no SAN).
 - **No cleartext:** `network_security_config.xml` forbids HTTP (`cleartextTrafficPermitted="false"`).
 - **Passwords:** `EncryptedSharedPreferences` (Android KeyStore, AES256-SIV/AES256-GCM) for the primary path; when the Keystore is unavailable — a fallback `ObfuscatedSharedPreferences`: XOR with a key derived by PBKDF2-HMAC-SHA256 from `ANDROID_ID` (obfuscation, not encryption). A one-time warning in the app language (the language code is cached before the async DataStore read, so the startup toast is not the system locale). Security then shows a fail-closed switch: do not write mailbox passwords or the app lock password until encryption is back. Existing secrets stay. A new mailbox is not left in the database without a secret.
@@ -137,7 +137,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **Office 365:** typically does not work without Basic Auth.
 - **NTLM for EAS:** the EAS transport supports Basic Auth only (NTLMv2 applies to EWS operations only); the `/Microsoft-Server-ActiveSync` virtual directory must allow Basic Auth.
 - **IMAP/POP3:** beta implementation, does not cover calendar, contacts, tasks, notes, Direct Push and EWS features. There is no SMTP sending: the outgoing server address is only stored in the account.
-- **Offline queue:** message star and read state, message moves (including to trash), task and note edits and moves to trash. Creating tasks and notes, the calendar and folder operations are still server-first and are not deferred without a connection.
+- **Offline queue:** message star and read state, message moves (including to trash), creating, editing and moving tasks and notes to trash. The calendar and folder operations are still server-first and are not deferred without a connection.
 - **Exchange contacts:** read-only. They come from the server's Contacts folder (EAS Sync); edit and delete them in Outlook or OWA. In the app an Exchange contact can be copied to personal contacts, which are editable.
 - **S/MIME:** signing and encryption not implemented.
 - **EAS 16.x:** explicitly not a target version of the project; the code's main range is EAS 12.x-14.1.

@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.util
 
 import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
 import org.junit.Test
 import kotlin.random.Random
 
@@ -33,10 +34,26 @@ class BodyLinkRegexTest {
     }
 
     @Test fun `text without at-sign is scanned in linear time`() {
-        for (poison in listOf("a.".repeat(500_000), "a-".repeat(500_000), "x@" + "a-".repeat(200_000))) {
+        // Линейность — по отношению времён на n и 2n (абсолютный порог зависит от загрузки машины CI): линейный
+        // разбор даёт около 2, квадратичный — около 4. Лучшее из трёх прогонов гасит паузы GC и JIT.
+        fun best(text: String): Long = (1..3).minOf {
             val t = System.nanoTime()
-            BODY_LINK_REGEX.findAll(poison).count()
-            assertThat((System.nanoTime() - t) / 1_000_000).isLessThan(3_000L)
+            BODY_LINK_REGEX.findAll(text).count()
+            System.nanoTime() - t
+        }
+        val poisons: List<Pair<String, (Int) -> String>> = listOf(
+            "a." to { n -> "a.".repeat(n) },
+            "a-" to { n -> "a-".repeat(n) },
+            "x@ a-" to { n -> "x@" + "a-".repeat(n) }
+        )
+        for ((name, poison) in poisons) {
+            val small = poison(40_000)
+            val large = poison(80_000)
+            best(small) // прогрев JIT
+            val ratio = best(large).toDouble() / best(small).coerceAtLeast(1)
+            assertWithMessage("$name: time(2n)/time(n) = $ratio").that(ratio).isLessThan(3.0)
+            // И порядок величины: 240 КБ текста — доли секунды, не минуты
+            assertThat(best(large) / 1_000_000).isLessThan(10_000L)
         }
     }
 

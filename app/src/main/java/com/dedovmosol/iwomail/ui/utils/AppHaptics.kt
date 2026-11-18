@@ -25,14 +25,25 @@ class AppHaptics internal constructor(
     private val hasVibrator: Boolean,
     private val systemEnabled: () -> Boolean,
     private val sdk: Int,
-    private val playEffect: (VibrationEffect) -> Unit
+    private val playEffect: (VibrationEffect) -> Unit,
+    private val now: () -> Long = { android.os.SystemClock.uptimeMillis() }
 ) {
+    @Volatile
+    private var lastConfirmAt = Long.MIN_VALUE / 2
+
     fun tick() = play(Pulse.Tick)
 
     fun confirm() = play(Pulse.Confirm)
 
     private fun play(pulse: Pulse) {
         if (!shouldPlay(hasVibrator, systemEnabled())) return
+        // Долгое нажатие строки ловят сразу два обработчика (combinedClickable строки и drag-выделение списка):
+        // второе подтверждение в том же жесте — одна вибрация, не двойной толчок
+        if (pulse == Pulse.Confirm) {
+            val t = now()
+            if (t - lastConfirmAt < CONFIRM_DEDUP_MS) return
+            lastConfirmAt = t
+        }
         try {
             playEffect(effect(sdk, pulse))
         } catch (_: Exception) {
@@ -43,6 +54,8 @@ class AppHaptics internal constructor(
     enum class Pulse { Tick, Confirm }
 
     companion object {
+        internal const val CONFIRM_DEDUP_MS = 150L
+
         fun shouldPlay(hasVibrator: Boolean, systemEnabled: Boolean): Boolean =
             hasVibrator && systemEnabled
 
