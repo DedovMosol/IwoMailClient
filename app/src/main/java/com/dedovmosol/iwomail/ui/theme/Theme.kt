@@ -78,6 +78,74 @@ enum class AppColorTheme(
 }
 
 /**
+ * Схема без dynamic color (ниже Android 12 или dynamic выключен). Поверхности нейтрально-серые, контейнеры
+ * (плитки иконок, выделение строк) — оттенок цвета темы. Раньше роли `*Container` и `surfaceContainer*` брались из
+ * базовой фиолетовой схемы M3, и в синей, жёлтой и зелёной темах карточки и плитки оставались фиолетовыми (SET-24).
+ * Контраст пар «текст на фоне» проверяет AppColorSchemeContrastTest.
+ */
+fun appColorScheme(theme: AppColorTheme, dark: Boolean): ColorScheme = if (dark) {
+    val surface = Color(0xFF1E1E1E)
+    val tertiary = Color(0xFFA5D6A7)
+    darkColorScheme(
+        primary = theme.primaryDark,
+        onPrimary = Color.Black,
+        primaryContainer = androidx.compose.ui.graphics.lerp(surface, theme.primaryDark, 0.24f),
+        onPrimaryContainer = androidx.compose.ui.graphics.lerp(theme.primaryDark, Color.White, 0.55f),
+        secondary = Color(0xFF80DEEA),
+        onSecondary = Color.Black,
+        secondaryContainer = androidx.compose.ui.graphics.lerp(surface, theme.primaryDark, 0.16f),
+        onSecondaryContainer = androidx.compose.ui.graphics.lerp(theme.primaryDark, Color.White, 0.55f),
+        tertiary = tertiary,
+        tertiaryContainer = androidx.compose.ui.graphics.lerp(surface, tertiary, 0.24f),
+        onTertiaryContainer = androidx.compose.ui.graphics.lerp(tertiary, Color.White, 0.55f),
+        background = Color(0xFF121212),
+        onBackground = Color.White,
+        surface = surface,
+        onSurface = Color.White,
+        surfaceVariant = Color(0xFF2C2C2E),
+        onSurfaceVariant = Color(0xFFC7C7CC),
+        outline = Color(0xFF8E8E93),
+        outlineVariant = Color(0xFF3A3A3C),
+        surfaceTint = theme.primaryDark,
+        surfaceContainerLowest = Color(0xFF0E0E0E),
+        surfaceContainerLow = Color(0xFF1A1A1A),
+        surfaceContainer = surface,
+        surfaceContainerHigh = Color(0xFF262628),
+        surfaceContainerHighest = Color(0xFF303032)
+    )
+} else {
+    val tertiary = Color(0xFF388E3C)
+    val onContainer = androidx.compose.ui.graphics.lerp(theme.gradientEnd, Color.Black, 0.45f)
+    lightColorScheme(
+        primary = theme.primaryLight,
+        onPrimary = Color.White,
+        primaryContainer = androidx.compose.ui.graphics.lerp(Color.White, theme.primaryLight, 0.16f),
+        onPrimaryContainer = onContainer,
+        secondary = Color(0xFF0097A7),
+        onSecondary = Color.White,
+        secondaryContainer = androidx.compose.ui.graphics.lerp(Color.White, theme.primaryLight, 0.10f),
+        onSecondaryContainer = onContainer,
+        tertiary = tertiary,
+        tertiaryContainer = androidx.compose.ui.graphics.lerp(Color.White, tertiary, 0.16f),
+        onTertiaryContainer = Color(0xFF0F3D13),
+        background = Color(0xFFFAFAFA),
+        onBackground = Color.Black,
+        surface = Color.White,
+        onSurface = Color.Black,
+        surfaceVariant = Color(0xFFE7E7EA),
+        onSurfaceVariant = Color(0xFF46464B),
+        outline = Color(0xFF76767C),
+        outlineVariant = Color(0xFFC7C7CC),
+        surfaceTint = theme.primaryLight,
+        surfaceContainerLowest = Color.White,
+        surfaceContainerLow = Color(0xFFF7F7F8),
+        surfaceContainer = Color(0xFFF1F1F3),
+        surfaceContainerHigh = Color(0xFFEBEBED),
+        surfaceContainerHighest = Color(0xFFE5E5E7)
+    )
+}
+
+/**
  * CompositionLocal для текущей цветовой темы
  */
 val LocalColorTheme = compositionLocalOf { AppColorTheme.PURPLE }
@@ -138,28 +206,7 @@ fun ExchangeMailTheme(
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
-        darkTheme -> darkColorScheme(
-            primary = colorTheme.primaryDark,
-            secondary = Color(0xFF80DEEA),
-            tertiary = Color(0xFFA5D6A7),
-            background = Color(0xFF121212),
-            surface = Color(0xFF1E1E1E),
-            onPrimary = Color.Black,
-            onSecondary = Color.Black,
-            onBackground = Color.White,
-            onSurface = Color.White
-        )
-        else -> lightColorScheme(
-            primary = colorTheme.primaryLight,
-            secondary = Color(0xFF0097A7),
-            tertiary = Color(0xFF388E3C),
-            background = Color(0xFFFAFAFA),
-            surface = Color.White,
-            onPrimary = Color.White,
-            onSecondary = Color.White,
-            onBackground = Color.Black,
-            onSurface = Color.Black
-        )
+        else -> appColorScheme(colorTheme, darkTheme)
     }
 
     val currentDensity = LocalDensity.current

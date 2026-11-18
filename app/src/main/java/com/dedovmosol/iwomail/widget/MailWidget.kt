@@ -101,9 +101,15 @@ class MailWidget : GlanceAppWidget() {
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; null
         }
+        // SET-01: при включённой блокировке виджет показывает только счётчики — без отправителей, тем и названий
+        val contentHidden = try {
+            com.dedovmosol.iwomail.data.security.LockPrivacy.contentHidden(SettingsRepository.getInstance(context))
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; true
+        }
         val eventInfo = nextEvent?.let {
             val startStr = DateFormat.getTimeFormat(context).format(Date(it.startTime))
-            EventInfo(it.subject, startStr)
+            EventInfo(if (contentHidden) "" else it.subject, startStr)
         }
 
         val dateStr = try { formatTodayDate(context) } catch (_: Exception) { "" }
@@ -126,10 +132,10 @@ class MailWidget : GlanceAppWidget() {
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; null
         }
-        val nextTaskTitle = nextTask?.subject?.take(30) ?: ""
+        val nextTaskTitle = if (contentHidden) "" else nextTask?.subject?.take(30) ?: ""
 
         val noSubjectText = context.getString(R.string.widget_no_subject)
-        val recentEmails = try {
+        val recentEmails = if (contentHidden) emptyList() else try {
             db.emailDao().getRecentUnreadInboxGlobal(3).map { email ->
                 RecentEmail(
                     id = email.id,
@@ -171,7 +177,8 @@ class MailWidget : GlanceAppWidget() {
             lastSyncStr = lastSyncStr,
             calendarEventsCount = calendarEventsCount,
             nextTaskTitle = nextTaskTitle,
-            themeColor = themeColor
+            themeColor = themeColor,
+            contentHidden = contentHidden
         )
     }
     
@@ -225,7 +232,9 @@ data class WidgetData(
     val lastSyncStr: String = "",
     val calendarEventsCount: Int = 0,
     val nextTaskTitle: String = "",
-    val themeColor: Int = 0xFF5C00D4.toInt()
+    val themeColor: Int = 0xFF5C00D4.toInt(),
+    /** SET-01: блокировка включена — письма, названия событий и задач не показываются. */
+    val contentHidden: Boolean = false
 )
 
 /**
@@ -436,7 +445,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     )
                     Spacer(modifier = GlanceModifier.width(8.dp))
                     Text(
-                        text = "• ${data.nextEvent.time} ${data.nextEvent.title}",
+                        text = "• ${data.nextEvent.time} ${data.nextEvent.title}".trimEnd(),
                         style = TextStyle(color = ColorProvider(textDimmed), fontSize = secondaryFontSize),
                         maxLines = 1
                     )
@@ -616,7 +625,9 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                 Spacer(modifier = GlanceModifier.height(6.dp))
             } else if (isLarge) {
                 Text(
-                    text = context.getString(R.string.widget_no_new_mail),
+                    text = context.getString(
+                        if (data.contentHidden) R.string.widget_content_hidden else R.string.widget_no_new_mail
+                    ),
                     style = TextStyle(color = ColorProvider(textLightAlpha), fontSize = secondaryFontSize)
                 )
                 Spacer(modifier = GlanceModifier.height(6.dp))

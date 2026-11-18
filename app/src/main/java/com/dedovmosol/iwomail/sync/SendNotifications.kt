@@ -20,13 +20,18 @@ object SendNotifications {
     fun show(context: Context, channel: String, id: Int, title: String, text: String) {
         if (!NotificationHelper.canPostNotifications(context)) return
         try {
-            val notification = NotificationCompat.Builder(context, channel)
+            val builder = NotificationCompat.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_email)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(text))
                 .setAutoCancel(true)
-                .build()
+            // BG-08: адресат и тема не видны на экране блокировки
+            val notification = NotificationPrivacy.apply(
+                context, builder, channel, R.drawable.ic_email,
+                publicTitle = NotificationStrings.getSendStatusPublic(isRussian(context)),
+                hidden = NotificationPrivacy.isContentHidden(context)
+            ).build()
             context.getSystemService(NotificationManager::class.java)?.notify(id, notification)
         } catch (e: Exception) {
             android.util.Log.w("SendNotifications", "notify failed: ${e.message}")

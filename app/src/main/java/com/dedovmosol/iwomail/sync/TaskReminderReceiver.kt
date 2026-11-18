@@ -108,7 +108,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
         
         if (!NotificationHelper.canPostNotifications(context)) return
 
-        val notification = NotificationCompat.Builder(context, MailApplication.CHANNEL_TASKS)
+        val builder = NotificationCompat.Builder(context, MailApplication.CHANNEL_TASKS)
             .setSmallIcon(R.drawable.ic_task)
             .setContentTitle(task.subject.ifBlank { context.getString(R.string.task) })
             .setContentText(contentText.ifBlank { context.getString(R.string.task_reminder) })
@@ -124,9 +124,13 @@ class TaskReminderReceiver : BroadcastReceiver() {
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setAutoCancel(true)
             .setContentIntent(contentPendingIntent)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .addAction(R.drawable.ic_check, context.getString(R.string.notification_mark_read), markReadPendingIntent)
-            .build()
+        // BG-08: на экране блокировки — без названия и текста задачи
+        val notification = NotificationPrivacy.apply(
+            context, builder, MailApplication.CHANNEL_TASKS, R.drawable.ic_task,
+            publicTitle = context.getString(R.string.task_reminder),
+            hidden = NotificationPrivacy.isContentHidden(context)
+        ).build()
         
         val notificationId = code(task.id, CODE_NOTIF)
         notificationManager.notify(notificationId, notification)

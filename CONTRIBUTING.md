@@ -25,8 +25,15 @@ Build and test:
 and POP3 code against a real server (written for Exchange 2007 SP2 / EAS 12.1). The tests are skipped
 unless all of these environment variables are set, so CI and a normal run skip them:
 `IWO_LIVE_HOST`, `IWO_LIVE_DOMAIN`, `IWO_LIVE_USER`, `IWO_LIVE_PASS` (optional `IWO_LIVE_LOG=1`
-prints the app log). They use a separate device partnership and accept all certificates.
-Mail is only read. The calendar test creates a synthetic series 2 weeks ahead and deletes it.
+prints the app log). They use a separate device partnership and accept all certificates, except
+the trust test, which fetches the server certificate, pins its key and checks that a different key
+is refused (EAS, IMAP and POP3). Mail is only read. The calendar test creates a synthetic series
+2 weeks ahead and deletes it. The attachment test downloads every attachment of the newest messages
+into a temporary directory (sizes over 10 MB go through EWS) and deletes the files.
+
+The 9 scenarios: TLS 1.0/3DES control, EAS body plus EWS fallback, certificate refusal without
+accept-all, Status 6 during a full resync, attachments to file (PROTO-17), the EWS exception
+supplement, IMAP/POP3 sign-in on 4 ports, the sanitizer on real bodies, trust by fingerprint (ONB-08, UI2-03).
 
 ```powershell
 $env:IWO_LIVE_HOST='<host>'; $env:IWO_LIVE_DOMAIN='<domain>'; $env:IWO_LIVE_USER='<user>'; $env:IWO_LIVE_PASS='<password>'
@@ -36,6 +43,16 @@ Remove-Item Env:IWO_LIVE_PASS
 
 Never commit server addresses, account names or passwords: tests, docs and probe outputs use
 `192.0.2.x` (RFC 5737), `DOMAIN\user` and `corp.example`.
+
+### Settings screenshots for a visual check
+
+`SettingsScreenshotProbe` renders the settings components (light and dark, four color themes,
+font scale 2.0, an open dropdown and bottom sheet) to `app/build/settings-shots/*.png`. It runs only
+with `IWO_SHOTS=1` and is skipped otherwise:
+
+```powershell
+$env:IWO_SHOTS='1'; ./gradlew testDebugUnitTest --tests "*SettingsScreenshotProbe"; Remove-Item Env:IWO_SHOTS
+```
 
 ## Pull requests
 

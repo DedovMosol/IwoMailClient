@@ -212,16 +212,17 @@ class MainActivity : FragmentActivity() {
                     androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS
             }
             
-            // Защита содержимого на экране блокировки: FLAG_SECURE запрещает скриншоты
-            // и показ контента в списке недавних приложений, пока пароль не введён.
-            DisposableEffect(isLocked) {
-                if (isLocked) {
-                    window.setFlags(
-                        android.view.WindowManager.LayoutParams.FLAG_SECURE,
-                        android.view.WindowManager.LayoutParams.FLAG_SECURE
-                    )
-                } else {
-                    window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+            // NAV-02: при включённой блокировке письма не видны в «Недавних» (см. LockWindowPolicy).
+            // Пароль задаётся и снимается вместе с флагом appLockEnabled — пересчёт по нему и по appLocked.
+            val lockActive = remember(appLockEnabled, appLocked) {
+                appLockEnabled && com.dedovmosol.iwomail.data.security.AppLockManager.isPasswordSet()
+            }
+            DisposableEffect(lockActive, isLocked) {
+                val policy = com.dedovmosol.iwomail.data.security.LockWindowPolicy.of(lockActive, isLocked)
+                val secure = android.view.WindowManager.LayoutParams.FLAG_SECURE
+                if (policy.secure) window.setFlags(secure, secure) else window.clearFlags(secure)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    setRecentsScreenshotEnabled(policy.recentsScreenshot)
                 }
                 onDispose { }
             }
@@ -617,7 +618,8 @@ class MainActivity : FragmentActivity() {
                 androidx.core.content.ContextCompat.getMainExecutor(this),
                 object : androidx.biometric.BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(result: androidx.biometric.BiometricPrompt.AuthenticationResult) {
-                        // Успех биометрии = разблокировка сессии (гейт реактивно уберёт лок-экран).
+                        // Успех биометрии = разблокировка сессии (гейт реактивно уберёт лок-экран) и сброс паузы
+                        com.dedovmosol.iwomail.data.security.AppLockManager.resetAttempts()
                         com.dedovmosol.iwomail.data.security.AppLockManager.unlock()
                     }
 

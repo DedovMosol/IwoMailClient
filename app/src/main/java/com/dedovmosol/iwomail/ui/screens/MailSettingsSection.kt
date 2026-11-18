@@ -1,24 +1,11 @@
 package com.dedovmosol.iwomail.ui.screens
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Icon
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.domain.SwipeAction
@@ -38,8 +25,6 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository, highlight: St
     )
     val galPhotos by settingsRepo.galPhotosEnabled.collectAsStateWithLifecycle(initialValue = null)
     val conversations by settingsRepo.conversationView.collectAsStateWithLifecycle(initialValue = null)
-    // Открытый выбор: "undo", "start", "end" (переживает поворот)
-    var choice by rememberSaveable { mutableStateOf<String?>(null) }
 
     Column {
         SettingsSwitchRow(
@@ -86,85 +71,33 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository, highlight: St
             )
         }
 
-        SettingsNavRow(
-            title = Strings.undoSendSetting,
-            subtitle = Strings.undoSendDesc(undoSeconds),
-            icon = AppIcons.Send,
-            highlightId = "undoSend",
-            highlight = highlight,
-            onClick = { choice = "undo" }
-        )
-
-        SettingsNavRow(
-            title = Strings.swipeStart,
-            subtitle = Strings.swipeActionName(swipes.first),
-            highlightId = "swipeStart",
-            highlight = highlight,
-            onClick = { choice = "start" }
-        )
-        SettingsNavRow(
-            title = Strings.swipeEnd,
-            subtitle = Strings.swipeActionName(swipes.second),
-            highlightId = "swipeEnd",
-            highlight = highlight,
-            onClick = { choice = "end" }
-        )
-    }
-
-    when (choice) {
-        "undo" -> ChoiceDialog(
+        SettingsChoiceRow(
             title = Strings.undoSendSetting,
             options = UndoSend.OPTIONS,
             selected = undoSeconds,
             label = { Strings.secondsOption(it) },
-            onDismiss = { choice = null },
-            onSelect = { seconds -> choice = null; scope.launch { settingsRepo.setUndoSendSeconds(seconds) } }
+            onSelect = { seconds -> scope.launch { settingsRepo.setUndoSendSeconds(seconds) } },
+            icon = AppIcons.Send,
+            highlightId = "undoSend",
+            highlight = highlight
         )
-        "start", "end" -> {
-            val start = choice == "start"
-            ChoiceDialog(
-                title = if (start) Strings.swipeStart else Strings.swipeEnd,
-                options = SwipeAction.entries,
-                selected = if (start) swipes.first else swipes.second,
-                label = { Strings.swipeActionName(it) },
-                onDismiss = { choice = null },
-                onSelect = { action -> choice = null; scope.launch { settingsRepo.setSwipeAction(start, action) } }
-            )
-        }
+        SettingsChoiceRow(
+            title = Strings.swipeStart,
+            options = SwipeAction.entries,
+            selected = swipes.first,
+            label = { Strings.swipeActionName(it) },
+            onSelect = { action -> scope.launch { settingsRepo.setSwipeAction(true, action) } },
+            highlightId = "swipeStart",
+            highlight = highlight
+        )
+        SettingsChoiceRow(
+            title = Strings.swipeEnd,
+            options = SwipeAction.entries,
+            selected = swipes.second,
+            label = { Strings.swipeActionName(it) },
+            onSelect = { action -> scope.launch { settingsRepo.setSwipeAction(false, action) } },
+            highlightId = "swipeEnd",
+            highlight = highlight
+        )
     }
-}
-
-/** Выбор одного варианта из списка (радиокнопки). */
-@Composable
-private fun <T> ChoiceDialog(
-    title: String,
-    options: List<T>,
-    selected: T,
-    label: @Composable (T) -> String,
-    onDismiss: () -> Unit,
-    onSelect: (T) -> Unit
-) {
-    com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column(modifier = Modifier.selectableGroup()) {
-                for (option in options) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(selected = option == selected, role = Role.RadioButton, onClick = { onSelect(option) })
-                            .padding(vertical = 8.dp)
-                    ) {
-                        RadioButton(selected = option == selected, onClick = null)
-                        Text(label(option), modifier = Modifier.padding(start = 12.dp))
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(onClick = onDismiss, text = Strings.cancel)
-        }
-    )
 }

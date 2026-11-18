@@ -156,10 +156,15 @@ object ServerHealthNotifier {
             .setOnlyAlertOnce(true)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .build()
+        // BG-08: на экране блокировки — суть проблемы без адреса аккаунта
+        NotificationPrivacy.apply(
+            context, notification, MailApplication.CHANNEL_CONNECTION, R.drawable.ic_warning,
+            publicTitle = title,
+            publicText = text,
+            hidden = NotificationPrivacy.isContentHidden(context)
+        )
 
-        nm.notify(id, notification)
+        nm.notify(id, notification.build())
     }
 
     /**

@@ -91,6 +91,7 @@ fun VerificationScreen(
     val testEmailBodyText = Strings.testEmailBody
     val emailMismatchTitle = Strings.emailMismatch
     val tryingBackupServerText = Strings.tryingBackupServer
+    val certFetchingText = Strings.certFetching
     val isRussianLang = com.dedovmosol.iwomail.ui.isRussian()
 
     fun localizeVerificationError(message: String): String {
@@ -174,6 +175,11 @@ fun VerificationScreen(
     var mismatchActualEmail by remember { mutableStateOf("") }
     var isCheckingAccess by remember { mutableStateOf(false) }
     var accessCheckResult by remember { mutableStateOf<AccessVerificationResult?>(null) }
+    // ONB-08: сертификат сервера на сверку и тот, которому пользователь доверился; номер прогона проверки
+    var certificateToConfirm by remember { mutableStateOf<com.dedovmosol.iwomail.network.HttpClientProvider.ServerCertificate?>(null) }
+    var pendingCertificateError by remember { mutableStateOf<String?>(null) }
+    var trustedCertificate by remember { mutableStateOf<com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo?>(null) }
+    var verificationRun by remember { mutableIntStateOf(0) }
 
     fun startInitialSync(accountId: Long) {
         val appContext = context.applicationContext
@@ -226,7 +232,8 @@ fun VerificationScreen(
             clientCertificatePassword = clientCertificatePassword,
             alternateServerUrl = alternateServerUrl,
             // FolderSync только что прошёл: повторная проверка стоила бы ещё одного таймаута основного
-            alreadyVerified = true
+            alreadyVerified = true,
+            pinnedCertificate = trustedCertificate
         )
 
         when (addResult) {
@@ -246,8 +253,8 @@ fun VerificationScreen(
     // Анимация вращения - создаём всегда, применяем только если animationsEnabled
     val rotation = rememberRotation(animationsEnabled, durationMs = 1000)
 
-    // Запускаем верификацию
-    LaunchedEffect(Unit) {
+    // Запускаем верификацию (повторно — после «Доверять» сертификату сервера)
+    LaunchedEffect(verificationRun) {
         val result = verifyEmail(
             email = email,
             serverUrl = serverUrl,
@@ -268,7 +275,8 @@ fun VerificationScreen(
             testEmailBodyText = testEmailBodyText,
             tryingBackupServerText = tryingBackupServerText,
             onStatusChange = { statusText = it },
-            onAlternateUsed = { verifiedViaAlternate = true }
+            onAlternateUsed = { verifiedViaAlternate = true },
+            pinnedCertInfo = trustedCertificate
         )
         
         when (result) {
@@ -286,9 +294,52 @@ fun VerificationScreen(
                 showMismatchDialog = true
             }
             is VerificationResult.Error -> {
-                onError(localizeVerificationError(result.message), createSavedData())
+                val offerTrust = com.dedovmosol.iwomail.data.repository.CertificateTrust.canOfferTrust(
+                    acceptAllCerts, certificatePath, pinned = trustedCertificate != null
+                ) && com.dedovmosol.iwomail.data.repository.CertificateTrust.isUntrusted(result.message)
+                val endpoint = if (offerTrust) {
+                    com.dedovmosol.iwomail.data.repository.ServerCertificateEndpoint.of(AccountType.EXCHANGE, serverUrl, incomingPort, useSSL)
+                } else null
+                val fetched = endpoint?.let {
+                    statusText = certFetchingText
+                    try {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            com.dedovmosol.iwomail.network.HttpClientProvider.fetchServerCertificate(it.host, it.port, it.startTls)
+                        }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        null
+                    }
+                }
+                if (fetched != null) {
+                    // Сертификат на сверку: «Доверять» — повтор проверки только с этим ключом
+                    pendingCertificateError = result.message
+                    certificateToConfirm = fetched
+                } else {
+                    onError(localizeVerificationError(result.message), createSavedData())
+                }
             }
         }
+    }
+
+    certificateToConfirm?.let { cert ->
+        com.dedovmosol.iwomail.ui.components.ServerCertificateDialog(
+            certificate = cert,
+            serverLabel = serverUrl.trim(),
+            onTrust = {
+                trustedCertificate = cert.info
+                certificateToConfirm = null
+                pendingCertificateError = null
+                statusText = verifyingAccountText
+                verificationRun++
+            },
+            onDismiss = {
+                val error = pendingCertificateError
+                certificateToConfirm = null
+                pendingCertificateError = null
+                onError(localizeVerificationError(error ?: com.dedovmosol.iwomail.data.repository.CertificateTrust.NOT_TRUSTED), createSavedData())
+            }
+        )
     }
     
     // Диалог несовпадения email
@@ -500,7 +551,8 @@ fun VerificationScreen(
                                                 deviceIdSuffix = email,
                                                 certificatePath = certificatePath,
                                                 clientCertificatePath = clientCertificatePath,
-                                                clientCertificatePassword = clientCertificatePassword
+                                                clientCertificatePassword = clientCertificatePassword,
+                                                pinnedCertInfo = trustedCertificate
                                             )
                                         } catch (e: Exception) {
                                             isCheckingAccess = false
@@ -718,7 +770,9 @@ private suspend fun verifyEmail(
     testEmailBodyText: String,
     tryingBackupServerText: String = "",
     onStatusChange: (String) -> Unit,
-    onAlternateUsed: () -> Unit = {}
+    onAlternateUsed: () -> Unit = {},
+    /** ONB-08: сертификат, которому пользователь доверился по отпечатку (резервный сервер — тот же пин, как в CertificatePins). */
+    pinnedCertInfo: com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo? = null
 ): VerificationResult {
     val normalizedEmail = extractVerifiedEmail(email)
         ?: return VerificationResult.Error(VERIFICATION_INVALID_EMAIL)
@@ -734,7 +788,8 @@ private suspend fun verifyEmail(
             deviceIdSuffix = email,
             certificatePath = certificatePath,
             clientCertificatePath = clientCertificatePath,
-            clientCertificatePassword = clientCertificatePassword
+            clientCertificatePassword = clientCertificatePassword,
+            pinnedCertInfo = pinnedCertInfo
         )
     } catch (e: IllegalArgumentException) {
         if (e.message == "CLIENT_CERT_PASSWORD_REQUIRED") {
@@ -766,7 +821,8 @@ private suspend fun verifyEmail(
                 deviceIdSuffix = email,
                 certificatePath = certificatePath,
                 clientCertificatePath = clientCertificatePath,
-                clientCertificatePassword = clientCertificatePassword
+                clientCertificatePassword = clientCertificatePassword,
+                pinnedCertInfo = pinnedCertInfo
             )
         } catch (_: IllegalArgumentException) {
             return VerificationResult.Error(primaryError)

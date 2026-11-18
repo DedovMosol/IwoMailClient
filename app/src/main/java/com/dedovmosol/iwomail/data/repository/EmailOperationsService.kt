@@ -521,6 +521,46 @@ class EmailOperationsService(
     }
 
     /**
+     * Вложение письма в файл [destFile] потоком (PROTO-17, MAIL-04): уже скачанное — копия локального файла;
+     * EWS AttachmentId (черновик, сохранённый через EWS) — EWS GetAttachment; иначе EAS, а при отказе EAS
+     * (в том числе лимит ~10 МБ на Exchange 2007) — EWS по Message-ID или теме и времени письма.
+     * Клиент — аккаунта письма, а не активного (письмо из поиска другого ящика). Ошибка — файла [destFile] нет.
+     */
+    suspend fun downloadAttachmentToFile(attachment: AttachmentEntity, destFile: java.io.File): EasResult<java.io.File> {
+        attachment.localPath?.let { java.io.File(it) }?.takeIf { attachment.downloaded && it.isFile }?.let { local ->
+            return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    local.inputStream().use { input -> destFile.outputStream().use { input.copyTo(it, 64 * 1024) } }
+                    EasResult.Success(destFile)
+                } catch (e: Exception) {
+                    destFile.delete()
+                    if (e is CancellationException) throw e
+                    EasResult.Error(com.dedovmosol.iwomail.eas.AttachmentErrors.of(e))
+                }
+            }
+        }
+        val email = emailDao.getEmail(attachment.emailId) ?: return EasResult.Error(com.dedovmosol.iwomail.eas.AttachmentErrors.NOT_FOUND)
+        val account = accountRepo.getAccount(email.accountId) ?: return EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
+        if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
+            return EasResult.Error(com.dedovmosol.iwomail.eas.AttachmentErrors.NOT_FOUND)
+        }
+        val client = accountRepo.createEasClient(email.accountId) ?: return EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
+        val ref = attachment.fileReference
+        val result = if (ref.isNotBlank() && !com.dedovmosol.iwomail.eas.isEasFileReference(ref)) {
+            client.downloadEwsAttachmentToFile(ref, destFile)
+        } else {
+            val locator = ewsFolderOf(folderDao.getFolder(email.folderId))?.let { folder ->
+                com.dedovmosol.iwomail.eas.EasClient.EwsMailLocator(email.subject, folder, email.dateReceived, email.internetMessageId)
+            }
+            client.downloadMailAttachmentToFile(ref, destFile, attachment.displayName, attachment.contentId, locator)
+        }
+        if (result is EasResult.Success) {
+            client.policyKey?.takeIf { it != account.policyKey }?.let { accountRepo.savePolicyKey(account.id, it) }
+        }
+        return result
+    }
+
+    /**
      * Предзагрузка тел последних N писем из Inbox
      */
     suspend fun prefetchEmailBodies(accountId: Long, count: Int = 7) {

@@ -52,7 +52,6 @@ fun SettingsScreen(
         manyLabel = if (accountCount > 1) Strings.accountsCount(accountCount) else ""
     )
 
-    val colors = MaterialTheme.colorScheme
     val keyboard = LocalSoftwareKeyboardController.current
     val catalog = rememberSettingsCatalog()
     var query by rememberSaveable { mutableStateOf("") }
@@ -102,9 +101,9 @@ fun SettingsScreen(
                 keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
                 shape = RoundedCornerShape(24.dp),
                 colors = TextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    focusedContainerColor = SettingsTokens.cardColor,
+                    unfocusedContainerColor = SettingsTokens.cardColor,
+                    disabledContainerColor = SettingsTokens.cardColor,
                     focusedIndicatorColor = Color.Transparent,
                     unfocusedIndicatorColor = Color.Transparent,
                     disabledIndicatorColor = Color.Transparent
@@ -124,16 +123,12 @@ fun SettingsScreen(
             } else {
                 item {
                     SettingsGroup {
-                        hits.forEachIndexed { i, hit ->
-                            val (icon, bg, fg) = destIcon(hit.dest)
+                        hits.forEach { hit ->
                             SettingsHubRow(
                                 title = hit.title,
                                 subtitle = hit.section,
-                                icon = icon,
-                                iconContainer = bg,
-                                iconContent = fg,
-                                onClick = { open(hit.dest, hit.focus); keyboard?.hide() },
-                                showDivider = i < hits.lastIndex
+                                icon = destIcon(hit.dest),
+                                onClick = { open(hit.dest, hit.focus); keyboard?.hide() }
                             )
                         }
                     }
@@ -146,8 +141,6 @@ fun SettingsScreen(
                         title = Strings.accounts,
                         subtitle = accountsSubtitle,
                         icon = AppIcons.Person,
-                        iconContainer = colors.primaryContainer,
-                        iconContent = colors.onPrimaryContainer,
                         onClick = onNavigateToAccounts
                     )
                 }
@@ -158,17 +151,12 @@ fun SettingsScreen(
                         title = Strings.mailSection,
                         subtitle = Strings.settingsHubMailDesc,
                         icon = AppIcons.Email,
-                        iconContainer = colors.tertiaryContainer,
-                        iconContent = colors.onTertiaryContainer,
-                        onClick = { onNavigateToMail("") },
-                        showDivider = true
+                        onClick = { onNavigateToMail("") }
                     )
                     SettingsHubRow(
                         title = Strings.mailAlertsSection,
                         subtitle = Strings.settingsHubAlertsDesc,
                         icon = AppIcons.Notifications,
-                        iconContainer = colors.errorContainer,
-                        iconContent = colors.onErrorContainer,
                         onClick = { onNavigateToNotifications("") }
                     )
                 }
@@ -179,17 +167,12 @@ fun SettingsScreen(
                         title = Strings.appearance,
                         subtitle = Strings.settingsHubAppearanceDesc,
                         icon = AppIcons.Palette,
-                        iconContainer = colors.secondaryContainer,
-                        iconContent = colors.onSecondaryContainer,
-                        onClick = { onNavigateToPersonalization("") },
-                        showDivider = true
+                        onClick = { onNavigateToPersonalization("") }
                     )
                     SettingsHubRow(
                         title = Strings.appLockSection,
                         subtitle = Strings.appLockDesc,
                         icon = AppIcons.Lock,
-                        iconContainer = colors.primaryContainer,
-                        iconContent = colors.onPrimaryContainer,
                         onClick = { onNavigateToSecurity("") }
                     )
                 }
@@ -200,8 +183,6 @@ fun SettingsScreen(
                         title = Strings.aboutApp,
                         subtitle = Strings.settingsHubAboutDesc,
                         icon = AppIcons.Info,
-                        iconContainer = colors.surfaceVariant,
-                        iconContent = colors.onSurfaceVariant,
                         onClick = { onNavigateToAbout("") }
                     )
                 }
@@ -211,14 +192,11 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun destIcon(dest: SettingsSearchDest): Triple<ImageVector, Color, Color> {
-    val colors = MaterialTheme.colorScheme
-    return when (dest) {
-        SettingsSearchDest.Accounts -> Triple(AppIcons.Person, colors.primaryContainer, colors.onPrimaryContainer)
-        SettingsSearchDest.Mail -> Triple(AppIcons.Email, colors.tertiaryContainer, colors.onTertiaryContainer)
-        SettingsSearchDest.Alerts -> Triple(AppIcons.Notifications, colors.errorContainer, colors.onErrorContainer)
-        SettingsSearchDest.Appearance -> Triple(AppIcons.Palette, colors.secondaryContainer, colors.onSecondaryContainer)
-        SettingsSearchDest.Security -> Triple(AppIcons.Lock, colors.primaryContainer, colors.onPrimaryContainer)
-        SettingsSearchDest.About -> Triple(AppIcons.Info, colors.surfaceVariant, colors.onSurfaceVariant)
-    }
+private fun destIcon(dest: SettingsSearchDest): ImageVector = when (dest) {
+    SettingsSearchDest.Accounts -> AppIcons.Person
+    SettingsSearchDest.Mail -> AppIcons.Email
+    SettingsSearchDest.Alerts -> AppIcons.Notifications
+    SettingsSearchDest.Appearance -> AppIcons.Palette
+    SettingsSearchDest.Security -> AppIcons.Lock
+    SettingsSearchDest.About -> AppIcons.Info
 }

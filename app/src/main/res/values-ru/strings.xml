@@ -20,6 +20,7 @@
     <string name="widget_calendar">Календарь</string>
     <string name="widget_tasks">Задачи</string>
     <string name="widget_no_new_mail">Нет новых писем</string>
+    <string name="widget_content_hidden">Содержимое скрыто: включена блокировка приложения</string>
     <string name="widget_notes">Заметки</string>
     <string name="widget_unread">непрочитанных</string>
     <string name="widget_synced_just_now">Только что</string>

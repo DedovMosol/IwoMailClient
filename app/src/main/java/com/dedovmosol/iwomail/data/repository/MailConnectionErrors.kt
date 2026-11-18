@@ -16,12 +16,15 @@ internal fun mailConnectionErrorMessage(e: Throwable, protocol: String): String 
             "Неверный логин или пароль"
         has("Connection refused") -> "Сервер недоступен. Проверьте адрес и порт."
         has("UnknownHostException") || has("Unable to resolve host") -> "Сервер не найден. Проверьте адрес."
+        // Закреплённый ключ (ONB-08) не совпал — раньше общих веток «сертификат»: смысл другой
+        chain.any { it is com.dedovmosol.iwomail.network.CertificatePinMismatchException } ->
+            "Сертификат сервера изменился с тех пор, как вы ему доверились. Если замена плановая, подтвердите новый сертификат в настройках аккаунта."
         // JavaMail ssl.checkserveridentity: сертификат выдан на другое имя
         has("verify identity of server") ->
             "Сертификат сервера выдан на другое имя. Укажите адрес так, как он записан в сертификате, или включите «Принимать все сертификаты»."
         has("CertPathValidatorException") || has("Trust anchor") || has("CertificateException") ||
             has("certificate") ->
-            "Сертификат сервера не подтверждён. Если доверяете серверу, включите «Принимать все сертификаты»."
+            "Сертификат сервера не подтверждён. Если доверяете серверу, сверьте отпечаток сертификата и доверьтесь ему или включите «Принимать все сертификаты»."
         // JavaMail: «STARTTLS is required but host does not support STARTTLS» (IMAP), «STLS is required…» (POP3)
         has("does not support STARTTLS") || has("does not support STLS") || has("STLS is required") ->
             "Сервер не включает шифрование на этом порту (STARTTLS). Выберите SSL/TLS (порт 993 для IMAP, 995 для POP3)."

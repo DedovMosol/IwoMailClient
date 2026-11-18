@@ -20,6 +20,7 @@
     <string name="widget_calendar">Calendar</string>
     <string name="widget_tasks">Tasks</string>
     <string name="widget_no_new_mail">No new mail</string>
+    <string name="widget_content_hidden">Content is hidden while the app lock is on</string>
     <string name="widget_notes">Notes</string>
     <string name="widget_synced_just_now">Just now</string>
     <string name="widget_no_events_today">No events today</string>

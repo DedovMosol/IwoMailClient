@@ -133,6 +133,7 @@ object AppLockManager {
         val salt = ByteArray(SALT_LENGTH_BYTES).also(secureRandom::nextBytes)
         val hash = buildStoredHash(password, salt, PBKDF2_ITERATIONS)
         prefs.edit().putString(KEY_LOCK_HASH, hash).apply()
+        resetAttempts()
         unlock()
         return true
     }
@@ -149,16 +150,121 @@ object AppLockManager {
     /**
      * Проверка введённого пароля на экране разблокировки. При успехе разблокирует сессию.
      * Constant-time сравнение хешей; неверный формат сохранённого хеша = отказ (fail-closed).
+     * Учитывает счётчик попыток ([attempt]).
      */
-    fun verifyPassword(candidate: String): Boolean {
-        val ok = checkPassword(candidate)
-        if (ok) unlock()
-        return ok
+    fun verifyPassword(candidate: String): Boolean = attempt(candidate, unlockOnSuccess = true) is Attempt.Success
+
+    // ─────────────── NAV-01: защита от перебора пароля ───────────────
+
+    /** Итог попытки ввода пароля. */
+    sealed class Attempt {
+        object Success : Attempt()
+        /** Неверный пароль; [lockoutMs] > 0 — после этой попытки включена пауза. */
+        data class Wrong(val attemptsBeforeLockout: Int, val lockoutMs: Long) : Attempt()
+        /** Идёт пауза: пароль не проверялся. */
+        data class LockedOut(val remainingMs: Long) : Attempt()
+    }
+
+    /** Бесплатных попыток до первой паузы. */
+    const val FREE_ATTEMPTS = 5
+
+    /**
+     * Пауза после N-й неудачи подряд (N > [FREE_ATTEMPTS]): 30 с, 1 мин, 5 мин, затем 15 мин на каждую следующую.
+     * OWASP Authentication Cheat Sheet: нарастающая задержка вместо постоянной блокировки (владелец не теряет доступ).
+     */
+    fun lockoutForFailures(failures: Int): Long = when {
+        failures < FREE_ATTEMPTS -> 0L
+        failures == FREE_ATTEMPTS -> 30_000L
+        failures == FREE_ATTEMPTS + 1 -> 60_000L
+        failures == FREE_ATTEMPTS + 2 -> 5 * 60_000L
+        else -> 15 * 60_000L
+    }
+
+    private const val KEY_FAILED = "app_lock_failed_attempts"
+    private const val KEY_LOCKOUT_UNTIL = "app_lock_lockout_until_elapsed"
+    private const val KEY_LOCKOUT_MS = "app_lock_lockout_ms"
+    private const val KEY_LOCKOUT_BOOT = "app_lock_lockout_boot"
+
+    /** Номер загрузки (Settings.Global.BOOT_COUNT): после перезагрузки elapsedRealtime начинается с нуля. */
+    @androidx.annotation.VisibleForTesting
+    internal var bootCount: () -> Int = {
+        appContext?.let {
+            android.provider.Settings.Global.getInt(it.contentResolver, android.provider.Settings.Global.BOOT_COUNT, -1)
+        } ?: -1
+    }
+
+    private val attemptLock = Any()
+
+    /**
+     * Осталось ждать до следующей попытки (0 — можно вводить). Часы устройства не участвуют: отсчёт по
+     * elapsedRealtime. После перезагрузки прошедшее время неизвестно — пауза начинается заново целиком
+     * (перезагрузка не обходит паузу; владельцу это стоит одного ожидания).
+     */
+    fun lockoutRemainingMs(): Long = synchronized(attemptLock) {
+        val prefs = storage ?: return 0L
+        val duration = prefs.getLong(KEY_LOCKOUT_MS, 0L)
+        if (duration <= 0L) return 0L
+        val now = elapsedRealtimeMs()
+        val boot = bootCount()
+        var until = prefs.getLong(KEY_LOCKOUT_UNTIL, 0L)
+        if (prefs.getInt(KEY_LOCKOUT_BOOT, boot) != boot || until - now > duration) {
+            until = now + duration
+            prefs.edit().putLong(KEY_LOCKOUT_UNTIL, until).putInt(KEY_LOCKOUT_BOOT, boot).commit()
+        }
+        val remaining = until - now
+        if (remaining <= 0L) {
+            // Пауза истекла в этой загрузке — забыть её (счётчик неудач остаётся: следующая пауза длиннее)
+            prefs.edit().remove(KEY_LOCKOUT_MS).remove(KEY_LOCKOUT_UNTIL).remove(KEY_LOCKOUT_BOOT).commit()
+            return 0L
+        }
+        remaining
+    }
+
+    fun failedAttempts(): Int = storage?.getInt(KEY_FAILED, 0) ?: 0
+
+    /**
+     * Попытка с учётом паузы. Неудача записывается ДО проверки хеша и синхронно (commit): иначе
+     * завершение процесса во время PBKDF2 (около секунды) давало бы бесконечные попытки без счёта.
+     * Успех обнуляет счётчик. Вызывать с фонового потока (PBKDF2 и запись на диск).
+     */
+    @androidx.annotation.WorkerThread
+    fun attempt(candidate: String, unlockOnSuccess: Boolean): Attempt {
+        val prefs = storage ?: return Attempt.Wrong(0, 0L)
+        lockoutRemainingMs().takeIf { it > 0L }?.let { return Attempt.LockedOut(it) }
+        val failures = synchronized(attemptLock) {
+            val next = prefs.getInt(KEY_FAILED, 0) + 1
+            prefs.edit().putInt(KEY_FAILED, next).commit()
+            next
+        }
+        if (checkPassword(candidate)) {
+            resetAttempts()
+            if (unlockOnSuccess) unlock()
+            return Attempt.Success
+        }
+        val lockout = lockoutForFailures(failures)
+        if (lockout > 0L) synchronized(attemptLock) {
+            prefs.edit()
+                .putLong(KEY_LOCKOUT_MS, lockout)
+                .putLong(KEY_LOCKOUT_UNTIL, elapsedRealtimeMs() + lockout)
+                .putInt(KEY_LOCKOUT_BOOT, bootCount())
+                .commit()
+        }
+        return Attempt.Wrong((FREE_ATTEMPTS - failures).coerceAtLeast(0), lockout)
+    }
+
+    /**
+     * Успешный вход (пароль или отпечаток): счётчик и пауза сбрасываются. apply(), не commit(): сброс можно
+     * вызывать с главного потока (отпечаток), а недописанный сброс лишь оставит счётчик — в безопасную сторону.
+     */
+    fun resetAttempts() = synchronized(attemptLock) {
+        storage?.edit()?.remove(KEY_FAILED)?.remove(KEY_LOCKOUT_UNTIL)?.remove(KEY_LOCKOUT_MS)?.remove(KEY_LOCKOUT_BOOT)?.apply()
+        Unit
     }
 
     /** Удалить пароль блокировки (требует предварительной проверки текущего пароля вызывающим). */
     fun removePassword() {
         storage?.edit()?.remove(KEY_LOCK_HASH)?.apply()
+        resetAttempts()
         _locked.value = false
     }
 
@@ -288,6 +394,11 @@ object AppLockManager {
             notedExternalUiAtElapsed = 0L
             backgroundedAtElapsed = 0L
             elapsedRealtimeMs = { android.os.SystemClock.elapsedRealtime() }
+            bootCount = {
+                appContext?.let {
+                    android.provider.Settings.Global.getInt(it.contentResolver, android.provider.Settings.Global.BOOT_COUNT, -1)
+                } ?: -1
+            }
         }
     }
 

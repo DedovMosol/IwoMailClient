@@ -171,6 +171,48 @@ class MailSessionPropertiesTest {
         assertThat(String(java.util.Base64.getDecoder().decode(wire.last().trim()))).contains(SECRET)
     }
 
+    // ---------- UI2-03 / ONB-08: закреплённый ключ через ssl.socketFactory ----------
+
+    private fun pemCertificate(name: String) = java.security.cert.CertificateFactory.getInstance("X.509")
+        .generateCertificate(requireNotNull(javaClass.getResourceAsStream("/certs/tls/$name.pem"))) as java.security.cert.X509Certificate
+
+    private fun pinnedContext(pinOf: String): SSLContext {
+        val pin = com.dedovmosol.iwomail.network.HttpClientProvider.extractCertificateInfo(pemCertificate(pinOf))
+        val tm = com.dedovmosol.iwomail.network.HttpClientProvider.createPinnedKeyTrustManager(pin, accountId = null, serverUrl = "")
+        return SSLContext.getInstance("TLS", JSSE).apply { init(null, arrayOf(tm), null) }
+    }
+
+    @Test fun `IMAPS with the pinned key signs in even though the certificate names another host`() {
+        val (port, wire) = fakeImapTls("tls_dns_only")
+        val props = MailSessionProperties.build(MailSessionProperties.Protocol.IMAP, LOOPBACK, port, useSsl = true,
+            acceptAllCerts = false, sslContext = pinnedContext("tls_dns_only"), pinnedKey = true)
+        assertThat(props.getProperty("mail.imaps.ssl.checkserveridentity")).isEqualTo("false")
+        assertThat(props.getProperty("mail.imaps.ssl.trust")).isNull()
+
+        runCatching { Session.getInstance(props).getStore("imaps").connect(LOOPBACK, port, "u", SECRET) }
+        Thread.sleep(300)
+
+        // Ключ совпал — вход пошёл (фейк отвечает NO, но пароль внутри TLS дошёл)
+        assertThat(wire.joinToString("\n")).contains("AUTHENTICATE")
+    }
+
+    @Test fun `IMAPS with another key is refused and JavaMail does not fall back to the default socket factory`() {
+        val (port, wire) = fakeImapTls("tls_dns_only")
+        val props = MailSessionProperties.build(MailSessionProperties.Protocol.IMAP, LOOPBACK, port, useSsl = true,
+            acceptAllCerts = false, sslContext = pinnedContext("tls_ok"), pinnedKey = true)
+        assertThat(props.getProperty("mail.imaps.socketFactory.fallback")).isEqualTo("false")
+
+        val error = runCatching { Session.getInstance(props).getStore("imaps").connect(LOOPBACK, port, "u", SECRET) }.exceptionOrNull()
+        Thread.sleep(200)
+
+        // С fallback=true (по умолчанию в JavaMail) вторая попытка шла бы фабрикой по умолчанию и падала бы на УЦ
+        // (так было на реальном Exchange) — сертификат доверенного УЦ обошёл бы пин
+        val chain = generateSequence(error) { it.cause }.toList()
+        assertThat(chain.any { it is com.dedovmosol.iwomail.network.CertificatePinMismatchException }).isTrue()
+        assertThat(wire.joinToString("\n")).doesNotContain(SECRET)
+        assertThat(wire.none { it.contains("AUTHENTICATE") }).isTrue()
+    }
+
     // ---------- поддельные серверы ----------
 
     private fun connectFails(protocol: MailSessionProperties.Protocol, port: Int, useSsl: Boolean): Exception {

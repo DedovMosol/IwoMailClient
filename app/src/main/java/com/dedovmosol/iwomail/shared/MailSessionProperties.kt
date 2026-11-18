@@ -79,18 +79,70 @@ object MailSessionProperties {
 
     fun storeProtocol(protocol: Protocol, useSsl: Boolean): String = if (useSsl) protocol.ssl else protocol.plain
 
-    fun build(protocol: Protocol, host: String, port: Int, useSsl: Boolean, acceptAllCerts: Boolean): Properties =
+    /**
+     * Свойства для аккаунта: доверие как у EAS (импортированный сертификат, закреплённый ключ, «Принимать все»)
+     * и клиентский сертификат. Смена сертификата сервера попадает в тот же CertificateChangeDetector, что у EAS:
+     * адрес — как у CertificatePins.endpointOf, поэтому «Принять новый» в настройках работает и для IMAP/POP3.
+     */
+    fun forAccount(
+        protocol: Protocol,
+        account: com.dedovmosol.iwomail.data.database.AccountEntity,
+        clientCertificatePassword: String? = null
+    ): Properties {
+        val pin = com.dedovmosol.iwomail.data.repository.CertificatePins.forEndpoint(account, useAlternate = false)
+        val serverUrl = com.dedovmosol.iwomail.eas.EasClient.normalizeUrl(account.serverUrl, account.incomingPort, account.useSSL)
+        val provider = com.dedovmosol.iwomail.network.HttpClientProvider
+        val context = provider.mailSslContext(
+            acceptAllCerts = account.acceptAllCerts,
+            certificatePath = account.certificatePath,
+            pinnedCertInfo = pin,
+            clientCertificatePath = account.clientCertificatePath?.takeIf { !clientCertificatePassword.isNullOrBlank() },
+            clientCertificatePassword = clientCertificatePassword?.takeIf { it.isNotBlank() },
+            accountId = account.id.takeIf { it > 0 },
+            serverUrl = serverUrl
+        )
+        val pinnedKey = provider.trustModeOf(account.acceptAllCerts, account.certificatePath, pin) ==
+            com.dedovmosol.iwomail.network.HttpClientProvider.TrustMode.PINNED_KEY
+        return build(protocol, account.serverUrl, account.incomingPort, account.useSSL, account.acceptAllCerts, context, pinnedKey)
+    }
+
+    /**
+     * [sslContext] — доверие и клиентский сертификат аккаунта (UI2-03, тот же TrustManager, что у EAS:
+     * HttpClientProvider.mailSslContext). Передаётся объектом в `ssl.socketFactory`: JavaMail 1.6 оборачивает им
+     * обычный сокет (SocketFetcher.createSocket) и STARTTLS (SocketFetcher.startTLS). `ssl.trust` тогда не ставится —
+     * при нём JavaMail взял бы свою фабрику вместо нашей. [pinnedKey] — закреплён ключ сервера (ONB-08): имя
+     * в сертификате не проверяется, чужой ключ отвергает TrustManager.
+     */
+    fun build(
+        protocol: Protocol,
+        host: String,
+        port: Int,
+        useSsl: Boolean,
+        acceptAllCerts: Boolean,
+        sslContext: javax.net.ssl.SSLContext? = null,
+        pinnedKey: Boolean = false
+    ): Properties =
         Properties().apply {
             put("mail.store.protocol", storeProtocol(protocol, useSsl))
-            val tls = defaultTls(acceptAllCerts)
+            val tls = if (sslContext != null) {
+                try { tlsSettings(sslContext) } catch (e: IllegalStateException) { null }
+            } else {
+                defaultTls(acceptAllCerts)
+            }
+            val checkIdentity = !acceptAllCerts && !pinnedKey
             for (p in listOf(protocol.plain, protocol.ssl)) {
                 put("mail.$p.host", host)
                 put("mail.$p.port", port.toString())
                 put("mail.$p.ssl.enable", useSsl.toString())
                 put("mail.$p.starttls.enable", (!useSsl).toString())
                 put("mail.$p.starttls.required", (!useSsl).toString())
-                put("mail.$p.ssl.checkserveridentity", (!acceptAllCerts).toString())
-                if (acceptAllCerts) put("mail.$p.ssl.trust", "*")
+                put("mail.$p.ssl.checkserveridentity", checkIdentity.toString())
+                if (sslContext != null) put("mail.$p.ssl.socketFactory", sslContext.socketFactory)
+                else if (acceptAllCerts) put("mail.$p.ssl.trust", "*")
+                // По умолчанию JavaMail при ЛЮБОЙ ошибке нашей фабрики (в том числе «ключ сервера не тот») молча
+                // повторяет подключение фабрикой по умолчанию (SocketFetcher, socketFactory.fallback=true):
+                // закреплённый ключ обходился бы сертификатом любого доверенного УЦ. Проверено на сервере.
+                put("mail.$p.socketFactory.fallback", "false")
                 if (tls != null) {
                     if (tls.protocols.isNotEmpty()) put("mail.$p.ssl.protocols", tls.protocols)
                     if (tls.cipherSuites.isNotEmpty()) put("mail.$p.ssl.ciphersuites", tls.cipherSuites)

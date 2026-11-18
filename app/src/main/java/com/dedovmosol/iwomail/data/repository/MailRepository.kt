@@ -178,6 +178,10 @@ class MailRepository(private val context: Context) {
     
     suspend fun refreshAttachmentMetadata(emailId: String) = 
         emailOperationsService.refreshAttachmentMetadata(emailId)
+
+    /** @see EmailOperationsService.downloadAttachmentToFile */
+    suspend fun downloadAttachmentToFile(attachment: AttachmentEntity, destFile: java.io.File) =
+        emailOperationsService.downloadAttachmentToFile(attachment, destFile)
     
     suspend fun prefetchEmailBodies(accountId: Long, count: Int = 7) = 
         emailOperationsService.prefetchEmailBodies(accountId, count)

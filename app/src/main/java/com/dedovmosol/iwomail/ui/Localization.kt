@@ -1444,6 +1444,30 @@ object Strings {
     val bothServersUnavailable: String @Composable get() = if (isRussian()) "Оба сервера недоступны" else "Both servers unavailable"
     val authErrorServer: String @Composable get() = if (isRussian()) "Ошибка авторизации на сервере" else "Server authentication error"
     val certErrorServer: String @Composable get() = if (isRussian()) "Ошибка TLS/сертификата сервера" else "Server TLS/certificate error"
+
+    // ONB-08: доверие сертификату сервера по отпечатку
+    val certTrustTitle: String @Composable get() = if (isRussian()) "Проверьте сертификат сервера" else "Check the server certificate"
+    val certTrustExplain: String @Composable get() = if (isRussian())
+        "Система не подтвердила сертификат сервера: его выдал внутренний центр сертификации или адрес указан IP. Сверьте отпечаток с администратором. Если совпадает, приложение будет принимать только этот сертификат, а при его замене предупредит."
+        else "The system could not verify the server certificate: it is issued by an internal certificate authority or the server is addressed by IP. Compare the fingerprint with your administrator. If it matches, the app will accept only this certificate and warn you if it ever changes."
+    val certIssuedTo: String @Composable get() = if (isRussian()) "Выдан для" else "Issued to"
+    val certIssuedBy: String @Composable get() = if (isRussian()) "Кем выдан" else "Issued by"
+    val certValidity: String @Composable get() = if (isRussian()) "Действует" else "Valid"
+    val certNames: String @Composable get() = if (isRussian()) "Имена сервера" else "Server names"
+    val certSha1Hint: String @Composable get() = if (isRussian()) "SHA-1 (так отпечаток показывают Exchange и IIS)" else "SHA-1 (as shown by Exchange and IIS)"
+    val certExpired: String @Composable get() = if (isRussian()) "Срок действия истёк" else "Expired"
+    val certNotYetValid: String @Composable get() = if (isRussian()) "Ещё не действует" else "Not yet valid"
+    val certSelfSigned: String @Composable get() = if (isRussian()) "Самоподписанный" else "Self-signed"
+    val certTrustAction: String @Composable get() = if (isRussian()) "Доверять" else "Trust"
+    val certFetching: String @Composable get() = if (isRussian()) "Получаем сертификат сервера…" else "Fetching the server certificate…"
+    val certTrustFromServer: String @Composable get() = if (isRussian()) "Доверять сертификату сервера" else "Trust the server certificate"
+    val certTrustFromServerDesc: String @Composable get() = if (isRussian())
+        "Получить сертификат с сервера и закрепить его по отпечатку вместо «Принимать все сертификаты»"
+        else "Get the certificate from the server and pin it by fingerprint instead of “Accept all certificates”"
+    val certTrustDone: String @Composable get() = if (isRussian()) "Сертификат закреплён: принимается только он" else "Certificate pinned: only this one is accepted"
+    val certAcceptAllWarning: String @Composable get() = if (isRussian())
+        "Включено «Принимать все сертификаты»: соединение шифруется, но подлинность сервера не проверяется."
+        else "“Accept all certificates” is on: the connection is encrypted, but the server is not authenticated."
     val serverError5xx: String @Composable get() = if (isRussian()) "Сервер возвращает ошибку" else "Server error"
     val serverTimeout: String @Composable get() = if (isRussian()) "Сервер не отвечает" else "Server not responding"
     val dataMayBeOutdated: String @Composable get() = if (isRussian()) "Данные могут быть неактуальны" else "Data may be outdated"
@@ -1499,6 +1523,30 @@ object Strings {
     val appLockUnlock: String @Composable get() = if (isRussian()) "Разблокировать" else "Unlock"
     val appLockDisable: String @Composable get() = if (isRussian()) "Отключить блокировку" else "Disable lock"
     val appLockWrongPassword: String @Composable get() = if (isRussian()) "Неверный пароль" else "Wrong password"
+    val scrollbarColor: String @Composable get() = if (isRussian()) "Цвет скроллбара" else "Scrollbar color"
+    val tasksSyncTitle: String @Composable get() = if (isRussian()) "Синхронизация задач" else "Tasks sync"
+    val draftMode: String @Composable get() = if (isRussian()) "Режим черновиков (бета)" else "Draft mode (beta)"
+    val draftModeServer: String @Composable get() = if (isRussian()) "Серверные" else "Server"
+    val draftModeLocal: String @Composable get() = if (isRussian()) "Локальные" else "Local"
+    val clientCertificate: String @Composable get() = if (isRussian()) "Клиентский сертификат" else "Client certificate"
+    val accountSection: String @Composable get() = if (isRussian()) "Аккаунт" else "Account"
+    val securitySection: String @Composable get() = if (isRussian()) "Безопасность" else "Security"
+    val mailSettingsSection: String @Composable get() = if (isRussian()) "Почта" else "Mail"
+    val autoCleanupFolders: String @Composable get() = if (isRussian()) "Папки на сервере" else "Server folders"
+    /** NAV-01: текст после неудачной попытки или во время паузы. */
+    @Composable
+    fun appLockAttemptState(attemptsBeforeLockout: Int, lockoutRemainingMs: Long): String {
+        val ru = isRussian()
+        if (lockoutRemainingMs > 0L) {
+            val total = (lockoutRemainingMs + 999) / 1000
+            val time = "%d:%02d".format(total / 60, total % 60)
+            return if (ru) "Слишком много неверных попыток. Повторите через $time" else "Too many wrong attempts. Try again in $time"
+        }
+        return when {
+            attemptsBeforeLockout in 1..3 -> if (ru) "Неверный пароль. Попыток до паузы: $attemptsBeforeLockout" else "Wrong password. Attempts before a pause: $attemptsBeforeLockout"
+            else -> if (ru) "Неверный пароль" else "Wrong password"
+        }
+    }
     val appLockTooShort: String @Composable get() = if (isRussian()) "Минимум 4 символа" else "At least 4 characters"
     val appLockMismatch: String @Composable get() = if (isRussian()) "Пароли не совпадают" else "Passwords do not match"
     val appLockBiometricUnavailable: String @Composable get() = if (isRussian()) "Отпечаток пальца недоступен на этом устройстве" else "Fingerprint is not available on this device"
@@ -1836,6 +1884,28 @@ object NotificationStrings {
         ConnectionFailure.fromMessage(errorCode)?.let { return localizeConnectionFailure(it, errorCode, isRussian) }
         return when {
             errorCode == "ALREADY_IN_FOLDER" -> getAlreadyInFolder(isRussian)
+            errorCode == com.dedovmosol.iwomail.eas.AttachmentErrors.TOO_LARGE -> if (isRussian)
+                "Вложение больше, чем сервер разрешает скачивать через ActiveSync, а веб-службы Exchange (EWS) его не отдали. Откройте письмо в Outlook Web Access."
+                else "The attachment is larger than the server allows over ActiveSync, and Exchange Web Services (EWS) did not return it. Open the message in Outlook Web Access."
+            errorCode == com.dedovmosol.iwomail.eas.AttachmentErrors.NOT_FOUND -> if (isRussian)
+                "Вложение не найдено на сервере. Обновите письмо и попробуйте снова."
+                else "Attachment not found on the server. Refresh the message and try again."
+            errorCode == com.dedovmosol.iwomail.eas.AttachmentErrors.NO_SPACE -> if (isRussian)
+                "Недостаточно места на устройстве для вложения."
+                else "Not enough storage on the device for the attachment."
+            errorCode == com.dedovmosol.iwomail.eas.AttachmentErrors.TOO_LARGE_FOR_MEMORY -> if (isRussian)
+                "Вложение слишком большое для предпросмотра. Сохраните его в файл."
+                else "The attachment is too large to preview. Save it to a file."
+            errorCode == "NO_CLIENT" -> getAccountNotFound(isRussian)
+            errorCode == com.dedovmosol.iwomail.data.repository.CertificateTrust.NOT_TRUSTED -> if (isRussian)
+                "Сертификат сервера не подтверждён. Сверьте отпечаток и доверьтесь ему или включите «Принимать все сертификаты»."
+                else "The server certificate is not verified. Compare its fingerprint and trust it, or turn on “Accept all certificates”."
+            errorCode == com.dedovmosol.iwomail.data.repository.ServerCertificateEndpoint.NO_TLS -> if (isRussian)
+                "Соединение с сервером без TLS: сертификата нет." else "The connection to the server has no TLS: there is no certificate."
+            // Exchange не даёт перенести вхождение серии на дату соседнего вхождения (или за неё)
+            errorCode.contains("ErrorOccurrenceCrossingBoundary") -> if (isRussian)
+                "Это повторение нельзя перенести на день другого повторения серии. Выберите дату между соседними повторениями."
+                else "This occurrence cannot be moved to the day of another occurrence in the series. Pick a date between the neighbouring occurrences."
             errorCode == "UNAUTHORIZED" -> if (isRussian) "Неверный логин или пароль (401). Проверьте учётные данные и домен."
                 else "Wrong username or password (401). Check the credentials and domain."
             errorCode == "ACCESS_DENIED" -> if (isRussian) "Доступ запрещён (403). Возможно, для ящика отключён Exchange ActiveSync."
@@ -1973,6 +2043,9 @@ object NotificationStrings {
     /** Письмо с отменой отправки, отправленное в фоне (приложение закрыли во время отсчёта или не было связи). */
     fun getEmailSentTo(to: String, isRussian: Boolean): String =
         if (isRussian) "Письмо для $to отправлено" else "Email to $to sent"
+    /** BG-08: уведомление об отправке на экране блокировки — без адресата и темы. */
+    fun getSendStatusPublic(isRussian: Boolean): String =
+        if (isRussian) "Отправка почты" else "Sending mail"
     fun getEmailNotSent(isRussian: Boolean): String =
         if (isRussian) "Письмо не отправлено" else "Email not sent"
     /** «Тема»: причина. Сохранено в Черновики — можно исправить и отправить снова. */

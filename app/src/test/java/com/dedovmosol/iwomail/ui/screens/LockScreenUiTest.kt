@@ -238,6 +238,36 @@ class LockScreenUiTest {
     }
 
     @Test
+    fun `wrong password shows attempts left before a pause`() {
+        plantPassword("correct-pass")
+        AppLockManager.lock()
+        repeat(2) { AppLockManager.attempt("nope", unlockOnSuccess = true) }
+        setContent()
+        composeTestRule.onNode(hasSetTextAction()).performTextInput("bad")
+        composeTestRule.onNodeWithText("Unlock").performClick()
+        composeTestRule.waitUntil(5_000) {
+            composeTestRule.onAllNodesWithText("Wrong password. Attempts before a pause: 2").fetchSemanticsNodes().isNotEmpty()
+        }
+        assertThat(AppLockManager.isLocked()).isTrue()
+    }
+
+    @Test
+    fun `pause from an earlier session disables input and shows the countdown`() {
+        plantPassword("correct-pass")
+        AppLockManager.lock()
+        AppLockManager.elapsedRealtimeMs = { 50_000L }
+        AppLockManager.bootCount = { 1 }
+        repeat(AppLockManager.FREE_ATTEMPTS) { AppLockManager.attempt("nope", unlockOnSuccess = true) }
+        setContent()
+        composeTestRule.waitUntil(5_000) {
+            composeTestRule.onAllNodesWithText("Too many wrong attempts. Try again in 0:30").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNode(hasSetTextAction()).assertIsNotEnabled()
+        composeTestRule.onNodeWithText("Unlock").assertIsNotEnabled()
+        assertThat(AppLockManager.isLocked()).isTrue()
+    }
+
+    @Test
     fun `biometric unlock path unlocks session without password entry`() {
         plantPassword("correct-pass")
         setContent(

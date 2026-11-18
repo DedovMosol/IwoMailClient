@@ -5,6 +5,7 @@ import com.dedovmosol.iwomail.data.repository.AccountRepository
 import com.dedovmosol.iwomail.data.repository.CalendarRepository
 import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.data.repository.TaskRepository
+import com.dedovmosol.iwomail.eas.AttachmentErrors
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.util.ICalParser
 import com.dedovmosol.iwomail.util.MimeHtmlProcessor
@@ -30,7 +31,8 @@ private val MAX_AUTO_INLINE_TOTAL_BYTES =
  * Encapsulates all network/DB side effects, keeping UI state in the Composable.
  *
  * Protocol notes (Exchange 2007 SP1 / EAS 12.1):
- * - Attachment download: GetAttachment (EAS 2.5/12.0/12.1) primary, ItemOperations Fetch fallback
+ * - Attachment download: ItemOperations Fetch (multipart) → GetAttachment POST (EAS 12.x) → EWS GetAttachment,
+ *   streamed to a file ([downloadAttachmentToFile]); small ones in memory ([fetchAttachmentBytes])
  * - Meeting response: raw MIME via SendMail (EAS 12.1), WBXML wrapper for 14.0+
  * - Mark as Read: Sync Change with <Read>1</Read> (MS-ASEMAIL §2.2.2.58)
  * - MoveItems: supported since EAS 2.5
@@ -64,6 +66,7 @@ class EmailDetailActions(
 
         val first = downloadAttachmentBytesOnce(att.fileReference)
         if (first is EasResult.Success) return first
+        if (AttachmentErrors.isFinal((first as EasResult.Error).message)) return first
 
         val freshRef = refreshedFileReferenceOrNull(att) ?: return first
         return downloadAttachmentBytesOnce(freshRef)
@@ -91,20 +94,16 @@ class EmailDetailActions(
      * [fetchAttachmentBytes] (used by the "Save as…" document-picker path).
      */
     suspend fun downloadAttachmentToFile(att: AttachmentEntity, destFile: File): EasResult<Unit> {
-        val first = downloadAttachmentToFileOnce(att.fileReference, destFile)
+        val first = withContext(Dispatchers.IO) { mailRepo.downloadAttachmentToFile(att, destFile) }
         if (first is EasResult.Success) return first.toUnit()
+        // Свежая ссылка не поможет при лимите размера (EWS уже пробовали), сети, учётных данных, нехватке места
+        val error = (first as EasResult.Error).message
+        if (error == AttachmentErrors.TOO_LARGE || AttachmentErrors.isFinal(error)) return first.toUnit()
 
         val freshRef = refreshedFileReferenceOrNull(att) ?: return first.toUnit()
-        return downloadAttachmentToFileOnce(freshRef, destFile).toUnit()
-    }
-
-    private suspend fun downloadAttachmentToFileOnce(fileReference: String, destFile: File): EasResult<File> {
-        val account = accountRepo.getActiveAccountSync()
-        val easClient = account?.let { accountRepo.createEasClient(it.id) }
-            ?: return EasResult.Error("NO_CLIENT")
         return withContext(Dispatchers.IO) {
-            easClient.downloadAttachmentToFile(fileReference, destFile)
-        }
+            mailRepo.downloadAttachmentToFile(att.copy(fileReference = freshRef, downloaded = false), destFile)
+        }.toUnit()
     }
 
     /**

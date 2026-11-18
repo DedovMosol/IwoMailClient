@@ -261,6 +261,152 @@ class AppLockManagerTest {
         assertThat(AppLockManager.shouldLockAfterExternalUi(60_000L, 60_000L)).isTrue()
     }
 
+    // ─── NAV-01: защита от перебора ───
+
+    private var clock = 10_000L
+    private var boot = 7
+
+    /** Хеш с малым числом итераций (600k в каждом тесте — секунды) и управляемые часы/номер загрузки. */
+    private fun seedPassword(password: String = "right-pass") {
+        prefs.edit().putString(
+            AppLockManager.KEY_LOCK_HASH,
+            AppLockManager.buildStoredHash(password, ByteArray(16) { 3 }, 1_000)
+        ).commit()
+        AppLockManager.elapsedRealtimeMs = { clock }
+        AppLockManager.bootCount = { boot }
+    }
+
+    private fun fail(times: Int): AppLockManager.Attempt {
+        var last: AppLockManager.Attempt = AppLockManager.Attempt.Success
+        repeat(times) { last = AppLockManager.attempt("wrong", unlockOnSuccess = true) }
+        return last
+    }
+
+    @Test
+    fun `lockout schedule grows and caps at 15 minutes`() {
+        assertThat((0..4).map(AppLockManager::lockoutForFailures)).containsExactly(0L, 0L, 0L, 0L, 0L)
+        assertThat(AppLockManager.lockoutForFailures(5)).isEqualTo(30_000L)
+        assertThat(AppLockManager.lockoutForFailures(6)).isEqualTo(60_000L)
+        assertThat(AppLockManager.lockoutForFailures(7)).isEqualTo(300_000L)
+        assertThat(AppLockManager.lockoutForFailures(8)).isEqualTo(900_000L)
+        assertThat(AppLockManager.lockoutForFailures(100)).isEqualTo(900_000L)
+    }
+
+    @Test
+    fun `wrong attempts count down and the fifth starts a pause`() {
+        seedPassword()
+        assertThat(fail(1)).isEqualTo(AppLockManager.Attempt.Wrong(4, 0L))
+        assertThat(fail(3)).isEqualTo(AppLockManager.Attempt.Wrong(1, 0L))
+        assertThat(fail(1)).isEqualTo(AppLockManager.Attempt.Wrong(0, 30_000L))
+        assertThat(AppLockManager.lockoutRemainingMs()).isEqualTo(30_000L)
+        assertThat(AppLockManager.failedAttempts()).isEqualTo(5)
+    }
+
+    @Test
+    fun `during a pause even the right password is not checked`() {
+        seedPassword()
+        AppLockManager.lock()
+        fail(5)
+        clock += 10_000L
+        val result = AppLockManager.attempt("right-pass", unlockOnSuccess = true)
+        assertThat(result).isEqualTo(AppLockManager.Attempt.LockedOut(20_000L))
+        assertThat(AppLockManager.isLocked()).isTrue()
+        // Пауза не тратит попытку
+        assertThat(AppLockManager.failedAttempts()).isEqualTo(5)
+    }
+
+    @Test
+    fun `after the pause the next failure gives a longer pause`() {
+        seedPassword()
+        fail(5)
+        clock += 30_000L
+        assertThat(AppLockManager.lockoutRemainingMs()).isEqualTo(0L)
+        assertThat(fail(1)).isEqualTo(AppLockManager.Attempt.Wrong(0, 60_000L))
+    }
+
+    @Test
+    fun `success resets the counter and unlocks`() {
+        seedPassword()
+        AppLockManager.lock()
+        fail(4)
+        assertThat(AppLockManager.attempt("right-pass", unlockOnSuccess = true)).isEqualTo(AppLockManager.Attempt.Success)
+        assertThat(AppLockManager.isLocked()).isFalse()
+        assertThat(AppLockManager.failedAttempts()).isEqualTo(0)
+        assertThat(fail(1)).isEqualTo(AppLockManager.Attempt.Wrong(4, 0L))
+    }
+
+    @Test
+    fun `settings check does not unlock the session`() {
+        seedPassword()
+        AppLockManager.lock()
+        assertThat(AppLockManager.attempt("right-pass", unlockOnSuccess = false)).isEqualTo(AppLockManager.Attempt.Success)
+        assertThat(AppLockManager.isLocked()).isTrue()
+    }
+
+    @Test
+    fun `counter and pause survive process death`() {
+        seedPassword()
+        fail(5)
+        AppLockManager.resetForTesting()
+        AppLockManager.setStorageForTesting(prefs)
+        AppLockManager.elapsedRealtimeMs = { clock }
+        AppLockManager.bootCount = { boot }
+        clock += 5_000L
+        assertThat(AppLockManager.lockoutRemainingMs()).isEqualTo(25_000L)
+        assertThat(AppLockManager.failedAttempts()).isEqualTo(5)
+    }
+
+    @Test
+    fun `reboot restarts the pause in full`() {
+        seedPassword()
+        fail(5)
+        clock += 20_000L
+        // Новая загрузка: elapsedRealtime начат заново и меньше старой отметки
+        boot += 1
+        clock = 1_000L
+        assertThat(AppLockManager.lockoutRemainingMs()).isEqualTo(30_000L)
+        clock += 29_999L
+        assertThat(AppLockManager.lockoutRemainingMs()).isEqualTo(1L)
+        clock += 1L
+        assertThat(AppLockManager.lockoutRemainingMs()).isEqualTo(0L)
+    }
+
+    @Test
+    fun `stored deadline beyond the pause length is clamped`() {
+        seedPassword()
+        fail(5)
+        // Отметка в будущем дальше длины паузы (подмена файла или сбой без смены BOOT_COUNT) — не дольше самой паузы
+        prefs.edit().putLong("app_lock_lockout_until_elapsed", clock + 10_000_000L).commit()
+        assertThat(AppLockManager.lockoutRemainingMs()).isEqualTo(30_000L)
+    }
+
+    @Test
+    fun `resetAttempts clears the pause (biometric unlock)`() {
+        seedPassword()
+        fail(5)
+        AppLockManager.resetAttempts()
+        assertThat(AppLockManager.lockoutRemainingMs()).isEqualTo(0L)
+        assertThat(AppLockManager.failedAttempts()).isEqualTo(0)
+    }
+
+    @Test
+    fun `setting and removing the password clear the counter`() {
+        seedPassword()
+        fail(5)
+        AppLockManager.removePassword()
+        assertThat(AppLockManager.failedAttempts()).isEqualTo(0)
+        assertThat(AppLockManager.lockoutRemainingMs()).isEqualTo(0L)
+    }
+
+    @Test
+    fun `attempt against a corrupted hash still counts as a failure`() {
+        seedPassword()
+        // Повреждённый хеш: проверка уходит в отказ, попытка засчитана
+        prefs.edit().putString(AppLockManager.KEY_LOCK_HASH, "garbage").commit()
+        AppLockManager.attempt("anything", unlockOnSuccess = true)
+        assertThat(AppLockManager.failedAttempts()).isEqualTo(1)
+    }
+
     @Test
     fun `fail-closed blocks writing the lock password to obfuscated storage`() {
         SecurityTelemetry.resetForTesting()

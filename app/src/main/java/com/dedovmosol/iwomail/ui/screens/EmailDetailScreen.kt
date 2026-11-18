@@ -106,15 +106,32 @@ fun EmailDetailScreen(
     )
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    suspend fun fetchAttachmentBytes(att: AttachmentEntity): ByteArray? {
+    /**
+     * Вложение в файл `cacheDir/[dirName]/<имя>` потоком (файлы в десятки МБ не проходят через память).
+     * Пишется во временный файл и переименовывается после успеха: открывающее приложение не увидит половину файла.
+     * Ошибка — тост на языке интерфейса и null.
+     */
+    suspend fun downloadAttachmentFile(att: AttachmentEntity, dirName: String): File? {
         if (!NetworkMonitor.isNetworkAvailable(context) && !(att.downloaded && att.localPath != null)) {
             SafeToast.short(context, if (isRussian) "Нет сети" else "No network")
             return null
         }
-        return when (val result = actions.fetchAttachmentBytes(att)) {
-            is EasResult.Success -> result.data
+        val safeFileName = att.displayName.replace(SAFE_FILENAME_REGEX, "_").ifBlank { "attachment" }
+        val (target, partial) = withContext(Dispatchers.IO) {
+            val dir = File(context.cacheDir, dirName).apply { mkdirs() }
+            File(dir, safeFileName) to File.createTempFile("att_", ".part", dir)
+        }
+        return when (val result = actions.downloadAttachmentToFile(att, partial)) {
+            is EasResult.Success -> withContext(Dispatchers.IO) {
+                target.delete()
+                if (partial.renameTo(target)) target else { partial.delete(); null }
+            } ?: run {
+                SafeToast.long(context, NotificationStrings.getErrorWithMessage(isRussian, null))
+                null
+            }
             is EasResult.Error -> {
-                SafeToast.long(context, result.message)
+                withContext(Dispatchers.IO) { partial.delete() }
+                SafeToast.long(context, NotificationStrings.localizeError(result.message, isRussian))
                 null
             }
         }
@@ -254,10 +271,10 @@ fun EmailDetailScreen(
                                 val savedMsg = if (isRussian) "Файл сохранён" else "File saved"
                                 SafeToast.short(context, savedMsg)
                             }
-                            is EasResult.Error -> SafeToast.long(context, result.message)
+                            is EasResult.Error -> SafeToast.long(context, NotificationStrings.localizeError(result.message, isRussian))
                         }
                     } finally {
-                        tmpFile.delete()
+                        withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { tmpFile.delete() }
                     }
                     downloadingId = null
                 }
@@ -1454,16 +1471,9 @@ fun EmailDetailScreen(
                             scope.launch {
                                 try {
                                     downloadingId = attachment.id
-                                    val data = fetchAttachmentBytes(attachment)
+                                    val tempFile = downloadAttachmentFile(attachment, "email_preview")
 
-                                    if (data != null) {
-                                        val safeFileName = attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")
-                                        val tempFile = withContext(Dispatchers.IO) {
-                                            val previewDir = File(context.cacheDir, "email_preview")
-                                            if (!previewDir.exists()) previewDir.mkdirs()
-                                            File(previewDir, safeFileName).apply { writeBytes(data) }
-                                        }
-
+                                    if (tempFile != null) {
                                         val mimeType = android.webkit.MimeTypeMap.getSingleton()
                                             .getMimeTypeFromExtension(File(attachment.displayName).extension.lowercase(java.util.Locale.ROOT))
                                             ?: "application/octet-stream"
@@ -1506,12 +1516,18 @@ fun EmailDetailScreen(
                             }
                         },
                         onSaveClick = { attachment ->
+                            // Android 8-9: в «Загрузки» без разрешения на память пишет только системный диалог (MAIL-01)
+                            if (!com.dedovmosol.iwomail.util.DownloadsSaver.isAvailable()) {
+                                pendingSaveAsAttachmentId = attachment.id
+                                saveAsLauncher.launchLeavingApp(attachment.displayName)
+                                return@AttachmentsSection
+                            }
                             scope.launch {
                                 try {
                                     downloadingId = attachment.id
-                                    val data = fetchAttachmentBytes(attachment)
-                                    if (data != null) {
-                                        val safeFileName = attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")
+                                    val downloaded = downloadAttachmentFile(attachment, "email_save")
+                                    if (downloaded != null) try {
+                                        val safeFileName = downloaded.name
                                         val profilePath = withContext(Dispatchers.IO) {
                                             accountRepo.getResolvedProfileRelativePath(currentEmail.accountId)
                                         } ?: run {
@@ -1523,23 +1539,23 @@ fun EmailDetailScreen(
                                             )
                                             return@launch
                                         }
-                                        withContext(Dispatchers.IO) {
-                                            val contentValues = android.content.ContentValues().apply {
-                                                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safeFileName)
-                                                put(android.provider.MediaStore.Downloads.MIME_TYPE,
-                                                    android.webkit.MimeTypeMap.getSingleton()
-                                                        .getMimeTypeFromExtension(File(safeFileName).extension) ?: "application/octet-stream")
-                                                put(android.provider.MediaStore.Downloads.RELATIVE_PATH, profilePath)
-                                            }
-                                            val uri = context.contentResolver.insert(
-                                                android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues
-                                            )
-                                            uri?.let {
-                                                context.contentResolver.openOutputStream(it)?.use { out -> out.write(data) }
-                                            }
+                                        val mimeType = android.webkit.MimeTypeMap.getSingleton()
+                                            .getMimeTypeFromExtension(File(safeFileName).extension.lowercase(java.util.Locale.ROOT))
+                                            ?: "application/octet-stream"
+                                        val saved = withContext(Dispatchers.IO) {
+                                            com.dedovmosol.iwomail.util.DownloadsSaver.isAvailable() &&
+                                                com.dedovmosol.iwomail.util.DownloadsSaver.save(
+                                                    context.contentResolver, downloaded, safeFileName, mimeType, profilePath
+                                                )
                                         }
-                                        val toastPath = "Downloads/${profilePath.removePrefix("Download/")}"
-                                        SafeToast.short(context, if (isRussian) "Сохранено в $toastPath/" else "Saved to $toastPath/")
+                                        if (saved) {
+                                            val toastPath = "Downloads/${profilePath.removePrefix("Download/")}"
+                                            SafeToast.short(context, if (isRussian) "Сохранено в $toastPath/" else "Saved to $toastPath/")
+                                        } else {
+                                            SafeToast.long(context, NotificationStrings.getErrorWithMessage(isRussian, null))
+                                        }
+                                    } finally {
+                                        withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { downloaded.delete() }
                                     }
                                 } catch (e: Exception) {
                                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -1557,14 +1573,9 @@ fun EmailDetailScreen(
                             scope.launch {
                                 try {
                                     downloadingId = attachment.id
-                                    val data = fetchAttachmentBytes(attachment)
-                                    if (data != null) {
-                                        val safeFileName = attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")
-                                        val shareFile = withContext(Dispatchers.IO) {
-                                            val dir = File(context.cacheDir, "email_share")
-                                            if (!dir.exists()) dir.mkdirs()
-                                            File(dir, safeFileName).apply { writeBytes(data) }
-                                        }
+                                    val shareFile = downloadAttachmentFile(attachment, "email_share")
+                                    if (shareFile != null) {
+                                        val safeFileName = shareFile.name
                                         val mimeType = android.webkit.MimeTypeMap.getSingleton()
                                             .getMimeTypeFromExtension(File(safeFileName).extension.lowercase(java.util.Locale.ROOT))
                                             ?: "application/octet-stream"
@@ -1590,14 +1601,9 @@ fun EmailDetailScreen(
                             scope.launch {
                                 try {
                                     downloadingId = attachment.id
-                                    val data = fetchAttachmentBytes(attachment)
-                                    if (data != null) {
-                                        val safeFileName = attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")
-                                        val dragFile = withContext(Dispatchers.IO) {
-                                            val dir = File(context.cacheDir, "email_drag")
-                                            if (!dir.exists()) dir.mkdirs()
-                                            File(dir, safeFileName).apply { writeBytes(data) }
-                                        }
+                                    val dragFile = downloadAttachmentFile(attachment, "email_drag")
+                                    if (dragFile != null) {
+                                        val safeFileName = dragFile.name
                                         val mimeType = android.webkit.MimeTypeMap.getSingleton()
                                             .getMimeTypeFromExtension(File(safeFileName).extension.lowercase(java.util.Locale.ROOT))
                                             ?: "application/octet-stream"

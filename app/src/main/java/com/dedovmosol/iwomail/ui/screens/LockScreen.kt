@@ -12,6 +12,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -59,7 +62,6 @@ fun LockScreen(
     val descLabel = Strings.appLockDesc
     val passwordLabel = Strings.appLockEnterPassword
     val unlockLabel = Strings.appLockUnlock
-    val wrongPasswordMsg = Strings.appLockWrongPassword
     val fingerprintLabel = Strings.appLockFingerprintTitle
 
     // Блокируем выход из приложения кнопкой «назад» — единственный путь наружу
@@ -96,20 +98,49 @@ fun LockScreen(
         if (!fingerprintOffered) focusRequester.requestFocus()
     }
 
+    // NAV-01: пауза после серии неверных попыток (переживает перезапуск и смерть процесса — хранится в AppLockManager)
+    var lockoutRemainingMs by remember { mutableLongStateOf(0L) }
+    var attemptsBeforeLockout by remember { mutableIntStateOf(AppLockManager.FREE_ATTEMPTS) }
+    val lockedOut = lockoutRemainingMs > 0L
+    LaunchedEffect(Unit) {
+        lockoutRemainingMs = withContext(Dispatchers.IO) { AppLockManager.lockoutRemainingMs() }
+    }
+    LaunchedEffect(lockedOut) {
+        if (!lockedOut) return@LaunchedEffect
+        while (lockoutRemainingMs > 0L) {
+            kotlinx.coroutines.delay(minOf(1_000L, lockoutRemainingMs))
+            lockoutRemainingMs = withContext(Dispatchers.IO) { AppLockManager.lockoutRemainingMs() }
+        }
+        // Пауза кончилась: старое «неверный пароль» убрать, поле снова доступно — вернуть в него фокус
+        showWrongPassword = false
+        if (!fingerprintOffered) focusRequester.requestFocus()
+    }
+    val attemptMessage = Strings.appLockAttemptState(attemptsBeforeLockout, lockoutRemainingMs)
+
     /** Общая точка проверки пароля (кнопка + IME-действие). Тяжёлый PBKDF2 — на IO. */
     fun tryUnlock() {
-        if (isChecking || password.isEmpty()) return
+        if (isChecking || password.isEmpty() || lockedOut) return
         isChecking = true
         scope.launch {
-            val ok = withContext(Dispatchers.IO) {
-                AppLockManager.verifyPassword(password)
+            val result = withContext(Dispatchers.IO) {
+                AppLockManager.attempt(password, unlockOnSuccess = true)
             }
             isChecking = false
-            if (ok) {
+            when (result) {
                 // Разблокировано: гейт в MainActivity реактивно уберёт экран.
-                password = ""
-            } else {
-                showWrongPassword = true
+                AppLockManager.Attempt.Success -> password = ""
+                is AppLockManager.Attempt.Wrong -> {
+                    attemptsBeforeLockout = result.attemptsBeforeLockout
+                    lockoutRemainingMs = result.lockoutMs
+                    showWrongPassword = true
+                    // Во время паузы поле очищено: набранный вслепую пароль не отправится по её окончании
+                    if (result.lockoutMs > 0L) password = ""
+                }
+                is AppLockManager.Attempt.LockedOut -> {
+                    lockoutRemainingMs = result.remainingMs
+                    showWrongPassword = true
+                    password = ""
+                }
             }
         }
     }
@@ -175,8 +206,8 @@ fun LockScreen(
                     .fillMaxWidth()
                     .focusRequester(focusRequester),
                 singleLine = true,
-                isError = showWrongPassword,
-                enabled = !isChecking,
+                isError = showWrongPassword || lockedOut,
+                enabled = !isChecking && !lockedOut,
                 visualTransformation = if (passwordVisible)
                     VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -192,15 +223,17 @@ fun LockScreen(
                 }
             )
 
-            // Ошибка «неверный пароль» — только после неудачной попытки.
-            if (showWrongPassword) {
+            // Ошибка «неверный пароль» — после неудачной попытки; во время паузы — обратный отсчёт.
+            // liveRegion: TalkBack объявляет ошибку и окончание паузы без перехода фокуса.
+            if (showWrongPassword || lockedOut) {
                 Text(
-                    text = wrongPasswordMsg,
+                    text = attemptMessage,
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 6.dp)
+                        .semantics { liveRegion = LiveRegionMode.Polite }
                 )
             }
 
@@ -208,7 +241,7 @@ fun LockScreen(
 
             ThemeButton(
                 onClick = { tryUnlock() },
-                enabled = password.isNotEmpty(),
+                enabled = password.isNotEmpty() && !lockedOut,
                 isLoading = isChecking
             ) {
                 Text(unlockLabel, color = Color.White)

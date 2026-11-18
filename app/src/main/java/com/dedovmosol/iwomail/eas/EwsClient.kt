@@ -190,6 +190,81 @@ class EwsClient(
         }
     }
     
+    /**
+     * EWS-запрос, ответ которого читается потоком (вложения десятки МБ): Basic, при 401 — NTLM Type1/Type3 по
+     * одному соединению (как [executeNtlmRequest]). [read] получает тело ответа 200 или 500 (SOAP Fault — тоже
+     * ответ сервера); остальные коды — ошибка. [read] вызывает checkActive на каждом блоке: при отмене корутины
+     * соединение рвётся ([okhttp3.Call.cancel]) и летит CancellationException.
+     */
+    suspend fun <T> executeStreaming(
+        soapRequest: String,
+        action: String,
+        read: (java.io.InputStream, checkActive: () -> Unit) -> T
+    ): EasResult<T> = withContext(Dispatchers.IO) {
+        val job = coroutineContext[kotlinx.coroutines.Job]
+        // Отмена проверяется на каждом блоке тела: вызов рвётся, соединение не дочитывает 40 МБ впустую.
+        // Ожидание заголовков ограничено readTimeout клиента (блокирующий execute — NTLM под synchronized).
+        var current: okhttp3.Call? = null
+        val checkActive = {
+            if (job?.isActive == false) {
+                current?.cancel()
+                throw kotlinx.coroutines.CancellationException("EWS $action cancelled")
+            }
+        }
+        fun execute(call: okhttp3.Call): okhttp3.Response {
+            current = call
+            checkActive()
+            return call.execute()
+        }
+        try {
+            val response = execute(httpClient.newCall(soapPost(soapRequest, action).header("Authorization", getBasicAuthHeader()).build()))
+            val authenticated = if (response.code == 401) {
+                response.use { it.body?.bytes() }
+                callNtlm(soapRequest, action, ::execute)
+            } else {
+                response
+            } ?: return@withContext EasResult.Error("EWS $action: NTLM authentication failed")
+            authenticated.use { resp ->
+                if (resp.code != 200 && resp.code != 500) return@withContext EasResult.Error("EWS $action: HTTP ${resp.code}")
+                val body = resp.body ?: return@withContext EasResult.Error("EWS $action: empty response")
+                EasResult.Success(body.byteStream().use { read(it, checkActive) })
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (job?.isActive == false) throw kotlinx.coroutines.CancellationException("EWS $action cancelled")
+            EasResult.Error("EWS $action: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
+        }
+    }
+
+    private fun soapPost(soapRequest: String, action: String): Request.Builder = Request.Builder()
+        .url(ewsUrl)
+        .post(soapRequest.toRequestBody(CONTENT_TYPE_XML.toMediaType()))
+        .header("Content-Type", CONTENT_TYPE_XML)
+        .header("SOAPAction", "\"$SOAP_ACTION_PREFIX$action\"")
+
+    /**
+     * Type1 → 401 Type2 → Type3 с телом; ответ на Type3 не прочитан (его читает вызывающий — уже вне блокировки:
+     * соединение аутентифицировано, а 40 МБ тела не должны держать остальные NTLM-запросы).
+     */
+    private fun callNtlm(
+        soapRequest: String,
+        action: String,
+        execute: (okhttp3.Call) -> okhttp3.Response
+    ): okhttp3.Response? = synchronized(ntlmLock) {
+        val type1 = execute(
+            ntlmClient.newCall(soapPost(soapRequest, action).header("Authorization", ntlmAuth.createType1AuthHeader())
+                .header("Connection", "keep-alive").build())
+        )
+        if (type1.code != 401) return@synchronized type1
+        val challenge = type1.header("WWW-Authenticate")
+        type1.use { it.body?.bytes() } // дочитать: иначе соединение не вернётся в пул, а Type3 нужен по нему же
+        val type2 = challenge?.let { ntlmAuth.parseType2FromHeader(it) } ?: return@synchronized null
+        execute(
+            ntlmClient.newCall(soapPost(soapRequest, action).header("Authorization", ntlmAuth.createType3AuthHeader(type2))
+                .header("Connection", "keep-alive").build())
+        )
+    }
+
     // ==================== Высокоуровневые EWS операции ====================
     
     /**

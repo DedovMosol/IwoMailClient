@@ -43,6 +43,12 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit, highlight: String =
     }
     var failClosed by remember { mutableStateOf(telemetry.isFailClosedEnabled()) }
 
+    // SET-01: виджет сразу скрывает или снова показывает письма, события и задачи
+    suspend fun setLockEnabled(enabled: Boolean) {
+        settingsRepo.setAppLockEnabled(enabled)
+        com.dedovmosol.iwomail.widget.updateMailWidget(context)
+    }
+
     when (lockDialog) {
         LockDialogType.SetPassword -> LockPasswordDialog(
             title = Strings.appLockSetPassword,
@@ -55,7 +61,7 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit, highlight: String =
             onSuccess = {
                 lockPasswordSet = true
                 lockDialog = null
-                scope.launch { settingsRepo.setAppLockEnabled(true) }
+                scope.launch { setLockEnabled(true) }
             }
         )
         LockDialogType.ChangePassword -> LockPasswordDialog(
@@ -83,7 +89,7 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit, highlight: String =
                 lockDialog = null
                 scope.launch {
                     settingsRepo.setAppLockBiometricEnabled(false)
-                    settingsRepo.setAppLockEnabled(false)
+                    setLockEnabled(false)
                 }
             }
         )
@@ -91,7 +97,8 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit, highlight: String =
     }
 
     val rowHighlight =
-        if (highlight == "fingerprint" && !appLockEnabled) "appLock" else highlight
+        // Строки отпечатка и смены пароля видны только при включённой блокировке — иначе подсветить её переключатель
+        if ((highlight == "fingerprint" || highlight == "changePassword") && !appLockEnabled) "appLock" else highlight
     SettingsPageScaffold(title = Strings.appLockSection, onBackClick = onBackClick) {
         item {
             SettingsGroup {
@@ -105,7 +112,7 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit, highlight: String =
                     onChange = { enabled ->
                         if (enabled) {
                             if (lockPasswordSet) {
-                                scope.launch { settingsRepo.setAppLockEnabled(true) }
+                                scope.launch { setLockEnabled(true) }
                             } else {
                                 lockDialog = LockDialogType.SetPassword
                             }
@@ -118,6 +125,8 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit, highlight: String =
                     SettingsNavRow(
                         title = Strings.appLockChangePassword,
                         icon = AppIcons.Security,
+                        highlightId = "changePassword",
+                        highlight = rowHighlight,
                         onClick = { lockDialog = LockDialogType.ChangePassword }
                     )
                     SettingsSwitchRow(

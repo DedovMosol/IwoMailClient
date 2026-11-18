@@ -66,8 +66,13 @@ class FlagReminderReceiver : BroadcastReceiver() {
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .setContentIntent(contentIntent)
-            .build()
-        context.getSystemService(NotificationManager::class.java)?.notify(code(row.id, CODE_NOTIF), notification)
+        // BG-08: тема и отправитель не видны на экране блокировки
+        NotificationPrivacy.apply(
+            context, notification, MailApplication.CHANNEL_TASKS, R.drawable.ic_email,
+            publicTitle = NotificationStrings.getFlagReminderTitle(ru),
+            hidden = NotificationPrivacy.isContentHidden(context)
+        )
+        context.getSystemService(NotificationManager::class.java)?.notify(code(row.id, CODE_NOTIF), notification.build())
     }
 
     companion object {

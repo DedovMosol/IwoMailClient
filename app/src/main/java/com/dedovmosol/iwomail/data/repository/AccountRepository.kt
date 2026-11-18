@@ -106,8 +106,24 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
         alternateServerUrl: String? = null,
         // Подключение уже проверено (экран проверки Exchange сделал FolderSync через основной или
         // резервный адрес): повторная проверка стоила бы ещё одного таймаута недоступного основного.
-        alreadyVerified: Boolean = false
+        alreadyVerified: Boolean = false,
+        /** ONB-08: сертификат сервера, которому пользователь доверился по отпечатку при добавлении. */
+        pinnedCertificate: com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo? = null
     ): EasResult<Long> {
+        // Сертификат не подтверждён, а пользователь ещё ничего не выбрал — код, по которому экран предложит
+        // сверить отпечаток и довериться (ONB-08); иначе — понятный текст причины
+        fun mailSetupError(e: Throwable, protocol: String): String =
+            if (CertificateTrust.canOfferTrust(acceptAllCerts, certificatePath, pinnedCertificate != null) && CertificateTrust.isUntrusted(e)) {
+                CertificateTrust.NOT_TRUSTED
+            } else {
+                formatConnectionError(e, protocol)
+            }
+        // Временный аккаунт для проверки IMAP/POP3 — с теми же сертификатами и пином, что сохранится
+        fun probeAccount() = AccountEntity(
+            email = email, displayName = displayName, serverUrl = serverUrl, username = username,
+            acceptAllCerts = acceptAllCerts, accountType = accountType.name, incomingPort = incomingPort, useSSL = useSSL,
+            certificatePath = certificatePath, clientCertificatePath = clientCertificatePath
+        ).withPin(pinnedCertificate)
         // Проверяем что аккаунт с таким email ещё не добавлен
         val existingAccounts = accountDao.getAllAccountsList()
         if (existingAccounts.any { it.email.equals(email, ignoreCase = true) }) {
@@ -127,7 +143,7 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
                     val primaryResult = testExchangeServer(
                         serverUrl, username, password, domain, acceptAllCerts,
                         incomingPort, useSSL, email, certificatePath,
-                        clientCertificatePath, clientCertificatePassword
+                        clientCertificatePath, clientCertificatePassword, pinnedCertificate
                     )
                     if (primaryResult is EasResult.Success) {
                         primaryResult
@@ -138,7 +154,7 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
                         val altResult = testExchangeServer(
                             alternateServerUrl, username, password, domain, acceptAllCerts,
                             incomingPort, useSSL, email, certificatePath,
-                            clientCertificatePath, clientCertificatePassword
+                            clientCertificatePath, clientCertificatePassword, pinnedCertificate
                         )
                         com.dedovmosol.iwomail.data.model.preferredDualUrlResult(primaryResult, altResult)
                     } else {
@@ -147,56 +163,32 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
                 }
                 AccountType.IMAP -> {
                     try {
-                        val tempAccount = AccountEntity(
-                            email = email,
-                            displayName = displayName,
-                            serverUrl = serverUrl,
-                            username = username,
-                            acceptAllCerts = acceptAllCerts,
-                            accountType = accountType.name,
-                            incomingPort = incomingPort,
-                            useSSL = useSSL
-                        )
-                        val client = ImapClient(tempAccount, password)
+                        val client = ImapClient(probeAccount(), password, clientCertificatePassword)
                         client.connect().fold(
                             onSuccess = { 
                                 client.disconnect()
                                 EasResult.Success(Unit) 
                             },
-                            onFailure = { e -> 
-                                EasResult.Error(formatConnectionError(e, "IMAP")) 
-                            }
+                            onFailure = { e -> EasResult.Error(mailSetupError(e, "IMAP")) }
                         )
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
-                        EasResult.Error(formatConnectionError(e, "IMAP"))
+                        EasResult.Error(mailSetupError(e, "IMAP"))
                     }
                 }
                 AccountType.POP3 -> {
                     try {
-                        val tempAccount = AccountEntity(
-                            email = email,
-                            displayName = displayName,
-                            serverUrl = serverUrl,
-                            username = username,
-                            acceptAllCerts = acceptAllCerts,
-                            accountType = accountType.name,
-                            incomingPort = incomingPort,
-                            useSSL = useSSL
-                        )
-                        val client = Pop3Client(tempAccount, password)
+                        val client = Pop3Client(probeAccount(), password, clientCertificatePassword)
                         client.connect().fold(
                             onSuccess = { 
                                 client.disconnect()
                                 EasResult.Success(Unit) 
                             },
-                            onFailure = { e -> 
-                                EasResult.Error(formatConnectionError(e, "POP3")) 
-                            }
+                            onFailure = { e -> EasResult.Error(mailSetupError(e, "POP3")) }
                         )
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
-                        EasResult.Error(formatConnectionError(e, "POP3"))
+                        EasResult.Error(mailSetupError(e, "POP3"))
                     }
                 }
             }
@@ -229,7 +221,7 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
                     certificatePath = certificatePath,
                     clientCertificatePath = clientCertificatePath,
                     draftMode = defaultDraftMode
-                )
+                ).withPin(pinnedCertificate)
                 
                 val accountId = accountDao.insert(account)
                 try {
@@ -417,7 +409,8 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
         url: String, username: String, password: String, domain: String,
         acceptAllCerts: Boolean, port: Int, useSSL: Boolean, email: String,
         certificatePath: String?, clientCertificatePath: String?,
-        clientCertificatePassword: String?
+        clientCertificatePassword: String?,
+        pinnedCertificate: com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo? = null
     ): EasResult<Unit> {
         val client = try {
             EasClient(
@@ -426,7 +419,8 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
                 useHttps = useSSL, deviceIdSuffix = email,
                 certificatePath = certificatePath,
                 clientCertificatePath = clientCertificatePath,
-                clientCertificatePassword = clientCertificatePassword
+                clientCertificatePassword = clientCertificatePassword,
+                pinnedCertInfo = pinnedCertificate
             )
         } catch (e: IllegalArgumentException) {
             return EasResult.Error(e.message ?: "CLIENT_CERT_PASSWORD_REQUIRED")
@@ -738,7 +732,7 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
     suspend fun createImapClient(accountId: Long): ImapClient? {
         val account = accountDao.getAccount(accountId) ?: return null
         val password = getPassword(accountId) ?: return null
-        return ImapClient(account, password)
+        return ImapClient(account, password, getClientCertPassword(accountId))
     }
     
     /**
@@ -747,7 +741,7 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
     suspend fun createPop3Client(accountId: Long): Pop3Client? {
         val account = accountDao.getAccount(accountId) ?: return null
         val password = getPassword(accountId) ?: return null
-        return Pop3Client(account, password)
+        return Pop3Client(account, password, getClientCertPassword(accountId))
     }
     
     suspend fun createClientForActiveAccount(): EasClient? {
@@ -856,6 +850,38 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
         refreshEasClient(accountId)
     }
     
+    /**
+     * ONB-08: сертификат, который предъявляет основной сервер аккаунта (без проверки и без учётных данных) —
+     * чтобы пользователь сверил отпечаток и доверился ему вместо «Принимать все сертификаты».
+     */
+    suspend fun fetchServerCertificate(account: AccountEntity): EasResult<com.dedovmosol.iwomail.network.HttpClientProvider.ServerCertificate> =
+        withContext(Dispatchers.IO) {
+            try {
+                val endpoint = ServerCertificateEndpoint.of(account)
+                    ?: return@withContext EasResult.Error(ServerCertificateEndpoint.NO_TLS)
+                EasResult.Success(
+                    com.dedovmosol.iwomail.network.HttpClientProvider.fetchServerCertificate(endpoint.host, endpoint.port, endpoint.startTls)
+                )
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                EasResult.Error(com.dedovmosol.iwomail.network.ConnectionFailure.describe(e))
+            }
+        }
+
+    /**
+     * Доверять сертификату основного сервера (закрепить его ключ): «Принимать все сертификаты» выключается —
+     * дальше принимается только этот ключ, другой ключ вызывает предупреждение о смене сертификата.
+     * Пин резервного сервера не меняется (у резервного свой сертификат подтверждается отдельно).
+     */
+    suspend fun trustServerCertificate(accountId: Long, certificate: com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo) {
+        val account = accountDao.getAccount(accountId) ?: return
+        accountDao.update(CertificatePins.withPrimaryPin(account, certificate).copy(acceptAllCerts = false))
+        com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.clearChange(accountId)
+        // Режим доверия сменился (не только пин): новый клиент и заново выбор сервера
+        clearEasClientCache(accountId)
+        AccountServerHealthRepository.resetHealth(accountId)
+    }
+
     /**
      * Увеличивает счётчик ошибок проверки сертификата
      */

@@ -24,6 +24,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,6 +34,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -89,247 +93,6 @@ private fun stripHtmlForPreview(html: String): String {
         .replace(SIGNATURE_NEWLINES, "\n")
         .trim()
 }
-
-/**
- * Диалог настройки синхронизации контактов
- */
-@Composable
-fun ContactsSyncDialog(
-    isRu: Boolean,
-    currentDays: Int,
-    onDaysChange: (Int) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val options = listOf(
-        0 to (NotificationStrings.getNever(isRu)),
-        1 to (NotificationStrings.getDaily(isRu)),
-        7 to (NotificationStrings.getWeekly(isRu)),
-        14 to (NotificationStrings.getEveryTwoWeeks(isRu)),
-        30 to (NotificationStrings.getMonthly(isRu))
-    )
-
-    com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(Strings.contactsSync) },
-        text = {
-            Column {
-                Text(
-                    Strings.contactsSyncDesc,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
-
-                options.forEach { (days, label) ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                onDaysChange(days)
-                                onDismiss()
-                            }
-                            .padding(vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = currentDays == days,
-                            onClick = null
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(label)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                onClick = onDismiss,
-                text = Strings.cancel
-            )
-        }
-    )
-}
-
-/**
- * Диалог настройки автоматической очистки папок
- */
-@Composable
-fun AutoCleanupDialog(
-    isRu: Boolean,
-    trashDays: Int,
-    draftsDays: Int,
-    spamDays: Int,
-    downloadsDays: Int,
-    rollbackDays: Int,
-    onTrashDaysChange: (Int) -> Unit,
-    onDraftsDaysChange: (Int) -> Unit,
-    onSpamDaysChange: (Int) -> Unit,
-    onDownloadsDaysChange: (Int) -> Unit,
-    onRollbackDaysChange: (Int) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var selectedFolder by rememberSaveable { mutableStateOf<String?>(null) }
-
-    com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(Strings.autoCleanup) },
-        text = {
-            Column {
-                AutoCleanupFolderItem(
-                    icon = AppIcons.Delete,
-                    title = Strings.autoCleanupTrash,
-                    currentDays = trashDays,
-                    isRu = isRu,
-                    isExpanded = selectedFolder == "trash",
-                    onExpandClick = { selectedFolder = if (selectedFolder == "trash") null else "trash" },
-                    onDaysChange = onTrashDaysChange
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                AutoCleanupFolderItem(
-                    icon = AppIcons.Drafts,
-                    title = Strings.autoCleanupDrafts,
-                    currentDays = draftsDays,
-                    isRu = isRu,
-                    isExpanded = selectedFolder == "drafts",
-                    onExpandClick = { selectedFolder = if (selectedFolder == "drafts") null else "drafts" },
-                    onDaysChange = onDraftsDaysChange
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                AutoCleanupFolderItem(
-                    icon = AppIcons.Report,
-                    title = Strings.autoCleanupSpam,
-                    currentDays = spamDays,
-                    isRu = isRu,
-                    isExpanded = selectedFolder == "spam",
-                    onExpandClick = { selectedFolder = if (selectedFolder == "spam") null else "spam" },
-                    onDaysChange = onSpamDaysChange
-                )
-
-                Text(
-                    text = Strings.autoCleanupFoldersHint,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 36.dp, top = 4.dp)
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(4.dp))
-
-                Text(
-                    text = Strings.autoCleanupAppFiles,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
-
-                AutoCleanupFolderItem(
-                    icon = AppIcons.Download,
-                    title = Strings.autoCleanupDownloads,
-                    currentDays = downloadsDays,
-                    isRu = isRu,
-                    isExpanded = selectedFolder == "downloads",
-                    onExpandClick = { selectedFolder = if (selectedFolder == "downloads") null else "downloads" },
-                    onDaysChange = onDownloadsDaysChange
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                AutoCleanupFolderItem(
-                    icon = AppIcons.Restore,
-                    title = Strings.autoCleanupRollback,
-                    currentDays = rollbackDays,
-                    isRu = isRu,
-                    isExpanded = selectedFolder == "rollback",
-                    onExpandClick = { selectedFolder = if (selectedFolder == "rollback") null else "rollback" },
-                    onDaysChange = onRollbackDaysChange
-                )
-            }
-        },
-        confirmButton = {
-            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                onClick = onDismiss,
-                text = Strings.close
-            )
-        }
-    )
-}
-
-@Composable
-private fun AutoCleanupFolderItem(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    currentDays: Int,
-    isRu: Boolean,
-    isExpanded: Boolean,
-    onExpandClick: () -> Unit,
-    onDaysChange: (Int) -> Unit
-) {
-    val currentOption = SettingsRepository.AutoCleanupDays.fromDays(currentDays)
-
-    Column {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onExpandClick() }
-                .padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge
-                )
-                Text(
-                    text = currentOption.getDisplayName(isRu),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Icon(
-                if (isExpanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        if (isExpanded) {
-            Column(modifier = Modifier.padding(start = 36.dp)) {
-                SettingsRepository.AutoCleanupDays.entries.forEach { option ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onDaysChange(option.days) }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = currentDays == option.days,
-                            onClick = null
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = option.getDisplayName(isRu),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
 
 /**
  * Диалог управления подписями аккаунта
@@ -796,10 +559,34 @@ internal fun LockPasswordDialog(
     var confirmPassword by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var isChecking by remember { mutableStateOf(false) }
+    // Попыток до паузы и остаток паузы после неверного текущего пароля (null — неверных попыток не было)
+    var attemptState by remember { mutableStateOf<Pair<Int, Long>?>(null) }
+    val attemptText = attemptState?.let { (left, ms) -> Strings.appLockAttemptState(left, ms) }
+    val lockedOut = (attemptState?.second ?: 0L) > 0L
+    if (requireCurrentPassword) {
+        // Пауза могла начаться на экране блокировки или в прошлом открытии диалога — показать её сразу
+        LaunchedEffect(Unit) {
+            val ms = withContext(Dispatchers.IO) { com.dedovmosol.iwomail.data.security.AppLockManager.lockoutRemainingMs() }
+            if (ms > 0L) attemptState = 0 to ms
+        }
+        // Обратный отсчёт паузы; по окончании сообщение убирается
+        LaunchedEffect(lockedOut) {
+            if (!lockedOut) return@LaunchedEffect
+            while (true) {
+                kotlinx.coroutines.delay(minOf(1_000L, attemptState?.second ?: 0L).coerceAtLeast(1L))
+                val ms = withContext(Dispatchers.IO) { com.dedovmosol.iwomail.data.security.AppLockManager.lockoutRemainingMs() }
+                if (ms <= 0L) break
+                attemptState = 0 to ms
+            }
+            attemptState = null
+            error = null
+        }
+    }
 
     fun submit() {
-        if (isChecking) return
+        if (isChecking || lockedOut) return
         error = null
+        attemptState = null
 
         // Валидация нового пароля — дешёвые проверки до тяжёлого хеширования.
         if (requireNewPassword) {
@@ -817,13 +604,26 @@ internal fun LockPasswordDialog(
         scope.launch {
             // Текущий пароль: тяжёлая проверка PBKDF2 строго на IO-диспатчере.
             if (requireCurrentPassword) {
-                val valid = withContext(Dispatchers.IO) {
-                    com.dedovmosol.iwomail.data.security.AppLockManager.checkPassword(currentPassword)
+                // NAV-01: тот же счётчик попыток, что на экране блокировки — смена или отключение
+                // пароля не становится обходным путём для перебора
+                val attempt = withContext(Dispatchers.IO) {
+                    com.dedovmosol.iwomail.data.security.AppLockManager.attempt(currentPassword, unlockOnSuccess = false)
                 }
-                if (!valid) {
-                    isChecking = false
-                    error = wrongPasswordMsg
-                    return@launch
+                when (attempt) {
+                    com.dedovmosol.iwomail.data.security.AppLockManager.Attempt.Success -> attemptState = null
+                    is com.dedovmosol.iwomail.data.security.AppLockManager.Attempt.Wrong -> {
+                        isChecking = false
+                        attemptState = attempt.attemptsBeforeLockout to attempt.lockoutMs
+                        if (attempt.lockoutMs > 0L) currentPassword = ""
+                        error = wrongPasswordMsg
+                        return@launch
+                    }
+                    is com.dedovmosol.iwomail.data.security.AppLockManager.Attempt.LockedOut -> {
+                        isChecking = false
+                        attemptState = 0 to attempt.remainingMs
+                        error = wrongPasswordMsg
+                        return@launch
+                    }
                 }
             }
             val committed = withContext(Dispatchers.IO) {
@@ -855,9 +655,12 @@ internal fun LockPasswordDialog(
                         onValueChange = {
                             currentPassword = it
                             if (error != null) error = null
+                            if (!lockedOut) attemptState = null
                         },
                         label = { Text(Strings.appLockCurrentPassword) },
                         singleLine = true,
+                        enabled = !lockedOut,
+                        isError = attemptState != null,
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                             keyboardType = androidx.compose.ui.text.input.KeyboardType.Password
@@ -895,11 +698,14 @@ internal fun LockPasswordDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
-                if (error != null) {
+                // Неверный текущий пароль — с числом попыток до паузы или обратным отсчётом паузы (NAV-01)
+                val message = attemptText ?: error
+                if (message != null) {
                     Text(
-                        text = error!!,
+                        text = message,
                         color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
                     )
                 }
             }
@@ -908,7 +714,7 @@ internal fun LockPasswordDialog(
             com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                 onClick = { submit() },
                 text = Strings.save,
-                enabled = !isChecking &&
+                enabled = !isChecking && !lockedOut &&
                     (!requireCurrentPassword || currentPassword.isNotEmpty()) &&
                     (!requireNewPassword || (newPassword.isNotEmpty() && confirmPassword.isNotEmpty()))
             )

@@ -1,218 +1,119 @@
 package com.dedovmosol.iwomail.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-
-import com.dedovmosol.iwomail.ui.theme.AppIcons
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.DpOffset
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.Strings
+import com.dedovmosol.iwomail.ui.components.ScrollbarColor
 import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppColorTheme
+import com.dedovmosol.iwomail.ui.theme.AppIcons
 import kotlinx.coroutines.launch
+import java.util.Calendar
 
-/**
- * Получить локализованное название темы
- */
+/** Локализованное название цветовой темы. */
 @Composable
-private fun getThemeDisplayName(theme: AppColorTheme): String {
-    return when (theme) {
-        AppColorTheme.PURPLE -> Strings.themePurple
-        AppColorTheme.BLUE -> Strings.themeBlue
-        AppColorTheme.YELLOW -> Strings.themeYellow
-        AppColorTheme.GREEN -> Strings.themeGreen
-    }
+private fun getThemeDisplayName(theme: AppColorTheme): String = when (theme) {
+    AppColorTheme.PURPLE -> Strings.themePurple
+    AppColorTheme.BLUE -> Strings.themeBlue
+    AppColorTheme.YELLOW -> Strings.themeYellow
+    AppColorTheme.GREEN -> Strings.themeGreen
 }
 
-/**
- * Строка выбора темы для дня недели
- */
+/** Образец цвета: в строке (40 dp, как плитка иконки) и в списке вариантов (20 dp). */
 @Composable
-private fun DayThemeRow(
-    dayName: String,
-    currentThemeCode: String,
-    onThemeSelected: (String) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val currentTheme = AppColorTheme.fromCode(currentThemeCode)
-    
-    Row(
+private fun ColorSwatch(color: Color, size: Dp = 20.dp) {
+    Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = dayName,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.width(110.dp)
-        )
+            .size(size)
+            .clip(CircleShape)
+            .background(color)
+    )
+}
 
-        Spacer(modifier = Modifier.weight(1f))
+/** Дни недели в порядке недели (с понедельника) и их подписи. */
+@Composable
+private fun weekDays(): List<Pair<Int, String>> = listOf(
+    Calendar.MONDAY to Strings.monday,
+    Calendar.TUESDAY to Strings.tuesday,
+    Calendar.WEDNESDAY to Strings.wednesday,
+    Calendar.THURSDAY to Strings.thursday,
+    Calendar.FRIDAY to Strings.friday,
+    Calendar.SATURDAY to Strings.saturday,
+    Calendar.SUNDAY to Strings.sunday
+)
 
-        Box(
-            modifier = Modifier
-                .wrapContentSize(Alignment.TopStart)
-                .clickable { expanded = true }
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(20.dp)
-                        .clip(CircleShape)
-                        .background(currentTheme.gradientStart)
-                )
+/** Значения по умолчанию — те же, что были у экрана до переделки. */
+private val DEFAULT_DAY_THEMES = mapOf(
+    Calendar.MONDAY to "purple", Calendar.TUESDAY to "blue", Calendar.WEDNESDAY to "green",
+    Calendar.THURSDAY to "yellow", Calendar.FRIDAY to "purple", Calendar.SATURDAY to "blue",
+    Calendar.SUNDAY to "yellow"
+)
 
-                Text(
-                    text = getThemeDisplayName(currentTheme),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .width(100.dp)
-                        .padding(start = 8.dp)
-                )
-
-                Icon(
-                    AppIcons.ArrowDropDown,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false },
-                offset = DpOffset(0.dp, 6.dp)
-            ) {
-                AppColorTheme.entries.forEach { theme ->
-                    DropdownMenuItem(
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(20.dp)
-                                        .clip(CircleShape)
-                                        .background(theme.gradientStart)
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Text(getThemeDisplayName(theme))
-                            }
-                        },
-                        onClick = {
-                            onThemeSelected(theme.code)
-                            expanded = false
-                        }
-                    )
+/** Темы и цвета скроллбара по дням недели — нижний лист вместо диалога с 14 выпадающими списками. */
+@Composable
+private fun DailyThemesSheet(settingsRepo: SettingsRepository, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
+    val isRu = isRussian()
+    val days = weekDays()
+    SettingsSheet(title = Strings.configureDailyThemes, onDismiss = onDismiss) {
+        SettingsSectionTitle(Strings.colorTheme)
+        for ((day, name) in days) {
+            val code by settingsRepo.getDayTheme(day)
+                .collectAsStateWithLifecycle(initialValue = DEFAULT_DAY_THEMES.getValue(day))
+            val current = AppColorTheme.fromCode(code)
+            SettingsChoiceRow(
+                title = name,
+                options = AppColorTheme.entries,
+                selected = current,
+                label = { getThemeDisplayName(it) },
+                optionLeading = { ColorSwatch(it.gradientStart) },
+                leading = { ColorSwatch(current.gradientStart) },
+                onSelect = { theme ->
+                    scope.launch {
+                        settingsRepo.setDayTheme(day, theme.code)
+                        com.dedovmosol.iwomail.widget.updateMailWidget(context)
+                    }
                 }
-            }
+            )
+        }
+        SettingsSectionTitle(Strings.scrollbarColor)
+        for ((day, name) in days) {
+            val code by settingsRepo.getDayScrollbarColor(day).collectAsStateWithLifecycle(initialValue = "blue")
+            val current = ScrollbarColor.fromCode(code)
+            SettingsChoiceRow(
+                title = name,
+                options = ScrollbarColor.entries,
+                selected = current,
+                label = { it.getDisplayName(isRu) },
+                optionLeading = { ColorSwatch(it.color) },
+                leading = { ColorSwatch(current.color) },
+                onSelect = { color -> scope.launch { settingsRepo.setDayScrollbarColor(day, color.code) } }
+            )
         }
     }
 }
 
-/**
- * Строка выбора цвета скроллбара для дня недели
- */
-@Composable
-private fun DayScrollbarColorRow(
-    dayName: String,
-    currentColorCode: String,
-    isRu: Boolean,
-    onColorSelected: (String) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val currentColor = com.dedovmosol.iwomail.ui.components.ScrollbarColor.fromCode(currentColorCode)
-    
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = dayName,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.width(110.dp)
-        )
-
-        Spacer(modifier = Modifier.weight(1f))
-
-        Box(
-            modifier = Modifier
-                .wrapContentSize(Alignment.TopStart)
-                .clickable { expanded = true }
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(16.dp)
-                        .clip(CircleShape)
-                        .background(currentColor.color)
-                )
-
-                Text(
-                    text = currentColor.getDisplayName(isRu),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .width(100.dp)
-                        .padding(start = 8.dp)
-                )
-
-                Icon(
-                    AppIcons.ArrowDropDown,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false },
-                offset = DpOffset(0.dp, 6.dp)
-            ) {
-                com.dedovmosol.iwomail.ui.components.ScrollbarColor.entries.forEach { sbColor ->
-                    DropdownMenuItem(
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(16.dp)
-                                        .clip(CircleShape)
-                                        .background(sbColor.color)
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Text(sbColor.getDisplayName(isRu))
-                            }
-                        },
-                        onClick = {
-                            onColorSelected(sbColor.code)
-                            expanded = false
-                        }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PersonalizationScreen(
     onBackClick: () -> Unit,
@@ -222,317 +123,18 @@ fun PersonalizationScreen(
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
     val isRu = isRussian()
-    
-    // Настройки языка
+
     val currentLanguage = LocalLanguage.current
-    var showLanguageDialog by rememberSaveable { mutableStateOf(false) }
-    
-    // Настройки размера шрифта
     val fontSize by settingsRepo.fontSize.collectAsStateWithLifecycle(initialValue = SettingsRepository.FontSize.MEDIUM)
-    var showFontSizeDialog by rememberSaveable { mutableStateOf(false) }
-    
-    // Настройки цветовой темы
     val colorThemeCode by settingsRepo.colorTheme.collectAsStateWithLifecycle(initialValue = "purple")
     val dailyThemesEnabled by settingsRepo.dailyThemesEnabled.collectAsStateWithLifecycle(initialValue = false)
     val animationsEnabled by settingsRepo.animationsEnabled.collectAsStateWithLifecycle(initialValue = true)
-    var showColorThemeDialog by rememberSaveable { mutableStateOf(false) }
-    var showScrollbarColorDialog by rememberSaveable { mutableStateOf(false) }
-    var showDailyThemesDialog by rememberSaveable { mutableStateOf(false) }
-    
-    // Режим темы (системный / светлая / тёмная)
     val themeMode by settingsRepo.themeMode.collectAsStateWithLifecycle(initialValue = settingsRepo.getThemeModeSync())
-    var showThemeModeDialog by rememberSaveable { mutableStateOf(false) }
-
-    // Темы по дням недели
-    val mondayTheme by settingsRepo.getDayTheme(java.util.Calendar.MONDAY).collectAsStateWithLifecycle(initialValue = "purple")
-    val tuesdayTheme by settingsRepo.getDayTheme(java.util.Calendar.TUESDAY).collectAsStateWithLifecycle(initialValue = "blue")
-    val wednesdayTheme by settingsRepo.getDayTheme(java.util.Calendar.WEDNESDAY).collectAsStateWithLifecycle(initialValue = "green")
-    val thursdayTheme by settingsRepo.getDayTheme(java.util.Calendar.THURSDAY).collectAsStateWithLifecycle(initialValue = "yellow")
-    val fridayTheme by settingsRepo.getDayTheme(java.util.Calendar.FRIDAY).collectAsStateWithLifecycle(initialValue = "purple")
-    val saturdayTheme by settingsRepo.getDayTheme(java.util.Calendar.SATURDAY).collectAsStateWithLifecycle(initialValue = "blue")
-    val sundayTheme by settingsRepo.getDayTheme(java.util.Calendar.SUNDAY).collectAsStateWithLifecycle(initialValue = "yellow")
-    
-    // Цвет скроллбара
     val scrollbarColorCode by settingsRepo.scrollbarColor.collectAsStateWithLifecycle(initialValue = "blue")
-    
-    // Цвета скроллбара по дням недели
-    val monScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.MONDAY).collectAsStateWithLifecycle(initialValue = "blue")
-    val tueScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.TUESDAY).collectAsStateWithLifecycle(initialValue = "blue")
-    val wedScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.WEDNESDAY).collectAsStateWithLifecycle(initialValue = "blue")
-    val thuScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.THURSDAY).collectAsStateWithLifecycle(initialValue = "blue")
-    val friScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.FRIDAY).collectAsStateWithLifecycle(initialValue = "blue")
-    val satScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.SATURDAY).collectAsStateWithLifecycle(initialValue = "blue")
-    val sunScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.SUNDAY).collectAsStateWithLifecycle(initialValue = "blue")
-    
-    // Диалог выбора размера шрифта
-    if (showFontSizeDialog) {
-        com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { showFontSizeDialog = false },
-            title = { Text(Strings.selectFontSize) },
-            text = {
-                Column {
-                    SettingsRepository.FontSize.entries.forEach { size ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    scope.launch { settingsRepo.setFontSize(size) }
-                                    showFontSizeDialog = false
-                                }
-                                .padding(vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = fontSize == size, onClick = null)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(size.getDisplayName(isRu))
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { showFontSizeDialog = false },
-                    text = Strings.cancel
-                )
-            }
-        )
-    }
+    var showDailyThemes by rememberSaveable { mutableStateOf(false) }
 
-    // Диалог выбора цветовой темы
-    if (showColorThemeDialog) {
-        com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { showColorThemeDialog = false },
-            title = { Text(Strings.selectColorTheme) },
-            text = {
-                Column {
-                    AppColorTheme.entries.forEach { theme ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    scope.launch {
-                                        settingsRepo.setColorTheme(theme.code)
-                                        com.dedovmosol.iwomail.widget.updateMailWidget(context)
-                                    }
-                                    showColorThemeDialog = false
-                                }
-                                .padding(vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = colorThemeCode == theme.code, onClick = null)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Box(
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .clip(CircleShape)
-                                    .background(theme.gradientStart)
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(getThemeDisplayName(theme))
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { showColorThemeDialog = false },
-                    text = Strings.cancel
-                )
-            }
-        )
-    }
-
-    // Диалог выбора режима темы
-    if (showThemeModeDialog) {
-        com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { showThemeModeDialog = false },
-            title = { Text(Strings.themeMode) },
-            text = {
-                Column {
-                    SettingsRepository.ThemeMode.entries.forEach { mode ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    scope.launch { settingsRepo.setThemeMode(mode) }
-                                    showThemeModeDialog = false
-                                }
-                                .padding(vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = themeMode == mode, onClick = null)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Icon(
-                                themeModeIcon(mode),
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(mode.getDisplayName(isRu))
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { showThemeModeDialog = false },
-                    text = Strings.cancel
-                )
-            }
-        )
-    }
-
-    // Диалог выбора цвета скроллбара
-    if (showScrollbarColorDialog) {
-        com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { showScrollbarColorDialog = false },
-            title = { Text(if (isRu) "Цвет скроллбара" else "Scrollbar color") },
-            text = {
-                Column {
-                    com.dedovmosol.iwomail.ui.components.ScrollbarColor.entries.forEach { sbColor ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    scope.launch { settingsRepo.setScrollbarColor(sbColor.code) }
-                                    showScrollbarColorDialog = false
-                                }
-                                .padding(vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = scrollbarColorCode == sbColor.code, onClick = null)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Box(
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .clip(CircleShape)
-                                    .background(sbColor.color)
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(sbColor.getDisplayName(isRu))
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { showScrollbarColorDialog = false },
-                    text = Strings.cancel
-                )
-            }
-        )
-    }
-
-    // Диалог настройки тем по дням недели — два раздельных блока
-    if (showDailyThemesDialog) {
-        com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { showDailyThemesDialog = false },
-            title = { Text(Strings.configureDailyThemes) },
-            text = {
-                Column {
-                    // === Блок 1: Цветовая тема по дням ===
-                    Text(
-                        text = if (isRu) "Цветовая тема" else "Color theme",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                    DayThemeRow(Strings.monday, mondayTheme) { theme ->
-                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.MONDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
-                    }
-                    DayThemeRow(Strings.tuesday, tuesdayTheme) { theme ->
-                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.TUESDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
-                    }
-                    DayThemeRow(Strings.wednesday, wednesdayTheme) { theme ->
-                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.WEDNESDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
-                    }
-                    DayThemeRow(Strings.thursday, thursdayTheme) { theme ->
-                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.THURSDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
-                    }
-                    DayThemeRow(Strings.friday, fridayTheme) { theme ->
-                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.FRIDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
-                    }
-                    DayThemeRow(Strings.saturday, saturdayTheme) { theme ->
-                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.SATURDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
-                    }
-                    DayThemeRow(Strings.sunday, sundayTheme) { theme ->
-                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.SUNDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
-                    }
-                    
-                    // === Разделитель ===
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
-                    
-                    // === Блок 2: Цвет скроллбара по дням ===
-                    Text(
-                        text = if (isRu) "Цвет скроллбара" else "Scrollbar color",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                    DayScrollbarColorRow(Strings.monday, monScrollbar, isRu) { color ->
-                        scope.launch { settingsRepo.setDayScrollbarColor(java.util.Calendar.MONDAY, color) }
-                    }
-                    DayScrollbarColorRow(Strings.tuesday, tueScrollbar, isRu) { color ->
-                        scope.launch { settingsRepo.setDayScrollbarColor(java.util.Calendar.TUESDAY, color) }
-                    }
-                    DayScrollbarColorRow(Strings.wednesday, wedScrollbar, isRu) { color ->
-                        scope.launch { settingsRepo.setDayScrollbarColor(java.util.Calendar.WEDNESDAY, color) }
-                    }
-                    DayScrollbarColorRow(Strings.thursday, thuScrollbar, isRu) { color ->
-                        scope.launch { settingsRepo.setDayScrollbarColor(java.util.Calendar.THURSDAY, color) }
-                    }
-                    DayScrollbarColorRow(Strings.friday, friScrollbar, isRu) { color ->
-                        scope.launch { settingsRepo.setDayScrollbarColor(java.util.Calendar.FRIDAY, color) }
-                    }
-                    DayScrollbarColorRow(Strings.saturday, satScrollbar, isRu) { color ->
-                        scope.launch { settingsRepo.setDayScrollbarColor(java.util.Calendar.SATURDAY, color) }
-                    }
-                    DayScrollbarColorRow(Strings.sunday, sunScrollbar, isRu) { color ->
-                        scope.launch { settingsRepo.setDayScrollbarColor(java.util.Calendar.SUNDAY, color) }
-                    }
-                }
-            },
-            confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { showDailyThemesDialog = false },
-                    text = Strings.done
-                )
-            }
-        )
-    }
-
-    // Диалог выбора языка
-    if (showLanguageDialog) {
-        com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { showLanguageDialog = false },
-            title = { Text(Strings.selectLanguage) },
-            text = {
-                Column {
-                    AppLanguage.entries.forEach { lang ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    scope.launch { settingsRepo.setLanguage(lang.code) }
-                                    showLanguageDialog = false
-                                }
-                                .padding(vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = currentLanguage == lang, onClick = null)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(lang.displayName)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { showLanguageDialog = false },
-                    text = Strings.cancel
-                )
-            }
-        )
+    if (showDailyThemes) {
+        DailyThemesSheet(settingsRepo, onDismiss = { showDailyThemes = false })
     }
 
     SettingsPageScaffold(
@@ -541,69 +143,78 @@ fun PersonalizationScreen(
     ) {
         item {
             SettingsGroup {
-                SettingsNavRow(
+                SettingsChoiceRow(
                     title = Strings.language,
-                    subtitle = currentLanguage.displayName,
+                    options = AppLanguage.entries,
+                    selected = currentLanguage,
+                    label = { it.displayName },
+                    onSelect = { lang -> scope.launch { settingsRepo.setLanguage(lang.code) } },
                     icon = AppIcons.Language,
                     highlightId = "language",
-                    highlight = highlight,
-                    onClick = { showLanguageDialog = true }
+                    highlight = highlight
                 )
-                SettingsNavRow(
+                SettingsChoiceRow(
                     title = Strings.fontSize,
-                    subtitle = fontSize.getDisplayName(isRu),
+                    options = SettingsRepository.FontSize.entries,
+                    selected = fontSize,
+                    label = { it.getDisplayName(isRu) },
+                    onSelect = { size -> scope.launch { settingsRepo.setFontSize(size) } },
                     icon = AppIcons.TextFields,
                     highlightId = "fontSize",
-                    highlight = highlight,
-                    onClick = { showFontSizeDialog = true }
+                    highlight = highlight
                 )
             }
         }
         item {
             val currentTheme = AppColorTheme.fromCode(colorThemeCode)
             val themeEnabled = !dailyThemesEnabled
-            val currentSbColor = com.dedovmosol.iwomail.ui.components.ScrollbarColor.fromCode(scrollbarColorCode)
+            val currentSbColor = ScrollbarColor.fromCode(scrollbarColorCode)
             SettingsGroup {
-                SettingsNavRow(
+                SettingsChoiceRow(
                     title = Strings.colorTheme,
-                    subtitle = if (dailyThemesEnabled) Strings.dailyThemesActive else getThemeDisplayName(currentTheme),
-                    highlightId = "colorTheme",
-                    highlight = highlight,
+                    subtitle = if (dailyThemesEnabled) Strings.dailyThemesActive else null,
+                    options = AppColorTheme.entries,
+                    selected = currentTheme,
+                    label = { getThemeDisplayName(it) },
+                    optionLeading = { ColorSwatch(it.gradientStart) },
                     leading = {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    if (themeEnabled) currentTheme.gradientStart
-                                    else currentTheme.gradientStart.copy(alpha = 0.38f)
-                                )
+                        ColorSwatch(
+                            if (themeEnabled) currentTheme.gradientStart else currentTheme.gradientStart.copy(alpha = 0.38f),
+                            size = SettingsTokens.TileSize
                         )
                     },
                     enabled = themeEnabled,
-                    onClick = { showColorThemeDialog = true }
+                    highlightId = "colorTheme",
+                    highlight = highlight,
+                    onSelect = { theme ->
+                        scope.launch {
+                            settingsRepo.setColorTheme(theme.code)
+                            com.dedovmosol.iwomail.widget.updateMailWidget(context)
+                        }
+                    }
                 )
-                SettingsNavRow(
+                SettingsChoiceRow(
                     title = Strings.themeMode,
-                    subtitle = themeMode.getDisplayName(isRu),
+                    options = SettingsRepository.ThemeMode.entries,
+                    selected = themeMode,
+                    label = { it.getDisplayName(isRu) },
+                    optionLeading = { Icon(themeModeIcon(it), contentDescription = null, modifier = Modifier.size(20.dp)) },
                     icon = themeModeIcon(themeMode),
                     highlightId = "themeMode",
                     highlight = highlight,
-                    onClick = { showThemeModeDialog = true }
+                    onSelect = { mode -> scope.launch { settingsRepo.setThemeMode(mode) } }
                 )
-                SettingsNavRow(
-                    title = if (isRu) "Цвет скроллбара" else "Scrollbar color",
-                    subtitle = currentSbColor.getDisplayName(isRu),
-                    leading = {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(currentSbColor.color)
-                        )
-                    },
+                SettingsChoiceRow(
+                    title = Strings.scrollbarColor,
+                    options = ScrollbarColor.entries,
+                    selected = currentSbColor,
+                    label = { it.getDisplayName(isRu) },
+                    optionLeading = { ColorSwatch(it.color) },
+                    leading = { ColorSwatch(currentSbColor.color, size = SettingsTokens.TileSize) },
                     enabled = themeEnabled,
-                    onClick = { showScrollbarColorDialog = true }
+                    highlightId = "scrollbarColor",
+                    highlight = highlight,
+                    onSelect = { color -> scope.launch { settingsRepo.setScrollbarColor(color.code) } }
                 )
                 SettingsSwitchRow(
                     title = Strings.dailyThemes,
@@ -620,7 +231,7 @@ fun PersonalizationScreen(
                     SettingsNavRow(
                         title = Strings.configureDailyThemes,
                         icon = AppIcons.Settings,
-                        onClick = { showDailyThemesDialog = true }
+                        onClick = { showDailyThemes = true }
                     )
                 }
             }
@@ -631,6 +242,8 @@ fun PersonalizationScreen(
                     title = Strings.animations,
                     description = Strings.animationsDesc,
                     icon = { Icon(AppIcons.Animation, null) },
+                    highlightId = "animations",
+                    highlight = highlight,
                     checked = animationsEnabled,
                     onChange = { enabled ->
                         scope.launch { settingsRepo.setAnimationsEnabled(enabled) }
@@ -642,7 +255,7 @@ fun PersonalizationScreen(
 }
 
 /**
- * Иконка режима темы (единая точка выбора — диалог и строка списка).
+ * Иконка режима темы (единая точка выбора — список вариантов и строка).
  * DRY: маппинг режима на иконку определён один раз.
  */
 @Composable

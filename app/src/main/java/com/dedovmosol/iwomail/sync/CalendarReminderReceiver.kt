@@ -141,7 +141,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
 
         if (!NotificationHelper.canPostNotifications(context)) return
 
-        val notification = NotificationCompat.Builder(context, MailApplication.CHANNEL_CALENDAR)
+        val builder = NotificationCompat.Builder(context, MailApplication.CHANNEL_CALENDAR)
             .setSmallIcon(R.drawable.ic_calendar_month)
             .setContentTitle(event.subject.ifBlank { context.getString(R.string.calendar_event) })
             .setContentText(contentText)
@@ -150,10 +150,15 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             .setCategory(NotificationCompat.CATEGORY_EVENT)
             .setAutoCancel(true)
             .setContentIntent(contentPendingIntent)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .addAction(R.drawable.ic_check, context.getString(R.string.notification_mark_read), markReadPendingIntent)
             .addAction(R.drawable.ic_schedule, context.getString(R.string.notification_remind_in_5_min), snoozePendingIntent)
-            .build()
+        // BG-08: время события не секрет, название и место — да
+        val notification = NotificationPrivacy.apply(
+            context, builder, MailApplication.CHANNEL_CALENDAR, R.drawable.ic_calendar_month,
+            publicTitle = context.getString(R.string.calendar_event),
+            publicText = timeText,
+            hidden = NotificationPrivacy.isContentHidden(context)
+        ).build()
 
         // Уникальный ID уведомления на основе события
         val notificationId = notificationIdForEvent(event.id)

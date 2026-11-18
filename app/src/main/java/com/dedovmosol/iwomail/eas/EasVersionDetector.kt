@@ -77,8 +77,8 @@ class EasVersionDetector(
                             if (cont.isActive) cont.resumeWithException(e)
                         }
                         override fun onResponse(call: Call, response: Response) {
-                            if (cont.isActive) cont.resume(response)
-                            else response.close()
+                            // Отмена между ответом и диспатчем закрывает Response (как EasTransport.executeRequest)
+                            cont.resume(response) { response.close() }
                         }
                     })
                 }
@@ -113,7 +113,9 @@ class EasVersionDetector(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error(e.message ?: "Network error")
+                // Метка причины [NET:…]: «сертификат изменился» (пин), «не доверен», таймаут — понятным текстом,
+                // а не сырой текст исключения на английском (было: первый же запрос проверки аккаунта)
+                EasResult.Error(com.dedovmosol.iwomail.network.ConnectionFailure.describe(e))
             }
         }
     }

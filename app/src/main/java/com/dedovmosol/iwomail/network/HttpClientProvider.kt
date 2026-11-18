@@ -129,8 +129,8 @@ object HttpClientProvider {
         accountId: Long? = null,
         serverUrl: String = ""
     ): OkHttpClient {
-        // Если есть сертификаты — используем специальный клиент
-        if (certificatePath != null || clientCertificatePath != null) {
+        // Сертификаты из файлов или закреплённый отпечаток (ONB-08, без «Принимать все») — свой клиент
+        if (certificatePath != null || clientCertificatePath != null || (pinnedCertInfo != null && !acceptAllCerts)) {
             return getCertificateClient(
                 acceptAllCerts,
                 certificatePath,
@@ -440,27 +440,35 @@ object HttpClientProvider {
             // - Системный режим (нет импортированного серта): дефолтный верификатор билдера —
             //   публичный контракт строгой проверки (современные публичные CA всегда выдают SAN).
             .apply {
-                if (acceptAllCerts) {
-                    hostnameVerifier { _, _ -> true }
-                } else if (certificatePath != null) {
-                    hostnameVerifier(Rfc6125HostnameVerifier)
+                when (trustModeOf(acceptAllCerts, certificatePath, pinnedCertInfo)) {
+                    TrustMode.ACCEPT_ALL -> hostnameVerifier { _, _ -> true }
+                    TrustMode.IMPORTED -> hostnameVerifier(Rfc6125HostnameVerifier)
+                    // Закреплён сам ключ сервера: имя в сертификате не важно (подключение по IP — обычное
+                    // дело для внутреннего Exchange). Чужой ключ отвергает TrustManager.
+                    TrustMode.PINNED_KEY -> hostnameVerifier { _, _ -> true }
+                    TrustMode.SYSTEM -> Unit
                 }
             }
         
         try {
-            // TrustManager для серверного сертификата
-            val baseTrustManager = if (certificatePath != null) {
-                createCertificateTrustManager(certificatePath)
-            } else {
-                createSystemTrustManager()
-            }
-            
-            // КРИТИЧНО: Оборачиваем TrustManager для Certificate Pinning
-            // Pinning проверяется ПОСЛЕ стандартной валидации (hostname, CA, срок)
-            val trustManager = if (pinnedCertInfo != null && accountId != null && baseTrustManager != null) {
-                createPinningTrustManager(pinnedCertInfo, accountId, baseTrustManager, serverUrl)
-            } else {
-                baseTrustManager
+            val mode = trustModeOf(acceptAllCerts, certificatePath, pinnedCertInfo)
+            val trustManager = when (mode) {
+                TrustMode.ACCEPT_ALL -> createTrustAllManager()
+                // ONB-08: сертификат, которому пользователь доверился при первом подключении (TOFU)
+                TrustMode.PINNED_KEY -> createPinnedKeyTrustManager(pinnedCertInfo!!, accountId, serverUrl)
+                TrustMode.IMPORTED, TrustMode.SYSTEM -> {
+                    val baseTrustManager = if (certificatePath != null) {
+                        createCertificateTrustManager(certificatePath)
+                    } else {
+                        createSystemTrustManager()
+                    }
+                    // Pinning проверяется ПОСЛЕ стандартной валидации (hostname, CA, срок)
+                    if (pinnedCertInfo != null && accountId != null && baseTrustManager != null) {
+                        createPinningTrustManager(pinnedCertInfo, accountId, baseTrustManager, serverUrl)
+                    } else {
+                        baseTrustManager
+                    }
+                }
             }
             
             // KeyManager для клиентского сертификата
@@ -605,6 +613,182 @@ object HttpClientProvider {
         }
     }
     
+    /** Чему доверяет соединение с почтовым сервером. Один источник для EAS/EWS (OkHttp) и IMAP/POP3 (JavaMail). */
+    enum class TrustMode {
+        /** «Принимать все сертификаты» — явный выбор пользователя. */
+        ACCEPT_ALL,
+        /** Импортированный сертификат сервера или УЦ (+ пин этого сертификата). */
+        IMPORTED,
+        /** ONB-08: только закреплённый ключ сервера (TOFU), без УЦ и проверки имени. */
+        PINNED_KEY,
+        /** Системное хранилище и сертификаты пользователя; имя сервера проверяется. */
+        SYSTEM
+    }
+
+    fun trustModeOf(acceptAllCerts: Boolean, certificatePath: String?, pinnedCertInfo: CertificateInfo?): TrustMode = when {
+        acceptAllCerts -> TrustMode.ACCEPT_ALL
+        certificatePath != null -> TrustMode.IMPORTED
+        pinnedCertInfo != null -> TrustMode.PINNED_KEY
+        else -> TrustMode.SYSTEM
+    }
+
+    /**
+     * ONB-08 (trust on first use, как known_hosts в SSH): доверие ровно одному ключу сервера, который пользователь
+     * подтвердил по отпечатку. УЦ и имя не проверяются — внутренний УЦ и подключение по IP типичны для Exchange
+     * 2007; срок действия тоже — доверие привязано к ключу, а не к сроку (как при «Принимать все», но без MITM).
+     * Другой ключ — [CertificatePinMismatchException] и запись в [CertificateChangeDetector] (экран «принять новый»).
+     * SPKI — как в Network Security Config Android (pin-set: SHA-256 SubjectPublicKeyInfo).
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun createPinnedKeyTrustManager(pinned: CertificateInfo, accountId: Long?, serverUrl: String): X509TrustManager =
+        object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
+                throw java.security.cert.CertificateException("client certificates are not accepted")
+            }
+
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+                val leaf = chain.firstOrNull() ?: throw java.security.cert.CertificateException("Empty server certificate chain")
+                if (calculateCertHash(leaf) == pinned.hash || calculateLegacyCertHash(leaf) == pinned.hash) return
+                if (accountId != null) {
+                    CertificateChangeDetector.onCertificateChanged(accountId, pinned, extractCertificateInfo(leaf), serverUrl)
+                }
+                throw CertificatePinMismatchException("Certificate pin mismatch: expected ${pinned.hash.take(16)}..., got ${calculateCertHash(leaf).take(16)}...")
+            }
+
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        }
+
+    /**
+     * SSLContext для JavaMail (IMAP/POP3) с тем же доверием и клиентским сертификатом, что у EAS (UI2-03).
+     * null — системное доверие без клиентского сертификата: JavaMail справится сам (и проверит имя сервера).
+     * Для «Принимать все» без клиентского сертификата тоже null — JavaMail делает это свойством `ssl.trust`.
+     */
+    fun mailSslContext(
+        acceptAllCerts: Boolean,
+        certificatePath: String?,
+        pinnedCertInfo: CertificateInfo?,
+        clientCertificatePath: String?,
+        clientCertificatePassword: String?,
+        accountId: Long?,
+        serverUrl: String
+    ): SSLContext? {
+        val mode = trustModeOf(acceptAllCerts, certificatePath, pinnedCertInfo)
+        val keyManager = if (clientCertificatePath != null && clientCertificatePassword != null) {
+            createClientKeyManager(clientCertificatePath, clientCertificatePassword)
+                ?: throw IllegalArgumentException("CLIENT_CERT_LOAD_FAILED")
+        } else null
+        if (keyManager == null && (mode == TrustMode.SYSTEM || mode == TrustMode.ACCEPT_ALL)) return null
+        val trustManager = when (mode) {
+            TrustMode.ACCEPT_ALL -> createTrustAllManager()
+            TrustMode.PINNED_KEY -> createPinnedKeyTrustManager(pinnedCertInfo!!, accountId, serverUrl)
+            TrustMode.IMPORTED -> {
+                val base = createCertificateTrustManager(certificatePath!!)
+                    ?: throw java.security.cert.CertificateException("Certificate file not readable")
+                if (pinnedCertInfo != null && accountId != null) createPinningTrustManager(pinnedCertInfo, accountId, base, serverUrl) else base
+            }
+            TrustMode.SYSTEM -> createSystemTrustManager()
+        }
+        return createSslContext().apply { init(keyManager?.let { arrayOf(it) }, arrayOf(trustManager), SecureRandom()) }
+    }
+
+    /** Сертификат, который сервер предъявил при рукопожатии — для подтверждения пользователем (ONB-08). */
+    data class ServerCertificate(
+        val info: CertificateInfo,
+        val subject: String,
+        val issuer: String,
+        /** SHA-256 всего сертификата (DER), как в браузерах. */
+        val sha256: String,
+        /** SHA-1 сертификата: так Exchange и IIS показывают отпечаток (Get-ExchangeCertificate Thumbprint). */
+        val sha1: String,
+        val dnsNames: List<String>,
+        val selfSigned: Boolean
+    ) {
+        fun isValidAt(timeMs: Long): Boolean = timeMs in info.validFrom..info.validTo
+
+        /** CN издателя (центра сертификации) или весь DN, если CN нет. */
+        val issuerName: String
+            get() = runCatching { findDnComponentValue(parseRfc2253Components(issuer), "CN") }.getOrNull() ?: issuer
+    }
+
+    fun describeCertificate(cert: X509Certificate): ServerCertificate {
+        fun digest(alg: String) = java.security.MessageDigest.getInstance(alg).digest(cert.encoded)
+            .joinToString(":") { "%02X".format(it) }
+        val names = try {
+            cert.subjectAlternativeNames?.filter { it.size >= 2 && (it[0] == 2 || it[0] == 7) }?.map { it[1].toString() }.orEmpty()
+        } catch (_: Exception) { emptyList() }
+        return ServerCertificate(
+            info = extractCertificateInfo(cert),
+            subject = cert.subjectX500Principal.getName(javax.security.auth.x500.X500Principal.RFC2253),
+            issuer = cert.issuerX500Principal.getName(javax.security.auth.x500.X500Principal.RFC2253),
+            sha256 = digest("SHA-256"),
+            sha1 = digest("SHA-1"),
+            dnsNames = names,
+            selfSigned = cert.subjectX500Principal == cert.issuerX500Principal
+        )
+    }
+
+    /** Команда перехода на TLS для портов без неявного TLS (IMAP 143, POP3 110). */
+    enum class StartTls { NONE, IMAP, POP3 }
+
+    /**
+     * Рукопожатие TLS только ради сертификата сервера: учётные данные не отправляются, HTTP-запроса нет,
+     * сертификат ничем не проверяется — его проверяет пользователь по отпечатку. Протоколы и шифры — как у
+     * почтового клиента (TLS 1.0 и 3DES для Exchange 2007). Блокирующий вызов — с IO-потока.
+     */
+    @androidx.annotation.WorkerThread
+    fun fetchServerCertificate(host: String, port: Int, startTls: StartTls = StartTls.NONE, timeoutMs: Int = 15_000): ServerCertificate {
+        var seen: X509Certificate? = null
+        val capture = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) { seen = chain.firstOrNull() }
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        }
+        val context = createSslContext().apply { init(null, arrayOf(capture), SecureRandom()) }
+        java.net.Socket().use { plain ->
+            plain.connect(java.net.InetSocketAddress(host, port), timeoutMs)
+            plain.soTimeout = timeoutMs
+            if (startTls != StartTls.NONE) negotiateStartTls(plain, startTls)
+            (TlsSocketFactory(context.socketFactory).createSocket(plain, host, port, true) as SSLSocket).use { tls ->
+                tls.startHandshake()
+            }
+        }
+        return describeCertificate(seen ?: throw java.security.cert.CertificateException("Server sent no certificate"))
+    }
+
+    /** Приветствие и STARTTLS/STLS до рукопожатия (RFC 3501 §6.2.1, RFC 2595 §4); отказ сервера — IOException. */
+    private fun negotiateStartTls(socket: java.net.Socket, mode: StartTls) {
+        val input = socket.getInputStream()
+        val out = socket.getOutputStream()
+        fun line(): String {
+            val sb = StringBuilder()
+            while (true) {
+                val c = input.read()
+                if (c < 0) throw java.io.EOFException("server closed before STARTTLS")
+                if (c == '\n'.code) return sb.toString().trimEnd('\r')
+                if (sb.length < 4096) sb.append(c.toChar())
+            }
+        }
+        line() // приветствие
+        when (mode) {
+            StartTls.IMAP -> {
+                out.write("a1 STARTTLS\r\n".toByteArray(Charsets.US_ASCII)); out.flush()
+                while (true) {
+                    val reply = line()
+                    if (reply.startsWith("a1 ")) {
+                        if (!reply.startsWith("a1 OK", ignoreCase = true)) throw java.io.IOException("STARTTLS refused: ${reply.take(80)}")
+                        return
+                    }
+                }
+            }
+            StartTls.POP3 -> {
+                out.write("STLS\r\n".toByteArray(Charsets.US_ASCII)); out.flush()
+                val reply = line()
+                if (!reply.startsWith("+OK", ignoreCase = true)) throw java.io.IOException("STLS refused: ${reply.take(80)}")
+            }
+            StartTls.NONE -> Unit
+        }
+    }
+
     /**
      * Создает TrustManager с Public Key Pinning (SPKI — SubjectPublicKeyInfo)
      * Проверяет SHA-256 публичного ключа ПОСЛЕ стандартной валидации.

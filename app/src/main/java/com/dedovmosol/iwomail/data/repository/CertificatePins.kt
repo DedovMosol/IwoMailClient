@@ -4,6 +4,8 @@ import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.eas.EasClient
 import com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo
 
+internal fun AccountEntity.withPin(info: CertificateInfo?): AccountEntity = CertificatePins.withPrimaryPin(this, info)
+
 /**
  * Пины сертификатов по серверам аккаунта (Dual-URL).
  *
@@ -47,6 +49,17 @@ internal object CertificatePins {
         alternatePinnedCertificateOrg = null,
         alternatePinnedCertificateValidFrom = null,
         alternatePinnedCertificateValidTo = null
+    )
+
+    /** Пин основного сервера из сертификата, которому доверился пользователь (null — без изменений). */
+    fun withPrimaryPin(account: AccountEntity, info: CertificateInfo?): AccountEntity = if (info == null) account else account.copy(
+        pinnedCertificateHash = info.hash,
+        pinnedCertificateCN = info.cn,
+        pinnedCertificateOrg = info.organization,
+        pinnedCertificateValidFrom = info.validFrom,
+        pinnedCertificateValidTo = info.validTo,
+        certificatePinningEnabled = true,
+        certificatePinningFailCount = 0
     )
 
     private fun AccountEntity.primaryPin(): CertificateInfo? = pinnedCertificateHash?.let {

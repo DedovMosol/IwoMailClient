@@ -282,9 +282,8 @@ class EasClient(
     val attachmentService: EasAttachmentService by lazy {
         EasAttachmentService(EasAttachmentService.AttachmentServiceDependencies(
             executeRequest = { request -> transport.executeRequest(request) },
-            executeEasCommand = { command, xml, parser ->
-                transport.executeEasCommand(command, xml) { responseXml -> parser(responseXml) }
-            },
+            openEasCommand = { command, xml, headers -> transport.openEasCommand(command, xml, headers) },
+            parseWbxml = { bytes -> wbxmlParser.parse(bytes) },
             buildUrl = { command -> transport.buildUrl(command) },
             getAuthHeader = { transport.getAuthHeader() },
             getPolicyKey = { transport.policyKey },
@@ -298,10 +297,7 @@ class EasClient(
                 else if (domain.isNotEmpty() && !username.contains("@")) "$username@$domain"
                 else username
             },
-            getDeviceId = { deviceId },
-            getDeviceType = { deviceType },
-            getUsername = { username },
-            getNormalizedServerUrl = { normalizedServerUrl }
+            getDeviceId = { deviceId }
         ))
     }
 
@@ -1233,6 +1229,94 @@ class EasClient(
         fileReference: String,
         destFile: java.io.File
     ): EasResult<java.io.File> = attachmentService.downloadAttachmentToFile(fileReference, destFile)
+
+    /** Где искать письмо в EWS, если EAS вложение не отдал (то же, что для отката тела письма). */
+    data class EwsMailLocator(
+        val subject: String,
+        val folder: EwsMailFolder,
+        val dateReceived: Long,
+        val internetMessageId: String?
+    )
+
+    /**
+     * Вложение письма в файл: EAS ([EasAttachmentService.downloadAttachmentToFile]), а если EAS не отдал —
+     * EWS GetAttachment потоком. Exchange 2007 SP2 через EAS не отдаёт вложения больше ~10 МБ (ItemOperations
+     * Status 11, GetAttachment HTTP 413), EWS — отдаёт (проверено: 30 МБ за 3,8 с, байты совпадают).
+     * EWS не пробуется при ошибках, которые он не исправит: учётные данные, сеть, нет места.
+     */
+    suspend fun downloadMailAttachmentToFile(
+        fileReference: String,
+        destFile: java.io.File,
+        name: String,
+        contentId: String?,
+        locator: EwsMailLocator?
+    ): EasResult<java.io.File> {
+        val eas = attachmentService.downloadAttachmentToFile(fileReference, destFile)
+        if (eas is EasResult.Success || locator == null) return eas
+        val easError = (eas as EasResult.Error).message
+        if (!AttachmentErrors.ewsMayHelp(easError)) return eas
+        val viaEws = downloadAttachmentViaEws(locator, name, contentId, destFile)
+        if (viaEws is EasResult.Success) return viaEws
+        // EWS не помог: показываем причину EAS, кроме лимита размера, где важна ошибка EWS (сеть, доступ)
+        if (easError != AttachmentErrors.TOO_LARGE) return eas
+        // Лимит EAS, а EWS письмо или вложение не нашёл — пользователю важнее причина «слишком большое»
+        val ewsError = (viaEws as EasResult.Error).message
+        return if (ewsError == AttachmentErrors.NOT_FOUND) eas else viaEws
+    }
+
+    private suspend fun downloadAttachmentViaEws(
+        locator: EwsMailLocator,
+        name: String,
+        contentId: String?,
+        destFile: java.io.File
+    ): EasResult<java.io.File> = withContext(Dispatchers.IO) {
+        try {
+            val itemId = when (val found = findEwsMailItemId(locator.subject, locator.folder, locator.dateReceived, locator.internetMessageId)) {
+                is EasResult.Error -> return@withContext found
+                is EasResult.Success -> found.data ?: return@withContext EasResult.Error(EasAttachmentService.NOT_FOUND)
+            }
+            val list = transport.executeEwsWithAuth(EwsAttachments.listRequest(itemId), "GetItem")
+                ?: return@withContext EasResult.Error("EWS GetItem request failed")
+            val attachment = EwsAttachments.match(EwsAttachments.parse(list), name, contentId)
+                ?: return@withContext EasResult.Error(AttachmentErrors.NOT_FOUND)
+            downloadEwsAttachmentToFile(attachment.id, destFile)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            EasResult.Error(AttachmentErrors.of(e))
+        }
+    }
+
+    /**
+     * EWS GetAttachment по AttachmentId (вложения черновиков и событий хранят его вместо FileReference) — потоком
+     * в файл. Ответ сервера в память целиком не читается. Ошибка или отмена — файла нет.
+     */
+    suspend fun downloadEwsAttachmentToFile(attachmentId: String, destFile: java.io.File): EasResult<java.io.File> =
+        withContext(Dispatchers.IO) {
+            try {
+                val streamed = ewsClient.executeStreaming(EwsAttachments.contentRequest(attachmentId), "GetAttachment") { input, checkActive ->
+                    java.io.FileOutputStream(destFile).use { out -> EwsAttachmentContent.extract(input, out, checkActive) }
+                }
+                val result: EasResult<java.io.File> = when (streamed) {
+                    is EasResult.Error -> EasResult.Error(streamed.message)
+                    is EasResult.Success -> when (val r = streamed.data) {
+                        is EwsAttachmentContent.Result.Written ->
+                            if (r.bytes > 0) EasResult.Success(destFile) else EasResult.Error(AttachmentErrors.NOT_FOUND)
+                        // ErrorItemNotFound, ErrorInvalidIdMalformed (проверено на 2007) — вложения нет
+                        is EwsAttachmentContent.Result.Error -> EasResult.Error(
+                            if (r.code.startsWith("ErrorItemNotFound") || r.code.startsWith("ErrorInvalidId")) AttachmentErrors.NOT_FOUND
+                            else "EWS GetAttachment: ${r.code}"
+                        )
+                        EwsAttachmentContent.Result.NoContent -> EasResult.Error(AttachmentErrors.NOT_FOUND)
+                    }
+                }
+                if (result is EasResult.Error) destFile.delete()
+                result
+            } catch (e: Exception) {
+                destFile.delete()
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                EasResult.Error(AttachmentErrors.of(e))
+            }
+        }
 
     /** Вложение черновика: EAS FileReference — ItemOperations, EWS AttachmentId — GetAttachment. */
     suspend fun downloadDraftAttachment(fileReference: String): EasResult<ByteArray> {

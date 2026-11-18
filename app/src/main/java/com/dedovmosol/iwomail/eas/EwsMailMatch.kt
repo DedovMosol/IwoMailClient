@@ -121,4 +121,6 @@ object ItemOperationsStatus {
     const val SUCCESS = 1
     const val NOT_FOUND = 6
     const val INVALID_RANGE = 8
+    /** Больше лимита сервера (Exchange 2007 SP2: вложения от ~10 МБ; файл отдаёт только EWS). */
+    const val TOO_LARGE = 11
 }

@@ -254,7 +254,6 @@ object NotificationHelper {
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setSubText(accountEmail)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(NotificationCompat.CATEGORY_EMAIL)
             // Тихие часы: уведомление в шторке, но без звука и вибрации канала
             .setSilent(alert.silent)
@@ -295,6 +294,13 @@ object NotificationHelper {
             )
         }
 
+        // BG-08: на экране блокировки — только «Новая почта» и число писем
+        NotificationPrivacy.apply(
+            context, builder, channelId, com.dedovmosol.iwomail.R.drawable.ic_email,
+            publicTitle = NotificationStrings.getNewMailTitle(count, null, isRussian),
+            publicText = NotificationStrings.getNewMailText(count, null, isRussian),
+            hidden = NotificationPrivacy.isContentHidden(context)
+        )
         notificationManager.notify(notificationId, builder.build())
         if (!alert.silent) com.dedovmosol.iwomail.util.SoundPlayer.playReceiveSound(context)
     }

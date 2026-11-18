@@ -18,16 +18,14 @@ import javax.mail.*
  */
 class Pop3Client(
     private val account: AccountEntity,
-    private val password: String = ""
+    private val password: String = "",
+    private val clientCertificatePassword: String? = null
 ) : MailClient {
     
     private var store: Store? = null
     
     private fun getSession(): Session = Session.getInstance(
-        MailSessionProperties.build(
-            MailSessionProperties.Protocol.POP3, account.serverUrl, account.incomingPort,
-            useSsl = account.useSSL, acceptAllCerts = account.acceptAllCerts
-        )
+        MailSessionProperties.forAccount(MailSessionProperties.Protocol.POP3, account, clientCertificatePassword)
     )
     
     override suspend fun connect(): Result<Unit> = withContext(Dispatchers.IO) {

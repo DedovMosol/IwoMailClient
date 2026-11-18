@@ -102,6 +102,9 @@ fun SetupScreen(
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    // ONB-08: сертификат, предъявленный сервером, на подтверждение; и тот, которому пользователь доверился
+    var certificateToConfirm by remember { mutableStateOf<com.dedovmosol.iwomail.network.HttpClientProvider.ServerCertificate?>(null) }
+    var trustedCertificate by remember { mutableStateOf<com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo?>(null) }
     var successMessage by rememberSaveable { mutableStateOf<String?>(null) }
 
     // Поля для IMAP/POP3
@@ -1332,9 +1335,11 @@ fun SetupScreen(
                 (clientCertificatePath == null || clientCertificatePassword.isNotBlank())
             } }
 
-            Button(
-                onClick = {
-                    if (isLoading) return@Button
+            // Доверие относится к тому серверу, чей сертификат показали: другой адрес, порт или протокол — заново
+            LaunchedEffect(serverUrl, incomingPort, accountType, useSSL, acceptAllCerts) { trustedCertificate = null }
+            // Сохранение — и кнопкой, и после «Доверять» в диалоге сертификата (ONB-08, IMAP/POP3)
+            val saveAction: () -> Unit = saveAction@{
+                    if (isLoading) return@saveAction
                     isLoading = true
                     scope.launch {
                         errorMessage = null
@@ -1445,7 +1450,10 @@ fun SetupScreen(
                                     outgoingPort = outgoingPort.toIntOrNull() ?: 587,
                                     useSSL = useSSL,
                                     syncMode = syncMode,
-                                    certificatePath = certificatePath
+                                    certificatePath = certificatePath,
+                                    clientCertificatePath = clientCertificatePath,
+                                    clientCertificatePassword = clientCertificatePassword.ifBlank { null },
+                                    pinnedCertificate = trustedCertificate?.takeIf { !acceptAllCerts && certificatePath == null }
                                 )
                             }
 
@@ -1470,14 +1478,48 @@ fun SetupScreen(
                                     accountSaved = true
                                     onSetupComplete()
                                 }
-                                is EasResult.Error -> errorMessage = result.message
+                                is EasResult.Error -> if (result.message == com.dedovmosol.iwomail.data.repository.CertificateTrust.NOT_TRUSTED) {
+                                    // ONB-08: сертификат не подтверждён — показать его для сверки по отпечатку
+                                    val probe = com.dedovmosol.iwomail.data.database.AccountEntity(
+                                        email = email, displayName = displayName, serverUrl = serverUrl, username = username,
+                                        accountType = accountType.name, useSSL = useSSL,
+                                        incomingPort = incomingPort.toIntOrNull() ?: if (accountType == AccountType.IMAP) { if (useSSL) 993 else 143 } else { if (useSSL) 995 else 110 }
+                                    )
+                                    when (val cert = accountRepo.fetchServerCertificate(probe)) {
+                                        is EasResult.Success -> {
+                                            trustedCertificate = null
+                                            certificateToConfirm = cert.data
+                                        }
+                                        is EasResult.Error -> errorMessage = result.message
+                                    }
+                                } else {
+                                    errorMessage = result.message
+                                }
                             }
                         } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
                             errorMessage = NotificationStrings.getErrorWithMessage(isRussianLang, e.message)
                         }
                         isLoading = false
                     }
-                },
+            }
+            certificateToConfirm?.let { cert ->
+                com.dedovmosol.iwomail.ui.components.ServerCertificateDialog(
+                    certificate = cert,
+                    serverLabel = "${serverUrl.trim()}:${incomingPort.ifBlank { "" }}".trimEnd(':'),
+                    onTrust = {
+                        trustedCertificate = cert.info
+                        certificateToConfirm = null
+                        saveAction()
+                    },
+                    onDismiss = {
+                        certificateToConfirm = null
+                        errorMessage = com.dedovmosol.iwomail.data.repository.CertificateTrust.NOT_TRUSTED
+                    }
+                )
+            }
+            Button(
+                onClick = saveAction,
                 enabled = !isLoading && canSave,
                 modifier = Modifier
                     .fillMaxWidth()

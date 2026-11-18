@@ -17,16 +17,14 @@ import javax.mail.*
  */
 class ImapClient(
     private val account: AccountEntity,
-    private val password: String = ""
+    private val password: String = "",
+    private val clientCertificatePassword: String? = null
 ) : MailClient {
     
     private var store: Store? = null
     
     private fun getSession(): Session = Session.getInstance(
-        MailSessionProperties.build(
-            MailSessionProperties.Protocol.IMAP, account.serverUrl, account.incomingPort,
-            useSsl = account.useSSL, acceptAllCerts = account.acceptAllCerts
-        )
+        MailSessionProperties.forAccount(MailSessionProperties.Protocol.IMAP, account, clientCertificatePassword)
     )
     
     override suspend fun connect(): Result<Unit> = withContext(Dispatchers.IO) {

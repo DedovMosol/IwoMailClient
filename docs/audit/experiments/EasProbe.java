@@ -6,6 +6,7 @@ import java.nio.charset.*;
 import java.security.MessageDigest;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.time.Instant;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -405,6 +406,9 @@ public class EasProbe {
     static final class Item {
         String serverId, fp, messageClass, cpid, nativeType, bodyTrunc, dateReceived;
         long bodyEst; int bodyType; int attCount; long attMax; long attSum; String attMaxRef; long attMinSize = Long.MAX_VALUE; String attMinRef;
+        String subject;
+        /** {FileReference, DisplayName, EstimatedDataSize, ContentId, IsInline} — для att2 (сопоставление с EWS). */
+        final List<String[]> attList = new ArrayList<>();
     }
 
     static void sectionOptions() {
@@ -569,7 +573,9 @@ public class EasProbe {
             if (ref != null) allAttRefs.add(ref);
             if (sz > it.attMax) { it.attMax = sz; it.attMaxRef = ref; }
             if (sz > 0 && sz < it.attMinSize) { it.attMinSize = sz; it.attMinRef = ref; }
+            if (ref != null) it.attList.add(new String[]{ref, at.cval("DisplayName"), String.valueOf(sz), at.cval("ContentId"), at.cval("IsInline")});
         }
+        it.subject = ad.cval("Subject");
         String fpSrc = it.dateReceived + "|" + ad.cval("Subject") + "|" + ad.cval("From") + "|" + it.bodyEst;
         it.fp = hex(MessageDigest.getInstance("SHA-256").digest(fpSrc.getBytes(UTF8)));
         return it;
@@ -1117,6 +1123,171 @@ public class EasProbe {
         return r;
     }
 
+    static String sha(byte[] b) {
+        try { return hex(MessageDigest.getInstance("SHA-256").digest(b)).substring(0, 16); } catch (Exception e) { return "?"; }
+    }
+
+    static int le32(byte[] b, int off) { return (b[off] & 0xFF) | (b[off + 1] & 0xFF) << 8 | (b[off + 2] & 0xFF) << 16 | (b[off + 3] & 0xFF) << 24; }
+
+    /** ItemOperations Fetch с MS-ASAcceptMultiPart: T — разбор двоичного ответа (MS-ASCMD 2.2.2.10 / 2.2.3.130 Part). */
+    static byte[] multipartFetch(String ref, long expected) throws IOException {
+        N req = e(20, "ItemOperations", e(20, "Fetch", e(20, "Store", "Mailbox"), e(17, "FileReference", ref)));
+        Resp r = eas("ItemOperations", req, true, Map.of("MS-ASAcceptMultiPart", "T"));
+        String ct = r.h("Content-Type");
+        out.printf("      ItemOperations multipart: HTTP %d, Content-Type %s, %,d байт, %,d мс%n", r.code, ct, r.body.length, r.ms);
+        if (ct == null || !ct.contains("multipart")) {
+            N x = parse(r);
+            out.printf("        ответ не multipart, Status Fetch=%s%n", fetchStatus(x));
+            return null;
+        }
+        byte[] b = r.body;
+        int parts = le32(b, 0);
+        StringBuilder layout = new StringBuilder();
+        int[][] meta = new int[parts][2];
+        for (int i = 0; i < parts; i++) {
+            meta[i][0] = le32(b, 4 + 8 * i);
+            meta[i][1] = le32(b, 8 + 8 * i);
+            layout.append(String.format("[%d: offset %,d, length %,d]", i, meta[i][0], meta[i][1]));
+        }
+        out.printf("        частей %d, заголовок %d байт, %s; части подряд без зазоров: %b%n", parts, 4 + 8 * parts, layout,
+                parts == 0 || meta[0][0] == 4 + 8 * parts);
+        if (parts == 0) return null;
+        N x = dec(Arrays.copyOfRange(b, meta[0][0], meta[0][0] + meta[0][1]));
+        N fetch = x == null ? null : x.find(20, "Fetch");
+        N part = fetch == null ? null : fetch.find(20, "Part");
+        N data = fetch == null ? null : fetch.find(20, "Data");
+        out.printf("        часть 0 (WBXML): Status=%s, Fetch Status=%s, Part=%s, Data внутри: %b%n",
+                x == null ? null : x.cval("Status"), fetch == null ? null : fetch.cval("Status"), part == null ? null : part.text(), data != null);
+        if (part == null) return null;
+        int idx = Integer.parseInt(part.text().trim());
+        byte[] content = Arrays.copyOfRange(b, meta[idx][0], meta[idx][0] + meta[idx][1]);
+        out.printf("        часть %d: %,d байт (EstimatedDataSize %,d), SHA-256 %s%n", idx, content.length, expected, sha(content));
+        return content;
+    }
+
+    static byte[] plainFetch(String ref) throws IOException {
+        N req = e(20, "ItemOperations", e(20, "Fetch", e(20, "Store", "Mailbox"), e(17, "FileReference", ref)));
+        Resp r = eas("ItemOperations", req, true, Map.of());
+        N x = parse(r);
+        N d = x == null ? null : x.find(20, "Data");
+        byte[] data = d == null ? null : Base64.getMimeDecoder().decode(d.raw());
+        out.printf("      ItemOperations обычный (base64 в WBXML): Fetch Status=%s, %s%n", fetchStatus(x),
+                data == null ? "данных нет" : String.format("%,d байт, SHA-256 %s", data.length, sha(data)));
+        return data;
+    }
+
+    static byte[] getAttachmentPost(String ref, boolean defaultEas) {
+        String url = BASE + "/Microsoft-Server-ActiveSync" + (defaultEas ? "/default.eas" : "") + "?Cmd=GetAttachment&AttachmentName=" + ref +
+                "&User=" + URLEncoder.encode(DOMAIN + "\\" + USER, UTF8) + "&DeviceId=" + DEVICE_ID + "&DeviceType=" + DEVICE_TYPE;
+        Map<String, String> h = easHeaders(true);
+        h.put("Content-Type", "message/rfc822");
+        Resp r = http("POST", url, new byte[0], h, true);
+        out.printf("      GetAttachment POST%s: HTTP %d, %,d байт, Content-Type %s%s%n", defaultEas ? " (/default.eas)" : "", r.code, r.body.length,
+                r.h("Content-Type"), r.code == 200 ? ", SHA-256 " + sha(r.body) : "");
+        return r.code == 200 ? r.body : null;
+    }
+
+    /** EWS: письмо по теме и времени (как приложение без Message-ID), вложения, GetAttachment выбранного по имени. */
+    static byte[] ewsAttachment(Item it, String[] att) {
+        Instant t = Instant.parse(it.dateReceived.endsWith("Z") ? it.dateReceived : it.dateReceived + "Z");
+        String subj = it.subject == null ? "" : it.subject.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;");
+        Resp f = ewsCall("<m:FindItem Traversal=\"Shallow\"><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape></m:ItemShape>" +
+                "<m:IndexedPageItemView MaxEntriesReturned=\"2\" Offset=\"0\" BasePoint=\"Beginning\"/><m:Restriction><t:And>" +
+                "<t:Contains ContainmentMode=\"FullString\" ContainmentComparison=\"IgnoreCaseAndNonSpacingCharacters\"><t:FieldURI FieldURI=\"item:Subject\"/><t:Constant Value=\"" + subj + "\"/></t:Contains>" +
+                "<t:IsGreaterThanOrEqualTo><t:FieldURI FieldURI=\"item:DateTimeReceived\"/><t:FieldURIOrConstant><t:Constant Value=\"" + t.minusSeconds(15) + "\"/></t:FieldURIOrConstant></t:IsGreaterThanOrEqualTo>" +
+                "<t:IsLessThanOrEqualTo><t:FieldURI FieldURI=\"item:DateTimeReceived\"/><t:FieldURIOrConstant><t:Constant Value=\"" + t.plusSeconds(15) + "\"/></t:FieldURIOrConstant></t:IsLessThanOrEqualTo>" +
+                "</t:And></m:Restriction><m:ParentFolderIds><t:DistinguishedFolderId Id=\"inbox\"/></m:ParentFolderIds></m:FindItem>");
+        String fb = new String(f.body, UTF8);
+        List<String> ids = new ArrayList<>();
+        Matcher im = Pattern.compile("<t:ItemId Id=\"([^\"]+)\"").matcher(fb);
+        while (im.find()) ids.add(im.group(1));
+        out.printf("      EWS FindItem (тема + ±15 с): HTTP %d, найдено %d%n", f.code, ids.size());
+        if (ids.size() != 1) return null;
+        Resp g = ewsCall("<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties><t:FieldURI FieldURI=\"item:Attachments\"/>" +
+                "</t:AdditionalProperties></m:ItemShape><m:ItemIds><t:ItemId Id=\"" + ids.get(0) + "\"/></m:ItemIds></m:GetItem>");
+        String gb = new String(g.body, UTF8);
+        Matcher am = Pattern.compile("<t:FileAttachment>(.*?)</t:FileAttachment>", Pattern.DOTALL).matcher(gb);
+        String chosen = null;
+        int total = 0, sameName = 0;
+        while (am.find()) {
+            String a = am.group(1);
+            total++;
+            String name = find(a, "<t:Name>([^<]*)</t:Name>");
+            String id = find(a, "<t:AttachmentId Id=\"([^\"]+)\"");
+            out.printf("        FileAttachment: имя совпадает с EAS DisplayName: %b, ContentId есть: %b (совпадает: %b), t:Size: %s, t:IsInline: %s, t:ContentType есть: %b%n",
+                    att[1] != null && att[1].equals(unxml(name)), a.contains("<t:ContentId>"),
+                    att[3] != null && att[3].equals(unxml(find(a, "<t:ContentId>([^<]*)</t:ContentId>"))),
+                    find(a, "<t:Size>([^<]*)</t:Size>"), find(a, "<t:IsInline>([^<]*)</t:IsInline>"), a.contains("<t:ContentType>"));
+            if (att[1] != null && att[1].equals(unxml(name))) { sameName++; chosen = id; }
+        }
+        out.printf("      EWS GetItem item:Attachments: HTTP %d, FileAttachment %d, с тем же именем %d; ItemAttachment: %b%n", g.code, total, sameName,
+                gb.contains("<t:ItemAttachment>"));
+        if (sameName != 1) return null;
+        Resp a = ewsCall("<m:GetAttachment><m:AttachmentIds><t:AttachmentId Id=\"" + chosen + "\"/></m:AttachmentIds></m:GetAttachment>");
+        String ab = new String(a.body, UTF8);
+        int ci = ab.indexOf("Content>");
+        String head = ci < 0 ? ab.substring(0, Math.min(ab.length(), 400)) : ab.substring(0, ci + 8);
+        head = head.replaceAll("Id=\"[^\"]+\"", "Id=\"…\"").replaceAll("<t:Name>[^<]*</t:Name>", "<t:Name>…</t:Name>")
+                .replaceAll("<t:ContentId>[^<]*</t:ContentId>", "<t:ContentId>…</t:ContentId>");
+        String b64 = find(ab, "<t:Content>([^<]*)</t:Content>");
+        byte[] content = b64 == null ? null : Base64.getMimeDecoder().decode(b64);
+        out.printf("      EWS GetAttachment: HTTP %d, %,d байт ответа, %,d мс, Content-Type %s%n        начало ответа до содержимого: %s%n        %s%n",
+                a.code, a.body.length, a.ms, a.h("Content-Type"), head.substring(Math.max(0, head.length() - 700)),
+                content == null ? "t:Content нет" : String.format("содержимое %,d байт, SHA-256 %s", content.length, sha(content)));
+        return content;
+    }
+
+    static String unxml(String s) {
+        return s == null ? null : s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&");
+    }
+
+    static void att2Mode() throws Exception {
+        if (!sectionProvision()) return;
+        sectionFolderSync();
+        printPass("Входящие", fullPass(byType(2), 50, 2, 10240, false, 20_000, inboxItems));
+        h1("G4. Вложения: multipart ItemOperations, GetAttachment POST, EWS — одинаковые ли байты (PROTO-17)");
+        int dupNames = 0, withCid = 0, inline = 0;
+        for (Item it : inboxItems) {
+            Set<String> names = new HashSet<>();
+            for (String[] a : it.attList) {
+                if (a[1] != null && !names.add(a[1])) dupNames++;
+                if (a[3] != null) withCid++;
+                if ("1".equals(a[4])) inline++;
+            }
+        }
+        out.printf("  Писем с повтором имени вложения: %d; вложений с ContentId: %d; IsInline=1: %d%n", dupNames, withCid, inline);
+        Item small = null, mid = null, big = null;
+        String[] sA = null, mA = null, bA = null;
+        for (Item it : inboxItems) for (String[] a : it.attList) {
+            long sz = Long.parseLong(a[2]);
+            if (sz > 1000 && sz < 100_000 && (sA == null || sz < Long.parseLong(sA[2]))) { small = it; sA = a; }
+            if (sz > 5_000_000 && sz < 9_500_000 && (mA == null || sz > Long.parseLong(mA[2]))) { mid = it; mA = a; }
+            if (sz > 12_000_000 && sz <= 40_000_000 && (bA == null || sz > Long.parseLong(bA[2]))) { big = it; bA = a; }
+        }
+        Object[][] cases = {{"малое", small, sA}, {"5-9 МБ", mid, mA}, {"больше 10 МБ", big, bA}};
+        for (Object[] c : cases) {
+            Item it = (Item) c[1];
+            String[] a = (String[]) c[2];
+            if (it == null) { out.printf("  %s: нет такого вложения%n", c[0]); continue; }
+            long sz = Long.parseLong(a[2]);
+            out.printf("  Вложение %s: EstimatedDataSize %,d, вид FileReference %s%n", c[0], sz, a[0].replaceAll("[A-Za-z0-9]", "x"));
+            byte[] mp = multipartFetch(a[0], sz);
+            byte[] pl = sz < 12_000_000 ? plainFetch(a[0]) : null;
+            byte[] ga1 = getAttachmentPost(a[0], false);
+            byte[] ga2 = getAttachmentPost(a[0], true);
+            byte[] ews = ewsAttachment(it, a);
+            String ref = mp != null ? sha(mp) : ews != null ? sha(ews) : null;
+            out.printf("      Совпадение байтов с эталоном %s: обычный=%s, GetAttachment=%s/%s, EWS=%s%n", ref,
+                    pl == null ? "-" : sha(pl).equals(ref), ga1 == null ? "-" : sha(ga1).equals(ref), ga2 == null ? "-" : sha(ga2).equals(ref),
+                    ews == null ? "-" : sha(ews).equals(ref));
+        }
+        h1("G5. EWS GetAttachment с несуществующим AttachmentId: вид ошибки");
+        Resp bad = ewsCall("<m:GetAttachment><m:AttachmentIds><t:AttachmentId Id=\"AAMkAGBhZDNiAAA=\"/></m:AttachmentIds></m:GetAttachment>");
+        String bb = new String(bad.body, UTF8);
+        out.printf("  HTTP %d, ResponseClass=%s, ResponseCode=%s, faultstring=%s%n", bad.code, find(bb, "ResponseClass=\"([A-Za-z]+)\""),
+                find(bb, "ResponseCode>([^<]+)<"), find(bb, "faultstring[^>]*>([^<]{0,160})"));
+    }
+
     static void ewsAttMode() {
         h1("H1. EWS (NTLM): можно ли скачать вложение больше 10 МБ, которое EAS не отдаёт");
         Resp f = ewsCall("<m:FindItem Traversal=\"Shallow\"><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape>" +
@@ -1456,6 +1627,7 @@ public class EasProbe {
         if (mode.equals("fielduris")) { fieldUriMode(args.length > 1 ? args[1] : ""); return; }
         if (mode.equals("calview")) { calendarViewMode(); return; }
         if (mode.equals("calexc")) { calendarExceptionMode(); return; }
+        if (mode.equals("att2")) { att2Mode(); return; }
         sectionPorts();
         sectionOptions();
         if (!sectionProvision()) { out.println("Provision не удался, остановка."); return; }

@@ -103,6 +103,50 @@ class EasTransport(
      * MS-ASPROV: When the server returns 449, the client MUST Provision, then retry.
      * Guard `command != "Provision"` prevents recursive Provision calls.
      */
+    /** POST команды EAS с WBXML-телом и заголовками протокола (DRY: обычный, повтор после 449 и потоковый запрос). */
+    private fun buildEasRequest(
+        command: String,
+        wbxml: ByteArray,
+        withPolicyKey: Boolean,
+        extraHeaders: Map<String, String> = emptyMap()
+    ): Request {
+        val builder = Request.Builder()
+            .url(buildUrl(command))
+            .post(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()))
+            .header("Authorization", getAuthHeader())
+            .header("MS-ASProtocolVersion", easVersion)
+            .header("Content-Type", CONTENT_TYPE_WBXML)
+            .header("User-Agent", "Android/12-EAS-2.0")
+        if (withPolicyKey) policyKey?.let { builder.header("X-MS-PolicyKey", it) }
+        extraHeaders.forEach { (name, value) -> builder.header(name, value) }
+        return builder.build()
+    }
+
+    /**
+     * Команда EAS, ответ которой читается потоком (вложения по ItemOperations с `MS-ASAcceptMultiPart: T`):
+     * [Response] не буферизуется, его тело читает и закрывает вызывающий. HTTP 449 — Provision и один повтор,
+     * как в [executeEasCommand]. Ошибка — только сетевая или Provision; коды HTTP разбирает вызывающий.
+     */
+    suspend fun openEasCommand(
+        command: String,
+        xml: String,
+        extraHeaders: Map<String, String> = emptyMap()
+    ): EasResult<Response> = withContext(Dispatchers.IO) {
+        try {
+            val wbxml = wbxmlParser.generate(xml)
+            val first = executeRequest(buildEasRequest(command, wbxml, withPolicyKey = true, extraHeaders))
+            if (first.code != 449 || command == "Provision") return@withContext EasResult.Success(first)
+            first.close()
+            when (val prov = provision()) {
+                is EasResult.Success -> EasResult.Success(executeRequest(buildEasRequest(command, wbxml, withPolicyKey = true, extraHeaders)))
+                is EasResult.Error -> prov
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            EasResult.Error(com.dedovmosol.iwomail.network.ConnectionFailure.describe(e))
+        }
+    }
+
     suspend fun <T> executeEasCommand(
         command: String,
         xml: String,
@@ -112,40 +156,14 @@ class EasTransport(
         try {
             val wbxml = wbxmlParser.generate(xml)
 
-            val requestBuilder = Request.Builder()
-                .url(buildUrl(command))
-                .post(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()))
-                .header("Authorization", getAuthHeader())
-                .header("MS-ASProtocolVersion", easVersion)
-                .header("Content-Type", CONTENT_TYPE_WBXML)
-                .header("User-Agent", "Android/12-EAS-2.0")
-
-            if (!skipPolicyKey) {
-                policyKey?.let { key ->
-                    requestBuilder.header("X-MS-PolicyKey", key)
-                }
-            }
-
-            val request = requestBuilder.build()
+            val request = buildEasRequest(command, wbxml, withPolicyKey = !skipPolicyKey)
             val response = executeRequest(request)
 
             response.use { resp ->
                 if (resp.code == 449 && command != "Provision") {
                     when (val provResult = provision()) {
                         is EasResult.Success -> {
-                            val retryRequestBuilder = Request.Builder()
-                                .url(buildUrl(command))
-                                .post(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()))
-                                .header("Authorization", getAuthHeader())
-                                .header("MS-ASProtocolVersion", easVersion)
-                                .header("Content-Type", CONTENT_TYPE_WBXML)
-                                .header("User-Agent", "Android/12-EAS-2.0")
-
-                            policyKey?.let { key ->
-                                retryRequestBuilder.header("X-MS-PolicyKey", key)
-                            }
-
-                            val retryResponse = executeRequest(retryRequestBuilder.build())
+                            val retryResponse = executeRequest(buildEasRequest(command, wbxml, withPolicyKey = true))
 
                             retryResponse.use { retryResp ->
                                 if (retryResp.isSuccessful) {

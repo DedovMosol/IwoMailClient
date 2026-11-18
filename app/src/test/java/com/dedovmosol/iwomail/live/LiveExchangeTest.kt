@@ -20,6 +20,7 @@ import com.dedovmosol.iwomail.util.sanitizeEmailHtml
 import com.google.common.truth.Truth.assertThat
 import io.mockk.coEvery
 import io.mockk.mockk
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assume.assumeTrue
@@ -244,7 +245,13 @@ class LiveExchangeTest {
         val hour = 3_600_000L
         val day = 24 * hour
         val subject = "IWO live series ${System.nanoTime()}"
-        val start = (System.currentTimeMillis() / hour) * hour + 14 * day
+        // Полдень по местному времени: перенос +2 ч не уходит на дату следующего вхождения (иначе Exchange
+        // справедливо отвечает ErrorOccurrenceCrossingBoundary — так тест падал при запуске после 22:00)
+        val start = java.util.Calendar.getInstance().apply {
+            add(java.util.Calendar.DAY_OF_YEAR, 14)
+            set(java.util.Calendar.HOUR_OF_DAY, 12); set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
         val created = client.createCalendarEvent(subject, start, start + hour, reminder = 0, recurrenceType = 0)
         println("create daily series: $created")
         assertThat(created).isInstanceOf(EasResult.Success::class.java)
@@ -281,6 +288,175 @@ class LiveExchangeTest {
         } finally {
             val sid = serverId ?: (client.syncCalendar() as? EasResult.Success)?.data?.events?.firstOrNull { it.subject == subject }?.serverId
             if (sid != null) println("cleanup delete series: ${client.deleteCalendarEvent(sid, isRecurringSeries = true)}")
+        }
+    }
+
+    /** Все письма папки с вложениями (полный проход Sync с нуля). */
+    private suspend fun mailWithAttachments(collectionId: String): List<com.dedovmosol.iwomail.eas.EasEmail> {
+        var key = (client.sync(collectionId, "0", 50) as EasResult.Success).data.syncKey
+        val result = mutableListOf<com.dedovmosol.iwomail.eas.EasEmail>()
+        while (true) {
+            val page = (client.sync(collectionId, key, 50) as EasResult.Success).data
+            key = page.syncKey
+            result += page.emails.filter { it.attachments.isNotEmpty() }
+            if (!page.moreAvailable) return result
+        }
+    }
+
+    private fun sha256(file: java.io.File): String = java.security.MessageDigest.getInstance("SHA-256").let { md ->
+        file.inputStream().use { input ->
+            val buf = ByteArray(64 * 1024)
+            while (true) { val n = input.read(buf); if (n < 0) break; md.update(buf, 0, n) }
+        }
+        md.digest().joinToString("") { "%02x".format(it) }.take(16)
+    }
+
+    @Test
+    fun `PROTO-17 attachments of every size download to a file through the app service, over 10 MB via EWS (Exchange 2007)`() = runBlocking<Unit> {
+        val inbox = inboxServerId()
+        val folderId = "${accountId}_$inbox"
+        db.folderDao().insert(FolderEntity(folderId, accountId, inbox, "Входящие", "0", FolderType.INBOX))
+        val mails = mailWithAttachments(inbox)
+        fun pick(range: LongRange) = mails.asSequence()
+            // Вложенное письмо (message/rfc822): EstimatedDataSize сервера меньше MIME на ~40 % (проверено) — не файл
+            .flatMap { m -> m.attachments.asSequence().filter {
+                !it.isInline && it.contentId == null && it.estimatedSize in range && !it.contentType.startsWith("message/")
+            }.map { m to it } }
+            .maxByOrNull { it.second.estimatedSize }
+        val cases = listOf("small" to pick(1_000L..100_000L), "5-9 MB" to pick(5_000_000L..9_500_000L), "over 10 MB" to pick(12_000_000L..40_000_000L))
+        val service = EmailOperationsService(context, db, db.folderDao(), db.emailDao(), db.attachmentDao(), accountRepo, mockk(relaxed = true))
+        val dir = java.io.File(context.cacheDir, "live_att").apply { mkdirs() }
+        var checked = 0
+        for ((label, found) in cases) {
+            if (found == null) { println("$label: no such attachment in the mailbox"); continue }
+            val (mail, att) = found
+            val emailId = "${accountId}_${mail.serverId}"
+            db.emailDao().insert(
+                EmailEntity(
+                    id = emailId, accountId = accountId, folderId = folderId, serverId = mail.serverId,
+                    from = mail.from, to = mail.to, subject = mail.subject, body = "",
+                    dateReceived = java.time.Instant.parse(mail.dateReceived).toEpochMilli(), read = true
+                )
+            )
+            db.attachmentDao().insertAll(listOf(
+                com.dedovmosol.iwomail.data.database.AttachmentEntity(
+                    emailId = emailId, fileReference = att.fileReference, displayName = att.displayName,
+                    contentType = att.contentType, estimatedSize = att.estimatedSize, contentId = att.contentId
+                )
+            ))
+            val entity = db.attachmentDao().getAttachmentsList(emailId).single()
+            val file = java.io.File(dir, "$label.bin")
+            val heapBefore = Runtime.getRuntime().let { it.totalMemory() - it.freeMemory() }
+            val t0 = System.nanoTime()
+            val result = service.downloadAttachmentToFile(entity, file)
+            val ms = (System.nanoTime() - t0) / 1_000_000
+            val head = if (file.exists()) file.inputStream().use { s -> ByteArray(8).also { s.read(it) } }.joinToString(" ") { "%02x".format(it) } else "-"
+            println("$label: ${att.contentType}, estimated ${att.estimatedSize} B -> ${result::class.simpleName}, file ${file.length()} B, head $head, $ms ms, sha ${if (file.exists()) sha256(file) else "-"}, heap delta ~${(Runtime.getRuntime().let { it.totalMemory() - it.freeMemory() } - heapBefore) / 1_048_576} MB")
+            assertThat(result).isInstanceOf(EasResult.Success::class.java)
+            // EstimatedDataSize сервера — не точный размер файла (на 2007 расходится на единицы КБ)
+            assertThat(file.length().toDouble()).isWithin(att.estimatedSize * 0.01 + 1024).of(att.estimatedSize.toDouble())
+            if (att.estimatedSize < 10_000_000) {
+                // Тот же файл через путь в память (multipart ItemOperations): байты совпадают
+                val inMemory = (client.downloadAttachment(att.fileReference) as EasResult.Success).data
+                val memSha = java.security.MessageDigest.getInstance("SHA-256").digest(inMemory).joinToString("") { "%02x".format(it) }.take(16)
+                println("$label: in-memory ${inMemory.size} B, sha $memSha")
+                assertThat(memSha).isEqualTo(sha256(file))
+            } else {
+                // Больше лимита EAS: в память не читается, EAS сам по себе — Status 11
+                val inMemory = client.downloadAttachment(att.fileReference)
+                println("$label: EAS only -> $inMemory")
+                assertThat(inMemory).isEqualTo(EasResult.Error(com.dedovmosol.iwomail.eas.AttachmentErrors.TOO_LARGE))
+
+                // Отмена посреди 40 МБ ответа EWS: исключение отмены, файла нет, приложение не зависает
+                val cancelled = java.io.File(dir, "cancelled.bin")
+                val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch { service.downloadAttachmentToFile(entity, cancelled) }
+                kotlinx.coroutines.delay(1_500)
+                val tc = System.nanoTime()
+                job.cancelAndJoinWithTimeout()
+                println("$label: cancelled after 1.5 s, stopped in ${(System.nanoTime() - tc) / 1_000_000} ms, file left: ${cancelled.exists()}")
+                assertThat(cancelled.exists()).isFalse()
+            }
+            file.delete()
+            checked++
+        }
+        assertThat(checked).isAtLeast(2)
+    }
+
+    private suspend fun kotlinx.coroutines.Job.cancelAndJoinWithTimeout() {
+        cancel()
+        assertThat(kotlinx.coroutines.withTimeoutOrNull(20_000) { join() }).isNotNull()
+    }
+
+    @Test
+    fun `ONB-08 and UI2-03 a certificate trusted by fingerprint works for EAS, IMAP and POP3 and a different key is refused`() = runBlocking<Unit> {
+        conscryptFirst()
+        val provider = com.dedovmosol.iwomail.network.HttpClientProvider
+        // Сертификат со всех портов — тот же ключ (Exchange 2007 привязывает один сертификат к IIS, IMAP и POP3)
+        val endpoints = listOf(
+            "EAS 443" to com.dedovmosol.iwomail.data.repository.ServerCertificateEndpoint.of(com.dedovmosol.iwomail.data.database.AccountType.EXCHANGE, host!!, 443, true)!!,
+            "IMAP 143 STARTTLS" to com.dedovmosol.iwomail.data.repository.ServerCertificateEndpoint.of(com.dedovmosol.iwomail.data.database.AccountType.IMAP, host, 143, false)!!,
+            "IMAPS 993" to com.dedovmosol.iwomail.data.repository.ServerCertificateEndpoint.of(com.dedovmosol.iwomail.data.database.AccountType.IMAP, host, 993, true)!!,
+            "POP3 110 STLS" to com.dedovmosol.iwomail.data.repository.ServerCertificateEndpoint.of(com.dedovmosol.iwomail.data.database.AccountType.POP3, host, 110, false)!!,
+            "POP3S 995" to com.dedovmosol.iwomail.data.repository.ServerCertificateEndpoint.of(com.dedovmosol.iwomail.data.database.AccountType.POP3, host, 995, true)!!
+        )
+        val seen = endpoints.map { (label, e) ->
+            val cert = provider.fetchServerCertificate(e.host, e.port, e.startTls)
+            // Отпечатки в отчёт не пишем — только их совпадение
+            println("$label: certificate fetched, self-signed=${cert.selfSigned}, valid now=${cert.isValidAt(System.currentTimeMillis())}, SHA-256 groups=${cert.sha256.split(':').size}, SHA-1 groups=${cert.sha1.split(':').size}, DNS names=${cert.dnsNames.size}")
+            cert
+        }
+        assertThat(seen.map { it.info.hash }.toSet()).hasSize(1)
+        val trusted = seen.first().info
+        val wrong = trusted.copy(hash = "0".repeat(64))
+
+        // EAS: только закреплённый ключ, без «Принимать все»
+        fun eas(pin: com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo?) = EasClient(
+            serverUrl = host, username = user!!, password = pass!!, domain = domain, acceptAllCerts = false, port = 443,
+            useHttps = true, deviceIdSuffix = "iwo-live-test", pinnedCertInfo = pin
+        )
+        val pinnedEas = eas(trusted).testConnection()
+        val wrongEas = eas(wrong).testConnection()
+        val strictEas = eas(null).testConnection()
+        println("EAS pinned -> ${pinnedEas::class.simpleName}; wrong key -> $wrongEas; no pin, no accept-all -> ${strictEas::class.simpleName}")
+        assertThat(pinnedEas).isInstanceOf(EasResult.Success::class.java)
+        assertThat(com.dedovmosol.iwomail.network.ConnectionFailure.fromMessage((wrongEas as EasResult.Error).message))
+            .isEqualTo(com.dedovmosol.iwomail.network.ConnectionFailure.CERT_PIN)
+        assertThat(strictEas).isInstanceOf(EasResult.Error::class.java)
+
+        // EWS тем же клиентом (тот же TrustManager): тело письма по Message-ID
+        val ewsFind = eas(trusted).fetchEmailBodyViaEws(subject = "zz-no-such-subject-${System.nanoTime()}",
+            folder = com.dedovmosol.iwomail.eas.EwsMailFolder.Distinguished("inbox"), dateReceived = System.currentTimeMillis())
+        println("EWS with pinned key -> ${ewsFind::class.simpleName}")
+        assertThat(ewsFind).isInstanceOf(EasResult.Success::class.java)
+
+        // IMAP/POP3: тот же пин через JavaMail ssl.socketFactory
+        fun mailAccount(type: com.dedovmosol.iwomail.data.database.AccountType, port: Int, ssl: Boolean, pin: com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo) =
+            com.dedovmosol.iwomail.data.repository.CertificatePins.withPrimaryPin(
+                AccountEntity(id = 77, email = "$user@live.test", displayName = "Live", serverUrl = host, username = if (domain.isEmpty()) user else "$domain\\$user",
+                    accountType = type.name, incomingPort = port, useSSL = ssl, acceptAllCerts = false), pin
+            )
+        for ((type, port, ssl) in listOf(
+            Triple(com.dedovmosol.iwomail.data.database.AccountType.IMAP, 143, false),
+            Triple(com.dedovmosol.iwomail.data.database.AccountType.IMAP, 993, true),
+            Triple(com.dedovmosol.iwomail.data.database.AccountType.POP3, 110, false),
+            Triple(com.dedovmosol.iwomail.data.database.AccountType.POP3, 995, true)
+        )) {
+            suspend fun connect(pin: com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo): Result<Unit> {
+                val account = mailAccount(type, port, ssl, pin)
+                return if (type == com.dedovmosol.iwomail.data.database.AccountType.IMAP) {
+                    com.dedovmosol.iwomail.imap.ImapClient(account, pass!!).let { c -> c.connect().also { c.disconnect() } }
+                } else {
+                    com.dedovmosol.iwomail.pop3.Pop3Client(account, pass!!).let { c -> c.connect().also { c.disconnect() } }
+                }
+            }
+            val ok = connect(trusted)
+            val bad = connect(wrong)
+            val badCause = generateSequence(bad.exceptionOrNull()) { it.cause }.toList()
+            println("$type:$port ssl=$ssl pinned -> ${if (ok.isSuccess) "signed in" else ok.exceptionOrNull()}; wrong key -> ${badCause.lastOrNull()?.javaClass?.simpleName}")
+            assertThat(ok.isSuccess).isTrue()
+            assertThat(badCause.any { it is com.dedovmosol.iwomail.network.CertificatePinMismatchException }).isTrue()
+            // Пользователю — понятная причина, а не «сервер без STARTTLS»
+            println("  shown: ${com.dedovmosol.iwomail.data.repository.mailConnectionErrorMessage(bad.exceptionOrNull()!!, type.name)}")
         }
     }
 

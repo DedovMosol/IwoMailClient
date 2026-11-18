@@ -27,7 +27,10 @@ internal class FakeExchange(private val route: (Call) -> Reply) {
         val xml: String,
         val isEws: Boolean,
         val url: String = "",
-        val contentType: String = ""
+        val contentType: String = "",
+        val method: String = "POST",
+        /** Заголовок `MS-ASAcceptMultiPart: T` ([MS-ASHTTP]). */
+        val acceptMultiPart: Boolean = false
     ) {
         val syncKey: String? get() = SYNC_KEY.find(xml)?.groupValues?.get(1)
         val collectionId: String? get() = COLLECTION_ID.find(xml)?.groupValues?.get(1)
@@ -47,6 +50,8 @@ internal class FakeExchange(private val route: (Call) -> Reply) {
         data class Text(val body: String) : Reply()
         /** HTTP-ошибка без тела. */
         data class Http(val code: Int) : Reply()
+        /** Произвольный ответ: код, Content-Type и байты (multipart ItemOperations, файл GetAttachment, SOAP Fault 500). */
+        class Raw(val bytes: ByteArray, val contentType: String, val code: Int = 200) : Reply()
         /** Обрыв соединения: IOException из сетевого слоя. */
         object Disconnect : Reply()
     }
@@ -76,10 +81,12 @@ internal class FakeExchange(private val route: (Call) -> Reply) {
             val raw = contentType.startsWith("message/rfc822")
             Call(
                 command = request.url.queryParameter("Cmd").orEmpty(),
-                xml = if (raw) String(body, Charsets.UTF_8) else wbxml.parse(body),
+                xml = if (raw || body.isEmpty()) String(body, Charsets.UTF_8) else wbxml.parse(body),
                 isEws = false,
                 url = request.url.toString(),
-                contentType = contentType
+                contentType = contentType,
+                method = request.method,
+                acceptMultiPart = request.header("MS-ASAcceptMultiPart") == "T"
             )
         }
         calls += call
@@ -94,6 +101,9 @@ internal class FakeExchange(private val route: (Call) -> Reply) {
                 .body(reply.body.toResponseBody(TEXT_XML)).build()
             is Reply.Http -> builder.code(reply.code).message("Error")
                 .body(ByteArray(0).toResponseBody(TEXT_XML)).build()
+            is Reply.Raw -> builder.code(reply.code).message(if (reply.code == 200) "OK" else "Error")
+                .header("Content-Type", reply.contentType)
+                .body(reply.bytes.toResponseBody(reply.contentType.toMediaType())).build()
             Reply.Disconnect -> throw IOException("Connection reset by peer (fake)")
         }
     }
