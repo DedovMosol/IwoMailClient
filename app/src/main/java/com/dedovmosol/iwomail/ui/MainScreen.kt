@@ -106,7 +106,6 @@ fun MainScreen(
     onNavigateToTasks: () -> Unit = {},
     onNavigateToUserFolders: () -> Unit = {},
     onNavigateToScheduled: () -> Unit = {},
-    onNavigateToAbout: () -> Unit = {},
     // Навигация из карточки "Сегодня" с фильтрами
     onNavigateToEmailListWithDateFilter: (String, String) -> Unit = { _, _ -> },
     onNavigateToCalendarToday: () -> Unit = {},
@@ -768,10 +767,6 @@ fun MainScreen(
                     onFolderLongClick = { folder ->
                         scope.launch { drawerState.close() }
                         folderForMenu = folder
-                    },
-                    onAboutClick = {
-                        scope.launch { drawerState.close() }
-                        onNavigateToAbout()
                     }
                 )
             }

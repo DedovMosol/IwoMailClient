@@ -1181,15 +1181,29 @@ fun ComposeScreen(
     val draftAttachmentsNotLoadedMsg = Strings.draftAttachmentsNotLoaded
     val draftLoadErrorMsg = Strings.draftLoadError
     var initialDraftSubject by rememberSaveable { mutableStateOf("") }
-    val initialDraftBodySaver = remember { createLargeStringSaver(context.cacheDir, "draft_body") }
-    var initialDraftBody by rememberSaveable(stateSaver = initialDraftBodySaver) { mutableStateOf("") }
     var initialDraftAttachments by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
+    // Тело с исходным не сравнивается: редактор отдаёт HTML пересобранным (innerHTML), и тело с сервера (Exchange:
+    // <html>/<head>, CRLF, атрибуты без кавычек) «менялось» от одного открытия. Правку тела знает редактор
+    // ([RichTextEditorController.userEdited]).
 
-    // Загружаем данные черновика для редактирования
+    /** Поля черновика после загрузки — с ними сравнивается выход; тогда же загрузка считается законченной. */
+    fun captureDraftBaseline() {
+        initialDraftTo = to
+        initialDraftCc = cc
+        initialDraftBcc = bcc
+        initialDraftHighPriority = highPriority
+        initialDraftReadReceipt = requestReadReceipt
+        initialDraftDeliveryReceipt = requestDeliveryReceipt
+        initialDraftSubject = subject
+        initialDraftAttachments = attachmentStrings
+        draftLoaded = true
+    }
+
+    // Загружаем данные черновика для редактирования. draftLoaded ставится в конце: загрузка, прерванная поворотом,
+    // начнётся заново, а не оставит поля заполненными наполовину.
     LaunchedEffect(editDraftId) {
         if (draftLoaded) return@LaunchedEffect
         editDraftId?.let { draftId ->
-            draftLoaded = true
             // Сбрасываем поля перед заполнением черновика
             to = ""
             cc = ""
@@ -1492,29 +1506,23 @@ fun ComposeScreen(
                 draftUnloadedAttachmentIds = ArrayList(unloaded)
                 draftKnownImageKeys = imageKeys
                 if (unloaded.isNotEmpty()) SafeToast.long(context, draftAttachmentsNotLoadedMsg)
-                // Сохраняем начальное состояние для сравнения при выходе
-                initialDraftTo = to
-                initialDraftCc = cc
-                initialDraftBcc = bcc
-                initialDraftHighPriority = highPriority
-                initialDraftReadReceipt = requestReadReceipt
-                initialDraftDeliveryReceipt = requestDeliveryReceipt
-                initialDraftSubject = subject
-                initialDraftBody = body
-                initialDraftAttachments = attachmentStrings
             }
+                captureDraftBaseline()
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: OutOfMemoryError) {
                 android.util.Log.e("ComposeScreen", "OOM opening draft", e)
                 SafeToast.long(context, draftLoadErrorMsg)
+                captureDraftBaseline()
             } catch (e: StackOverflowError) {
-                // егулярное выражение на огромном теле: не роняем приложение
+                // Регулярное выражение на огромном теле: не роняем приложение
                 android.util.Log.e("ComposeScreen", "Stack overflow opening draft", e)
                 SafeToast.long(context, draftLoadErrorMsg)
+                captureDraftBaseline()
             } catch (e: Exception) {
                 android.util.Log.e("ComposeScreen", "Failed to open draft: ${e.message}", e)
                 SafeToast.long(context, draftLoadErrorMsg)
+                captureDraftBaseline()
             }
         }
     }
@@ -1858,6 +1866,8 @@ fun ComposeScreen(
                                 .fillMaxWidth()
                                 .clickable {
                                     selectedSignature = signature
+                                    // Тело меняет экран (setHtml — не правка для редактора), но по выбору пользователя
+                                    richTextController.markEdited()
                                     val newSignatureHtml = formatHtmlSignature(signature.text, signature.isHtml)
                                     // Заменяем подпись в body (HTML формат)
                                     body = if (body.contains("<div class=\"signature\">")) {
@@ -2218,14 +2228,17 @@ fun ComposeScreen(
                 val readReceiptNow = fields.readReceipt
                 val deliveryReceiptNow = fields.deliveryReceipt
                 val accountIdNow = fields.account?.id
-                val html = snapshotBody()
                 if (editDraftId != null) {
-                    val hasDraftChanges = toNow != initialDraftTo || ccNow != initialDraftCc || bccNow != initialDraftBcc ||
-                        highPriorityNow != initialDraftHighPriority || subjectNow != initialDraftSubject ||
-                        readReceiptNow != initialDraftReadReceipt || deliveryReceiptNow != initialDraftDeliveryReceipt ||
-                        html != initialDraftBody || attachmentStringsNow != initialDraftAttachments
-                    if (hasDraftChanges) work.askDiscard = true else handleBackNavigation()
+                    // Пока черновик загружается, поля ещё не его — правкой считается только ввод в редактор
+                    val fieldsChanged = draftLoaded && (
+                        toNow != initialDraftTo || ccNow != initialDraftCc || bccNow != initialDraftBcc ||
+                            highPriorityNow != initialDraftHighPriority || subjectNow != initialDraftSubject ||
+                            readReceiptNow != initialDraftReadReceipt || deliveryReceiptNow != initialDraftDeliveryReceipt ||
+                            attachmentStringsNow != initialDraftAttachments
+                        )
+                    if (fieldsChanged || richTextController.userEdited) work.askDiscard = true else handleBackNavigation()
                 } else {
+                    val html = snapshotBody()
                     val bodyPlainText = html
                         .replace(SIGNATURE_DIV_REGEX, "")
                         .replace(HTML_TAG_STRIP_REGEX, "")

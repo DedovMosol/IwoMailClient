@@ -102,6 +102,29 @@ class EditorHtmlChunksTest {
     }
 
     @Test
+    fun `loading text is not an edit, markEdited is, and the flag survives saved state`() {
+        val dir = java.nio.file.Files.createTempDirectory("editor-state").toFile()
+        try {
+            val controller = RichTextEditorController()
+            // Тело черновика с сервера (Exchange) — загрузка, не правка: выход не спрашивает «Сохранить изменения?»
+            controller.setHtml("<html><head><meta http-equiv=\"Content-Type\" content=\"text/html\"></head><body><p class=MsoNormal>x</p></body></html>")
+            assertThat(controller.userEdited).isFalse()
+
+            controller.markEdited()
+            assertThat(controller.userEdited).isTrue()
+
+            val saver = RichTextEditorController.saver(com.dedovmosol.iwomail.ui.utils.createLargeStringSaver(dir, "editor_html"))
+            val scope = androidx.compose.runtime.saveable.SaverScope { true }
+            val restored = saver.restore(with(saver) { scope.save(controller) }!!)!!
+            // Правка до поворота экрана не забывается
+            assertThat(restored.userEdited).isTrue()
+            assertThat(saver.restore(with(saver) { scope.save(RichTextEditorController()) }!!)!!.userEdited).isFalse()
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `setHtml bumps generation so a stale JS read can retry`() {
         val controller = RichTextEditorController()
         val before = controller.editorHtmlGeneration()

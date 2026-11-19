@@ -113,11 +113,12 @@ fun AppPermissionDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(start = 12.dp, end = 16.dp, bottom = 12.dp),
-                    horizontalArrangement = Arrangement.End,
+                    // Как у остальных диалогов приложения (ScaledAlertDialog): отказ слева, согласие справа — не
+                    // рядом, мимо не нажать
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     TextButton(onClick = onDismiss) { Text(dismissText) }
-                    Spacer(Modifier.width(8.dp))
                     Button(
                         onClick = onConfirm,
                         colors = ButtonDefaults.buttonColors(containerColor = theme.gradientStart)

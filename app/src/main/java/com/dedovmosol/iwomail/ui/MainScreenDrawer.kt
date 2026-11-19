@@ -59,7 +59,6 @@ fun DrawerContent(
     onTasksClick: () -> Unit = {},
     onCreateFolder: () -> Unit = {},
     onFolderLongClick: (FolderEntity) -> Unit = {},
-    onAboutClick: () -> Unit = {},
     scheduledCount: Int = 0,
     onScheduledClick: () -> Unit = {}
 ) {
@@ -427,15 +426,7 @@ fun DrawerContent(
                 modifier = Modifier.clickable(onClick = onSettingsClick)
             )
         }
-        
-        // О приложении
-        item {
-            ListItem(
-                headlineContent = { Text(Strings.aboutApp) },
-                leadingContent = { Icon(AppIcons.Info, null, tint = AppColors.settings) },
-                modifier = Modifier.clickable(onClick = onAboutClick)
-            )
-        }
+        // «О приложении» — только в настройках: второй пункт в меню дублировал бы их
     }
 }
 

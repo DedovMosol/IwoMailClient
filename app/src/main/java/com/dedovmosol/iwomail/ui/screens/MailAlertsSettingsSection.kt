@@ -95,6 +95,8 @@ internal fun MailAlertsSettingsSection(
                 title = Strings.accountNotificationSettings,
                 subtitle = account.email,
                 icon = AppIcons.Email,
+                highlightId = accountNotificationsFocus(account.id),
+                highlight = highlight,
                 onClick = {
                     MailNotificationChannels.ensure(context, account.id, account.email, ru)
                     try {

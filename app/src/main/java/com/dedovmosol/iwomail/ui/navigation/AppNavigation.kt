@@ -335,11 +335,13 @@ sealed class Screen(val route: String) {
     object SettingsNotifications : Screen("settings/notifications")
     object SettingsSecurity : Screen("settings/security")
     object AccountSettings : Screen("accountSettings/{accountId}") {
-        fun createRoute(accountId: Long): String = "accountSettings/$accountId"
+        fun createRoute(accountId: Long, h: String = ""): String =
+            "accountSettings/$accountId?h=${URLEncoder.encode(h, "UTF-8")}"
     }
     object Personalization : Screen("personalization")
     object SyncCleanup : Screen("syncCleanup/{accountId}") {
-        fun createRoute(accountId: Long): String = "syncCleanup/$accountId"
+        fun createRoute(accountId: Long, h: String = ""): String =
+            "syncCleanup/$accountId?h=${URLEncoder.encode(h, "UTF-8")}"
     }
     object Updates : Screen("updates")
     object About : Screen("about")
@@ -790,9 +792,6 @@ fun AppNavigation(
                 },
                 onNavigateToTasksToday = {
                     navController.navigate(Screen.Tasks.createRoute(filter = "TODAY"))
-                },
-                onNavigateToAbout = {
-                    navController.navigate(Screen.About.route)
                 }
             )
         }
@@ -1156,6 +1155,12 @@ fun AppNavigation(
                 onNavigateToAbout = { h ->
                     navController.navigate(Screen.About.highlightDest(h)) { launchSingleTop = true }
                 },
+                onNavigateToAccountSettings = { id, h ->
+                    navController.navigate(Screen.AccountSettings.createRoute(id, h)) { launchSingleTop = true }
+                },
+                onNavigateToSyncCleanup = { id, h ->
+                    navController.navigate(Screen.SyncCleanup.createRoute(id, h)) { launchSingleTop = true }
+                },
                 onNoAccountsLeft = {
                     navController.navigate(Screen.Setup.route) {
                         popUpTo(0) { inclusive = true }
@@ -1201,12 +1206,16 @@ fun AppNavigation(
         }
         
         composable(
-            route = Screen.AccountSettings.route,
-            arguments = listOf(navArgument("accountId") { type = NavType.LongType })
+            route = Screen.AccountSettings.highlightGraph(),
+            arguments = listOf(
+                navArgument("accountId") { type = NavType.LongType },
+                navArgument("h") { type = NavType.StringType; defaultValue = "" }
+            )
         ) { backStackEntry ->
             val accountId = backStackEntry.arguments?.getLong("accountId") ?: 0L
             AccountSettingsScreen(
                 accountId = accountId,
+                highlight = backStackEntry.arguments?.getString("h").orEmpty(),
                 onBackClick = { navController.popBackStack() },
                 onEditCredentials = { id -> navController.navigate(Screen.Setup.createRoute(id)) },
                 onNavigateToSyncCleanup = { id -> navController.navigate(Screen.SyncCleanup.createRoute(id)) },
@@ -1229,12 +1238,16 @@ fun AppNavigation(
         }
         
         composable(
-            route = Screen.SyncCleanup.route,
-            arguments = listOf(navArgument("accountId") { type = NavType.LongType })
+            route = Screen.SyncCleanup.highlightGraph(),
+            arguments = listOf(
+                navArgument("accountId") { type = NavType.LongType },
+                navArgument("h") { type = NavType.StringType; defaultValue = "" }
+            )
         ) { backStackEntry ->
             val accountId = backStackEntry.arguments?.getLong("accountId") ?: 0L
             SyncCleanupScreen(
                 accountId = accountId,
+                highlight = backStackEntry.arguments?.getString("h").orEmpty(),
                 onBackClick = { navController.popBackStack() }
             )
         }

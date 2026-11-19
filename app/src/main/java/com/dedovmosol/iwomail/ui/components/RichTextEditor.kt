@@ -153,6 +153,19 @@ class RichTextEditorController {
     var isContentUnavailable by mutableStateOf(false)
         internal set
 
+    /**
+     * Текст правил пользователь: ввод, вставка, удаление, форматирование, картинка (MutationObserver редактора) или
+     * экран сам по просьбе пользователя ([markEdited], например смена подписи). Загрузка текста ([setHtml]) — не
+     * правка. Сравнивать HTML нельзя: WebView отдаёт его пересобранным (innerHTML), и тело с сервера не совпало бы
+     * с собой. Переживает поворот (Saver).
+     */
+    var userEdited by mutableStateOf(false)
+        internal set
+
+    fun markEdited() {
+        userEdited = true
+    }
+
     // Состояние форматирования
     var isBold by mutableStateOf(false)
         internal set
@@ -331,6 +344,7 @@ class RichTextEditorController {
                         "currentFontSize" to controller.currentFontSize,
                         "currentFontName" to controller.currentFontName,
                         "currentAlignment" to controller.currentAlignment,
+                        "userEdited" to controller.userEdited,
                         "latestHtml" to with(htmlSaver) { save(controller.latestHtml) }
                     )
                 },
@@ -344,6 +358,7 @@ class RichTextEditorController {
                         currentFontSize = saved["currentFontSize"] as? String
                         currentFontName = saved["currentFontName"] as? String ?: "Arial"
                         currentAlignment = saved["currentAlignment"] as? String ?: "left"
+                        userEdited = saved["userEdited"] as? Boolean ?: false
                         latestHtml = (saved["latestHtml"] as? String)?.let { htmlSaver.restore(it) } ?: ""
                     }
                 }
@@ -528,6 +543,17 @@ fun RichTextEditor(
                         lastSelectionRange = sel.getRangeAt(0).cloneRange();
                     }
                 }
+
+                // Правка пользователем — любое изменение содержимого, кроме загрузки текста (setHtml снимает свои
+                // записи takeRecords). Ловит и то, что не даёт событие input: шрифт, выделение цветом, картинку.
+                // В Kotlin — один раз: дальше флаг уже стоит.
+                var userEdited = false;
+                var editObserver = new MutationObserver(function() {
+                    if (userEdited) return;
+                    userEdited = true;
+                    Android.onUserEdit();
+                });
+                editObserver.observe(editor, { childList: true, subtree: true, characterData: true, attributes: true });
 
                 // Отправляем HTML в Kotlin при изменении
                 editor.addEventListener('input', function() {
@@ -961,6 +987,8 @@ fun RichTextEditor(
 
                 function setHtml(html) {
                     editor.innerHTML = sanitizeHtml(html);
+                    // Загрузка текста — не правка: её записи наблюдателя снимаются до доставки
+                    editObserver.takeRecords();
                     // Не вызываем onHtmlChanged чтобы избежать цикла
                     // Но обновляем состояние форматирования
                     setTimeout(function() {
@@ -1156,6 +1184,11 @@ fun RichTextEditor(
             @JavascriptInterface
             fun cacheHtml(html: String) {
                 controller.latestHtml = html
+            }
+
+            @JavascriptInterface
+            fun onUserEdit() {
+                android.os.Handler(android.os.Looper.getMainLooper()).post { controller.markEdited() }
             }
 
             @JavascriptInterface

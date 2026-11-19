@@ -142,6 +142,8 @@ fun PersonalizationScreen(
         onBackClick = onBackClick,
         hue = SettingsSearchDest.Appearance.hue
     ) {
+        // Одним элементом списка: строку из поиска есть кому подсветить и при крупном шрифте (элемент LazyColumn за
+        // экраном не создаётся)
         item {
             SettingsGroup {
                 SettingsChoiceRow(
@@ -165,8 +167,6 @@ fun PersonalizationScreen(
                     highlight = highlight
                 )
             }
-        }
-        item {
             val currentTheme = AppColorTheme.fromCode(colorThemeCode)
             val themeEnabled = !dailyThemesEnabled
             val currentSbColor = ScrollbarColor.fromCode(scrollbarColorCode)
@@ -232,12 +232,12 @@ fun PersonalizationScreen(
                     SettingsNavRow(
                         title = Strings.configureDailyThemes,
                         icon = AppIcons.Settings,
+                        highlightId = "configureDailyThemes",
+                        highlight = highlight,
                         onClick = { showDailyThemes = true }
                     )
                 }
             }
-        }
-        item {
             SettingsGroup {
                 SettingsSwitchRow(
                     title = Strings.animations,

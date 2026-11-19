@@ -40,6 +40,8 @@ fun SettingsScreen(
     onNavigateToPersonalization: (String) -> Unit = {},
     onNavigateToSecurity: (String) -> Unit = {},
     onNavigateToAbout: (String) -> Unit = {},
+    onNavigateToAccountSettings: (accountId: Long, focus: String) -> Unit = { _, _ -> },
+    onNavigateToSyncCleanup: (accountId: Long, focus: String) -> Unit = { _, _ -> },
     onNoAccountsLeft: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -54,7 +56,10 @@ fun SettingsScreen(
     )
 
     val keyboard = LocalSoftwareKeyboardController.current
-    val catalog = rememberSettingsCatalog()
+    val settingsRepo = remember { RepositoryProvider.getSettingsRepository(context) }
+    val appLockEnabled by settingsRepo.appLockEnabled.collectAsStateWithLifecycle(initialValue = false)
+    val dailyThemesEnabled by settingsRepo.dailyThemesEnabled.collectAsStateWithLifecycle(initialValue = false)
+    val catalog = rememberSettingsCatalog(SettingsSearchState(appLockEnabled, dailyThemesEnabled, accounts))
     var query by rememberSaveable { mutableStateOf("") }
     val hits = remember(query, catalog) { filterSettingsEntries(query, catalog) }
     val searching = query.trim().isNotEmpty()
@@ -63,8 +68,12 @@ fun SettingsScreen(
         keyboard?.hide()
     }
 
-    fun open(dest: SettingsSearchDest, focus: String = "") {
+    fun open(dest: SettingsSearchDest, focus: String = "", account: SettingsAccountTarget? = null) {
         keyboard?.hide()
+        if (account != null) {
+            if (account.sync) onNavigateToSyncCleanup(account.accountId, focus) else onNavigateToAccountSettings(account.accountId, focus)
+            return
+        }
         when (dest) {
             SettingsSearchDest.Accounts -> onNavigateToAccounts()
             SettingsSearchDest.Mail -> onNavigateToMail(focus)
@@ -130,7 +139,7 @@ fun SettingsScreen(
                                 subtitle = hit.section,
                                 icon = hit.dest.icon,
                                 hue = hit.dest.hue,
-                                onClick = { open(hit.dest, hit.focus); keyboard?.hide() }
+                                onClick = { open(hit.dest, hit.focus, hit.account) }
                             )
                         }
                     }

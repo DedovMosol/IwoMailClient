@@ -19,10 +19,15 @@ private val SYNC_INTERVALS_MINUTES = listOf(1, 2, 3, 5, 10, 15, 30)
 /** Как часто синхронизировать контакты, заметки, календарь и задачи, дни (0 — никогда). */
 private val DATA_SYNC_DAYS = listOf(0, 1, 7, 14, 30)
 
+/**
+ * Синхронизация и очистка аккаунта. [highlight] — id строки из поиска настроек ([rememberSettingsCatalog]): она
+ * подсвечивается и прокручивается в видимую часть.
+ */
 @Composable
 fun SyncCleanupScreen(
     accountId: Long,
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    highlight: String = ""
 ) {
     val context = LocalContext.current
     val isRu = isRussian()
@@ -47,8 +52,10 @@ fun SyncCleanupScreen(
     val cleanupLabel: @Composable (AutoCleanupDays) -> String = { it.getDisplayName(isRu) }
 
     SettingsPageScaffold(title = Strings.syncAndCleanup, onBackClick = onBackClick, hue = SettingsSearchDest.Accounts.hue) {
-        item { SettingsSectionTitle(Strings.syncSettings) }
+        // Одним элементом списка: строку из поиска внизу страницы есть кому подсветить и прокрутить к ней (элемент
+        // LazyColumn за экраном не создаётся). Строк около двадцати — ленивость не нужна.
         item {
+            SettingsSectionTitle(Strings.syncSettings)
             SettingsGroup {
                 if (exchange) {
                     SettingsChoiceRow(
@@ -57,7 +64,9 @@ fun SyncCleanupScreen(
                         selected = syncMode,
                         label = { it.getDisplayName(isRu) },
                         onSelect = viewModel::setSyncMode,
-                        icon = AppIcons.Sync
+                        icon = AppIcons.Sync,
+                        highlightId = "syncMode",
+                        highlight = highlight
                     )
                 }
                 if (!exchange || syncMode == SyncMode.SCHEDULED) {
@@ -67,7 +76,9 @@ fun SyncCleanupScreen(
                         selected = currentAccount.syncIntervalMinutes,
                         label = { Strings.minutes(it) },
                         onSelect = viewModel::setSyncInterval,
-                        icon = AppIcons.Schedule
+                        icon = AppIcons.Schedule,
+                        highlightId = "syncInterval",
+                        highlight = highlight
                     )
                 }
                 SettingsSwitchRow(
@@ -75,18 +86,20 @@ fun SyncCleanupScreen(
                     description = Strings.nightModeDesc,
                     icon = { Icon(AppIcons.NightsStay, null) },
                     checked = currentAccount.nightModeEnabled,
+                    highlightId = "nightMode",
+                    highlight = highlight,
                     onChange = viewModel::setNightModeEnabled
                 )
                 SettingsSwitchRow(
                     title = Strings.ignoreBatterySaver,
                     icon = { Icon(AppIcons.BatterySaver, null) },
                     checked = currentAccount.ignoreBatterySaver,
+                    highlightId = "ignoreBatterySaver",
+                    highlight = highlight,
                     onChange = viewModel::setIgnoreBatterySaver
                 )
             }
-        }
-        if (exchange) {
-            item {
+            if (exchange) {
                 SettingsGroup {
                     SettingsChoiceRow(
                         title = Strings.contactsSync,
@@ -95,7 +108,9 @@ fun SyncCleanupScreen(
                         selected = currentAccount.contactsSyncIntervalDays,
                         label = daysLabel,
                         onSelect = viewModel::setContactsSyncInterval,
-                        icon = AppIcons.ContactPhone
+                        icon = AppIcons.ContactPhone,
+                        highlightId = "contactsSync",
+                        highlight = highlight
                     )
                     SettingsChoiceRow(
                         title = Strings.notesSync,
@@ -103,7 +118,9 @@ fun SyncCleanupScreen(
                         selected = currentAccount.notesSyncIntervalDays,
                         label = daysLabel,
                         onSelect = viewModel::setNotesSyncInterval,
-                        icon = AppIcons.StickyNote
+                        icon = AppIcons.StickyNote,
+                        highlightId = "notesSync",
+                        highlight = highlight
                     )
                     SettingsChoiceRow(
                         title = Strings.calendarSync,
@@ -111,7 +128,9 @@ fun SyncCleanupScreen(
                         selected = currentAccount.calendarSyncIntervalDays,
                         label = daysLabel,
                         onSelect = viewModel::setCalendarSyncInterval,
-                        icon = AppIcons.CalendarMonth
+                        icon = AppIcons.CalendarMonth,
+                        highlightId = "calendarSync",
+                        highlight = highlight
                     )
                     SettingsChoiceRow(
                         title = Strings.tasksSync,
@@ -119,15 +138,15 @@ fun SyncCleanupScreen(
                         selected = currentAccount.tasksSyncIntervalDays,
                         label = daysLabel,
                         onSelect = viewModel::setTasksSyncInterval,
-                        icon = AppIcons.Task
+                        icon = AppIcons.Task,
+                        highlightId = "tasksSync",
+                        highlight = highlight
                     )
                 }
             }
-        }
 
-        // Очистка: раньше — диалог-аккордеон, теперь строка на каждую папку
-        item { SettingsSectionTitle(Strings.autoCleanup) }
-        item {
+            // Очистка: раньше — диалог-аккордеон, теперь строка на каждую папку
+            SettingsSectionTitle(Strings.autoCleanup)
             SettingsGroup {
                 SettingsChoiceRow(
                     title = Strings.autoCleanupTrash,
@@ -135,7 +154,9 @@ fun SyncCleanupScreen(
                     selected = AutoCleanupDays.fromDays(currentAccount.autoCleanupTrashDays),
                     label = cleanupLabel,
                     onSelect = { viewModel.setAutoCleanupTrashDays(it.days) },
-                    icon = AppIcons.Delete
+                    icon = AppIcons.Delete,
+                    highlightId = "autoCleanupTrash",
+                    highlight = highlight
                 )
                 SettingsChoiceRow(
                     title = Strings.autoCleanupDrafts,
@@ -143,7 +164,9 @@ fun SyncCleanupScreen(
                     selected = AutoCleanupDays.fromDays(currentAccount.autoCleanupDraftsDays),
                     label = cleanupLabel,
                     onSelect = { viewModel.setAutoCleanupDraftsDays(it.days) },
-                    icon = AppIcons.Drafts
+                    icon = AppIcons.Drafts,
+                    highlightId = "autoCleanupDrafts",
+                    highlight = highlight
                 )
                 SettingsChoiceRow(
                     title = Strings.autoCleanupSpam,
@@ -151,15 +174,13 @@ fun SyncCleanupScreen(
                     selected = AutoCleanupDays.fromDays(currentAccount.autoCleanupSpamDays),
                     label = cleanupLabel,
                     onSelect = { viewModel.setAutoCleanupSpamDays(it.days) },
-                    icon = AppIcons.Report
+                    icon = AppIcons.Report,
+                    highlightId = "autoCleanupSpam",
+                    highlight = highlight
                 )
             }
-        }
-        item {
             SettingsGroupHint(Strings.autoCleanupFoldersHint)
-        }
-        item { SettingsSectionTitle(Strings.autoCleanupAppFiles) }
-        item {
+            SettingsSectionTitle(Strings.autoCleanupAppFiles)
             SettingsGroup {
                 SettingsChoiceRow(
                     title = Strings.autoCleanupDownloads,
@@ -167,7 +188,9 @@ fun SyncCleanupScreen(
                     selected = AutoCleanupDays.fromDays(uiState.downloadsDays),
                     label = cleanupLabel,
                     onSelect = { viewModel.setDownloadsDays(it.days) },
-                    icon = AppIcons.Download
+                    icon = AppIcons.Download,
+                    highlightId = "autoCleanupDownloads",
+                    highlight = highlight
                 )
                 SettingsChoiceRow(
                     title = Strings.autoCleanupRollback,
@@ -175,7 +198,9 @@ fun SyncCleanupScreen(
                     selected = AutoCleanupDays.fromDays(uiState.rollbackDays),
                     label = cleanupLabel,
                     onSelect = { viewModel.setRollbackDays(it.days) },
-                    icon = AppIcons.Restore
+                    icon = AppIcons.Restore,
+                    highlightId = "autoCleanupRollback",
+                    highlight = highlight
                 )
             }
         }

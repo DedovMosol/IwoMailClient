@@ -201,10 +201,9 @@ internal fun CreateEventDialog(
      */
     suspend fun prepareEventBody(): EventBodyEditing.Encoded {
         val loaded = editorBody
-        val baseline = loaded?.html
-        val edited = loaded != null && editorHtmlInitialized &&
-            ((bodyEditorController.latestHtml.isNotEmpty() && bodyEditorController.latestHtml != baseline) ||
-                editorHtml != baseline)
+        // Правка — по редактору ([RichTextEditorController.userEdited]): HTML он отдаёт пересобранным, и сравнение
+        // строк считало правкой само открытие (тело ушло бы на сервер перекодированным)
+        val edited = loaded != null && editorHtmlInitialized && bodyEditorController.userEdited
         if (loaded == null || !edited) return EventBodyEditing.Encoded(originalBody, emptyList(), emptyList())
         val html = bodyEditorController.awaitCurrentHtml() ?: editorHtml
         return withContext(Dispatchers.Default) {

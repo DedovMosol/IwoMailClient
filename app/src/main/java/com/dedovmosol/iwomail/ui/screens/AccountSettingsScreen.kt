@@ -47,7 +47,9 @@ fun AccountSettingsScreen(
     onBackClick: () -> Unit,
     onEditCredentials: (Long) -> Unit = {},
     onNavigateToSyncCleanup: (Long) -> Unit = {},
-    onNoAccountsLeft: () -> Unit = {}
+    onNoAccountsLeft: () -> Unit = {},
+    /** id строки из поиска настроек ([rememberSettingsCatalog]): подсветить и прокрутить к ней. */
+    highlight: String = ""
 ) {
     val context = LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
@@ -650,18 +652,24 @@ fun AccountSettingsScreen(
             }
         }
 
-        item { SettingsSectionTitle(Strings.accountSection) }
+        // Остальное — одним элементом списка: строку из поиска ([highlight]) внизу страницы есть кому подсветить и
+        // прокрутить к ней (элемент LazyColumn за экраном не создаётся). Страница короткая — ленивость не нужна.
         item {
+            SettingsSectionTitle(Strings.accountSection)
             SettingsGroup {
                 SettingsNavRow(
                     title = Strings.changeCredentials,
                     icon = AppIcons.Edit,
+                    highlightId = "credentials",
+                    highlight = highlight,
                     onClick = { onEditCredentials(accountId) }
                 )
                 SettingsNavRow(
                     title = Strings.signature,
                     icon = AppIcons.Draw,
                     value = if (signatures.isEmpty()) Strings.noSignature else Strings.signaturesCount(signatures.size),
+                    highlightId = "signature",
+                    highlight = highlight,
                     onClick = { showSignaturesDialog = true }
                 )
                 if (accountType == AccountType.EXCHANGE) {
@@ -671,6 +679,8 @@ fun AccountSettingsScreen(
                         selected = currentDraftMode,
                         label = { if (it == DraftMode.LOCAL) Strings.draftModeLocal else Strings.draftModeServer },
                         icon = AppIcons.Drafts,
+                        highlightId = "draftMode",
+                        highlight = highlight,
                         onSelect = { mode ->
                             scope.launch {
                                 accountRepo.updateDraftMode(accountId, mode.name)
@@ -683,25 +693,27 @@ fun AccountSettingsScreen(
                     title = Strings.syncAndCleanup,
                     subtitle = Strings.syncAndCleanupDesc,
                     icon = AppIcons.Sync,
+                    highlightId = "syncAndCleanup",
+                    highlight = highlight,
                     onClick = { onNavigateToSyncCleanup(accountId) }
                 )
             }
-        }
 
-        // Сертификаты и доверие серверу
-        val hasServerCert = !currentAccount.certificatePath.isNullOrBlank()
-        val hasClientCert = !currentAccount.clientCertificatePath.isNullOrBlank()
-        if (hasServerCert || hasClientCert || hasTlsEndpoint) {
-            item { SettingsSectionTitle(Strings.securitySection) }
-        }
-        if (hasServerCert || hasClientCert) {
-            item {
+            // Сертификаты и доверие серверу
+            val hasServerCert = !currentAccount.certificatePath.isNullOrBlank()
+            val hasClientCert = !currentAccount.clientCertificatePath.isNullOrBlank()
+            if (hasServerCert || hasClientCert || hasTlsEndpoint) {
+                SettingsSectionTitle(Strings.securitySection)
+            }
+            if (hasServerCert || hasClientCert) {
                 SettingsGroup {
                     if (hasServerCert) {
                         SettingsNavRow(
                             title = Strings.serverCertificate,
                             subtitle = java.io.File(currentAccount.certificatePath!!).name,
                             icon = AppIcons.Lock,
+                            highlightId = "serverCertificate",
+                            highlight = highlight,
                             onClick = { showCertificateDialog = true }
                         )
                     }
@@ -710,31 +722,31 @@ fun AccountSettingsScreen(
                             title = Strings.clientCertificate,
                             subtitle = java.io.File(currentAccount.clientCertificatePath!!).name,
                             icon = AppIcons.Lock,
+                            highlightId = "clientCertificate",
+                            highlight = highlight,
                             onClick = { showClientCertificateDialog = true }
                         )
                     }
                 }
             }
-        }
-        // С импортированным сертификатом — закрепление его ключа; без него — доверие по отпечатку (ONB-08).
-        // У Exchange по http TLS нет — карточки нет.
-        if (hasServerCert || hasTlsEndpoint) {
-            item {
+            // С импортированным сертификатом — закрепление его ключа; без него — доверие по отпечатку (ONB-08).
+            // У Exchange по http TLS нет — карточки нет.
+            if (hasServerCert || hasTlsEndpoint) {
                 CertificatePinningCard(
                     account = currentAccount,
                     accountRepo = accountRepo,
                     onAccountUpdated = { updatedAccount -> account = updatedAccount }
                 )
             }
-        }
 
-        item {
             SettingsGroup {
                 SettingsNavRow(
                     title = Strings.deleteAccountAction,
                     titleColor = MaterialTheme.colorScheme.error,
                     leading = { SettingsIconTile(AppIcons.Delete, hue = ScrollbarColor.RED) },
                     trailingIcon = null,
+                    highlightId = "deleteAccount",
+                    highlight = highlight,
                     onClick = { showDeleteAccount = true }
                 )
             }
