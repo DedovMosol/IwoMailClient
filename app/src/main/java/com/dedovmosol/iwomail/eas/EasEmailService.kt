@@ -299,6 +299,13 @@ class EasEmailService internal constructor(
                 return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
             }
 
+            var itemSubject: String? = null
+            var itemDateReceived: String? = null
+            if (htmlResult is EasResult.Success) {
+                itemSubject = htmlResult.data.subject
+                itemDateReceived = htmlResult.data.dateReceived
+            }
+
             if (htmlResult is EasResult.Success && htmlResult.data.data.isNotBlank()) {
                 bodyContent = htmlResult.data.data
                 complete = !htmlResult.data.truncated
@@ -317,6 +324,8 @@ class EasEmailService internal constructor(
 
                 if (plainResult is EasResult.Success) {
                     bodyContent = plainResult.data.data
+                    plainResult.data.subject?.let { itemSubject = it }
+                    plainResult.data.dateReceived?.let { itemDateReceived = it }
                 } else if (plainResult is EasResult.Error) {
                     return@withTimeoutOrNull EasResult.Error(plainResult.message)
                 }
@@ -350,7 +359,9 @@ class EasEmailService internal constructor(
                     complete = complete,
                     listUnsubscribe = listUnsubscribe?.first,
                     listUnsubscribeOneClick = listUnsubscribe?.second == true,
-                    inReplyTo = inReplyTo
+                    inReplyTo = inReplyTo,
+                    itemSubject = itemSubject,
+                    itemDateReceived = itemDateReceived
                 )
             )
         } ?: EasResult.Error("Timeout loading email body")
@@ -434,15 +445,27 @@ class EasEmailService internal constructor(
                     ?: ""
             )
             val truncated = deps.extractValue(responseXml, "Truncated") == "1"
-            FetchedBody(if (truncated && data.isBlank()) "" else data, truncated, status)
+            FetchedBody(
+                if (truncated && data.isBlank()) "" else data, truncated, status,
+                // Свойства идут до тела; в теле разметка экранирована — первый тег Subject/DateReceived свой
+                subject = deps.extractValue(responseXml, "Subject")?.let { XmlUtils.unescape(it) },
+                dateReceived = deps.extractValue(responseXml, "DateReceived")
+            )
         }
     }
 
     /**
      * Тело из ItemOperations Fetch: [truncated] — сервер прислал не всё; [status] — Status из ответа (null — его нет;
-     * не 1 — сервер не выполнил запрос, а пустое [data] — не ответ «пусто»).
+     * не 1 — сервер не выполнил запрос, а пустое [data] — не ответ «пусто»). [subject], [dateReceived] — свойства
+     * элемента из того же ответа (null — сервер их не прислал): по ним видно, чьё это тело.
      */
-    private data class FetchedBody(val data: String, val truncated: Boolean, val status: Int? = null)
+    private data class FetchedBody(
+        val data: String,
+        val truncated: Boolean,
+        val status: Int? = null,
+        val subject: String? = null,
+        val dateReceived: String? = null
+    )
 
     /**
      * Тема элемента по его EAS ServerId (ItemOperations Fetch, без тела). Нужна, чтобы найти тот же элемент через EWS

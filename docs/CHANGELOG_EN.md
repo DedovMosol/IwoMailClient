@@ -66,6 +66,13 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 
 ### Sync and offline
 - Star, read state and moves made offline apply on the device at once, are queued in `pending_email_changes` and sent by `PendingMailChangesWorker` when the network is back, also after a restart. They are rolled back only on an explicit server rejection, and a stale SyncKey, server errors and timeouts are retried later.
+- After a SyncKey reset Exchange 2007 numbers the messages of a folder again, and a new message shifts the numbers of the others (verified on the server). Because of this a message could open with another message's body, a message with an attachment could close with "Email deleted on server", and the star could be rejected. Fixed as follows:
+  - a full resync runs only when the sync state is broken (Status 3/12), not on "sync already running" or a server error;
+  - the star and read state wait for a sync when there is no key and do not reset the key themselves;
+  - Status 8 on a flag is no longer treated as a rejection;
+  - a row whose number the server gave to another message is rewritten with that message, and the body moves to its own message;
+  - a body is written only if the subject and date in the server's answer match the message; otherwise the folder gets a full resync;
+  - the message screen whose row disappeared or changed opens the same message under its new number and shows "deleted on server" only if the message is gone.
 - A full resync (SyncKey=0) does not delete a message with a pending move and does not duplicate it in Inbox. The move is sent from the original folder, and if the message is already in the target folder the queue is cleared.
 - `FolderSyncGate` lets only one Sync request per folder run at a time, and the SyncKey is re-read from the database inside the gate. There is no separate full sync of Sent: the regular sync fixes a stale key, and the key is not reset while offline.
 - Opening Inbox, Sent and user folders runs a quiet incremental sync, at most once every 30 seconds per folder and without a refresh indicator. Trash is not synced automatically, and Drafts are synced once.

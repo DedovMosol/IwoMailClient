@@ -412,4 +412,8 @@ class EmailDetailActions(
     }.toUnit()
 
     suspend fun getEmailSync(emailId: String) = mailRepo.getEmailSync(emailId)
+
+    suspend fun findSameEmailId(email: com.dedovmosol.iwomail.data.database.EmailEntity) = mailRepo.findSameEmailId(email)
+
+    fun isFolderSyncing(folderId: String) = mailRepo.isFolderSyncing(folderId)
 }

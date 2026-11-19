@@ -147,7 +147,7 @@ class EmailOperationsService(
         read: Boolean
     ): EasResult<Boolean> {
         val storedKey = folderDao.getFolder(folder.id)?.syncKey ?: folder.syncKey
-        val syncKey = ensureValidSyncKey(client, folder.id, folder.serverId, storedKey)
+        val syncKey = usableSyncKey(storedKey)
         if (syncKey == null) {
             deferRead(emails)
             return EasResult.Success(true)
@@ -242,6 +242,9 @@ class EmailOperationsService(
                 )
             }) {
                 is EasResult.Success -> {
+                    if (folder?.type != FolderType.DRAFTS && !bodyBelongsTo(email, result.data)) {
+                        return itemMismatch(email)
+                    }
                     var bodyContent = result.data.body
                     var resolvedMessageId = result.data.originalMessageId
 
@@ -253,12 +256,13 @@ class EmailOperationsService(
                         // Получаем тип папки для EWS DistinguishedFolderId
                         val ewsFolder = ewsFolderOf(folder)
                         if (ewsFolder != null) {
+                            // Сначала Message-ID самой записи: он описывает письмо, которое на экране
                             val ewsResult = client.fetchEmailBodyViaEws(
                                 subject = email.subject,
                                 folder = ewsFolder,
                                 dateReceived = email.dateReceived,
-                                internetMessageId = resolvedMessageId?.takeIf { it.isNotBlank() }
-                                    ?: email.internetMessageId
+                                internetMessageId = email.internetMessageId?.takeIf { it.isNotBlank() }
+                                    ?: resolvedMessageId?.takeIf { it.isNotBlank() }
                             )
                             if (ewsResult is EasResult.Success && ewsResult.data.body.isNotEmpty()) {
                                 android.util.Log.d("BDY", "loadEmailBody: EWS fallback SUCCESS, bodyLength=${ewsResult.data.body.length}")
@@ -270,41 +274,46 @@ class EmailOperationsService(
                         }
                     }
 
-                    // КРИТИЧНО: Не перезаписываем существующее тело пустым ответом!
-                    // Сервер может вернуть пустое тело из-за временной ошибки,
-                    // race condition с другими EAS командами, или ограничений ItemOperations.
-                    if (bodyContent.isNotEmpty() || email.body.isEmpty()) {
-                        emailDao.updateBody(emailId, bodyContent)
-                    } else if (suspiciousCachedBody) {
-                        // Заведомо подозрительное тело хуже пустого: не показываем чужой кэш.
-                        emailDao.updateBody(emailId, "")
-                        android.util.Log.w("BDY", "loadEmailBody: exact reload failed, dropping suspicious cached body")
-                        bodyContent = ""
-                    } else {
-                        android.util.Log.w("BDY", "loadEmailBody: Server returned empty body, keeping existing (${email.body.length} chars)")
-                        bodyContent = email.body
-                    }
+                    val written = writeIfSameItem(email) {
+                        // КРИТИЧНО: Не перезаписываем существующее тело пустым ответом!
+                        // Сервер может вернуть пустое тело из-за временной ошибки,
+                        // race condition с другими EAS командами, или ограничений ItemOperations.
+                        if (bodyContent.isNotEmpty() || email.body.isEmpty()) {
+                            emailDao.updateBody(emailId, bodyContent)
+                        } else if (suspiciousCachedBody) {
+                            // Заведомо подозрительное тело хуже пустого: не показываем чужой кэш.
+                            emailDao.updateBody(emailId, "")
+                            android.util.Log.w("BDY", "loadEmailBody: exact reload failed, dropping suspicious cached body")
+                            bodyContent = ""
+                        } else {
+                            android.util.Log.w("BDY", "loadEmailBody: Server returned empty body, keeping existing (${email.body.length} chars)")
+                            bodyContent = email.body
+                        }
 
-                    // КРИТИЧНО: Если bodyType=4 (MIME), но мы сохранили уже извлечённый HTML,
-                    // обновляем bodyType на 2. Иначе при повторном открытии EmailDetailScreen
-                    // будет пытаться парсить HTML как MIME → inline картинки не найдутся.
-                    if (email.bodyType == 4 && bodyContent.isNotEmpty() &&
-                        !bodyContent.contains("Content-Type:", ignoreCase = true)) {
-                        emailDao.updateBodyType(emailId, 2)
-                        android.util.Log.d("BDY", "loadEmailBody: Updated bodyType 4→2 (stored HTML, not MIME)")
-                    }
+                        // КРИТИЧНО: Если bodyType=4 (MIME), но мы сохранили уже извлечённый HTML,
+                        // обновляем bodyType на 2. Иначе при повторном открытии EmailDetailScreen
+                        // будет пытаться парсить HTML как MIME → inline картинки не найдутся.
+                        if (email.bodyType == 4 && bodyContent.isNotEmpty() &&
+                            !bodyContent.contains("Content-Type:", ignoreCase = true)) {
+                            emailDao.updateBodyType(emailId, 2)
+                            android.util.Log.d("BDY", "loadEmailBody: Updated bodyType 4→2 (stored HTML, not MIME)")
+                        }
 
-                    if (!result.data.mdnRequestedBy.isNullOrBlank() && !email.mdnSent) {
-                        emailDao.updateMdnRequestedBy(emailId, result.data.mdnRequestedBy)
-                    }
-                    result.data.listUnsubscribe?.let { emailDao.updateListUnsubscribe(emailId, it, result.data.listUnsubscribeOneClick) }
+                        if (!result.data.mdnRequestedBy.isNullOrBlank() && !email.mdnSent) {
+                            emailDao.updateMdnRequestedBy(emailId, result.data.mdnRequestedBy)
+                        }
+                        result.data.listUnsubscribe?.let { emailDao.updateListUnsubscribe(emailId, it, result.data.listUnsubscribeOneClick) }
 
-                    resolvedMessageId
-                        ?.takeIf { it.isNotBlank() && email.internetMessageId != it }
-                        ?.let { emailDao.updateInternetMessageId(emailId, it) }
-                    result.data.inReplyTo
-                        ?.takeIf { it.isNotBlank() && email.inReplyTo != it }
-                        ?.let { emailDao.updateInReplyTo(emailId, it) }
+                        // Message-ID записи не перезаписывается: известный уже описывает это письмо
+                        resolvedMessageId
+                            ?.takeIf { it.isNotBlank() && email.internetMessageId.isNullOrBlank() }
+                            ?.let { emailDao.updateInternetMessageId(emailId, it) }
+                        result.data.inReplyTo
+                            ?.takeIf { it.isNotBlank() && email.inReplyTo != it }
+                            ?.let { emailDao.updateInReplyTo(emailId, it) }
+                    }
+                    // Пока тело грузилось, синхронизация переписала или убрала запись — она уже исправлена
+                    if (!written) return itemMismatch(email, markStale = false)
 
                     android.util.Log.d("BDY", "loadEmailBody: SUCCESS, bodyLength=${bodyContent.length}")
                     EasResult.Success(bodyContent)
@@ -329,16 +338,19 @@ class EmailOperationsService(
                                 if (ewsResult is EasResult.Success && ewsResult.data.body.isNotEmpty()) {
                                     android.util.Log.d("BDY", "loadEmailBody: EWS fallback recovered body after OBJECT_NOT_FOUND, len=${ewsResult.data.body.length}")
                                     val bodyContent = ewsResult.data.body
-                                    emailDao.updateBody(emailId, bodyContent)
-                                    if (email.bodyType == 4 && !bodyContent.contains("Content-Type:", ignoreCase = true)) {
-                                        emailDao.updateBodyType(emailId, 2)
+                                    val written = writeIfSameItem(email) {
+                                        emailDao.updateBody(emailId, bodyContent)
+                                        if (email.bodyType == 4 && !bodyContent.contains("Content-Type:", ignoreCase = true)) {
+                                            emailDao.updateBodyType(emailId, 2)
+                                        }
+                                        ewsResult.data.originalMessageId
+                                            ?.takeIf { it.isNotBlank() && email.internetMessageId.isNullOrBlank() }
+                                            ?.let { emailDao.updateInternetMessageId(emailId, it) }
+                                        ewsResult.data.inReplyTo
+                                            ?.takeIf { it.isNotBlank() && email.inReplyTo != it }
+                                            ?.let { emailDao.updateInReplyTo(emailId, it) }
                                     }
-                                    ewsResult.data.originalMessageId
-                                        ?.takeIf { it.isNotBlank() && email.internetMessageId != it }
-                                        ?.let { emailDao.updateInternetMessageId(emailId, it) }
-                                    ewsResult.data.inReplyTo
-                                        ?.takeIf { it.isNotBlank() && email.inReplyTo != it }
-                                        ?.let { emailDao.updateInReplyTo(emailId, it) }
+                                    if (!written) return itemMismatch(email, markStale = false)
                                     return EasResult.Success(bodyContent)
                                 }
                             }
@@ -439,7 +451,7 @@ class EmailOperationsService(
         val client = accountRepo.createEasClient(email.accountId) ?: return
         val headers = client.fetchTopLevelHeaders(folder.serverId, email.serverId) as? EasResult.Success ?: return
         val (value, oneClick) = com.dedovmosol.iwomail.eas.ListUnsubscribe.fromHeaders(headers.data) ?: ("" to false)
-        emailDao.updateListUnsubscribe(emailId, value, oneClick)
+        writeIfSameItem(email) { emailDao.updateListUnsubscribe(emailId, value, oneClick) }
     }
 
     /**
@@ -512,7 +524,8 @@ class EmailOperationsService(
                 return
             }
             if (attResult is EasResult.Success) {
-                emailSyncService.reconcileAttachments(emailId, attResult.data)
+                // Пока шёл запрос, синхронизация могла отдать id другому письму — вложения были бы чужими
+                writeIfSameItem(email) { emailSyncService.reconcileAttachments(emailId, attResult.data) }
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
@@ -585,7 +598,13 @@ class EmailOperationsService(
                             fetchMimeHeaders = !com.dedovmosol.iwomail.eas.RssItems.isRss(email.messageClass)
                         )
                     } ?: continue
-                    result.onSuccessResult { response ->
+                    val response = (result as? EasResult.Success)?.data ?: continue
+                    if (!bodyBelongsTo(email, response)) {
+                        // Под этим id на сервере другое письмо: не писать, полная синхронизация перепишет записи
+                        itemMismatch(email)
+                        break
+                    }
+                    writeIfSameItem(email) {
                         if (response.body.isNotBlank()) emailDao.updateBody(emailId, response.body)
                         if (!response.mdnRequestedBy.isNullOrBlank() && !email.mdnSent) {
                             emailDao.updateMdnRequestedBy(emailId, response.mdnRequestedBy)
@@ -594,7 +613,7 @@ class EmailOperationsService(
                             emailDao.updateListUnsubscribe(emailId, it, response.listUnsubscribeOneClick)
                         }
                         response.originalMessageId
-                            ?.takeIf { it.isNotBlank() }
+                            ?.takeIf { it.isNotBlank() && email.internetMessageId.isNullOrBlank() }
                             ?.let { emailDao.updateInternetMessageId(emailId, it) }
                     }
                 } catch (e: Exception) {
@@ -672,8 +691,12 @@ class EmailOperationsService(
                 when (result) {
                     is EasResult.Success -> {
                         val applied = result.data.applied
+                        val status = result.data.changeStatus
                         if (applied != null) {
                             outcome = FlagWriteTracker.Outcome.Applied(applied)
+                            EasResult.Success(true)
+                        } else if (status != null && !isRejectingChangeStatus(status)) {
+                            android.util.Log.w("SetFlag", "Server does not know the item yet (Status=$status), kept locally")
                             EasResult.Success(true)
                         } else {
                             android.util.Log.w("SetFlag", "Server rejected flag: Status=${result.data.changeStatus}, rolling back")
@@ -714,7 +737,7 @@ class EmailOperationsService(
         flag: MailFlag
     ): EasResult<com.dedovmosol.iwomail.eas.FlagWrite>? {
         val folder = folderDao.getFolder(email.folderId) ?: return null
-        val syncKey = ensureValidSyncKey(client, email.folderId, folder.serverId, folder.syncKey) ?: return null
+        val syncKey = usableSyncKey(folder.syncKey) ?: return null
         var result = client.setFlag(folder.serverId, email.serverId, syncKey, flag)
         if (result is EasResult.Error && isLikelyStaleSyncKeyError(result.message)) {
             getRetrySyncKeyFromDatabase(email.folderId, syncKey)?.let { fresh ->
@@ -1371,25 +1394,43 @@ class EmailOperationsService(
     }
 
     /**
-     * Инициализирует syncKey через Sync с "0" если текущий ключ невалиден.
-     * MS-ASCMD: SyncKey="0" → сервер возвращает новый ключ без данных (EAS 12.0+).
-     * @return валидный syncKey или null если инициализация не удалась
+     * Ключ для Sync Change; null — ключа нет ("0": папка ещё не синхронизирована или ждёт полной синхронизации),
+     * изменение остаётся локально и уйдёт после неё. Самим брать ключ через Sync(0) нельзя: это сбрасывает состояние
+     * синхронизации на сервере. Exchange 2007 после сброса не знает прежних ServerId (Change получает Status 8),
+     * а следующая выдача нумерует письма заново — проверено на сервере (LiveServerIdProbeTest).
      */
-    private suspend fun ensureValidSyncKey(
-        client: com.dedovmosol.iwomail.eas.EasClient,
-        folderId: String,
-        folderServerId: String,
-        currentSyncKey: String
-    ): String? {
-        if (currentSyncKey != "0") return currentSyncKey
-        val initResult = client.sync(folderServerId, "0", windowSize = 0)
-        if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
-            val newKey = initResult.data.syncKey
-            folderDao.updateSyncKey(folderId, newKey)
-            return newKey
-        }
-        return null
+    private fun usableSyncKey(currentSyncKey: String): String? = currentSyncKey.takeIf { it != "0" && it.isNotBlank() }
+
+    /** Ответ ItemOperations — о письме [email] (тема и дата из того же ответа, [bodyBelongsTo]). */
+    private fun bodyBelongsTo(email: EmailEntity, response: com.dedovmosol.iwomail.eas.EmailBodyResult): Boolean =
+        bodyBelongsTo(
+            email.subject, email.dateReceived,
+            response.itemSubject, response.itemDateReceived?.let { EmailSyncService.parseDate(it) } ?: 0L
+        )
+
+    /**
+     * Тело не сохранено: под ServerId [email] сервер отдаёт другое письмо. [markStale] — папка помечается для полной
+     * синхронизации ([EmailSyncService.markServerIdsStale]); не нужно, если запись уже переписала синхронизация.
+     */
+    private fun itemMismatch(email: EmailEntity, markStale: Boolean = true): EasResult<String> {
+        android.util.Log.w("BDY", "Server item under ${email.serverId} is another message, body not saved (stale=$markStale)")
+        if (markStale) EmailSyncService.markServerIdsStale(email.folderId)
+        return EasResult.Error(RepositoryErrors.ITEM_MISMATCH)
     }
+
+    /**
+     * [write] — в транзакции и только если запись [email] всё ещё о том же письме: между загрузкой тела и записью
+     * синхронизация могла отдать этот id другому письму ([EmailSyncService.sameServerItem]). false — не записано.
+     */
+    private suspend fun writeIfSameItem(email: EmailEntity, write: suspend () -> Unit): Boolean =
+        database.withTransaction {
+            if (emailDao.countSameItem(email.id, email.subject, email.from, email.dateReceived) == 0) {
+                false
+            } else {
+                write()
+                true
+            }
+        }
 
     private suspend fun getRetrySyncKeyFromDatabase(
         folderId: String,
@@ -1416,14 +1457,15 @@ class EmailOperationsService(
     }
 }
 
-private val CHANGE_STATUS = Regex("Change Status\\s*=\\s*\\d+", RegexOption.IGNORE_CASE)
+private val CHANGE_STATUS = Regex("Change Status\\s*=\\s*(\\d+)", RegexOption.IGNORE_CASE)
 private val COLLECTION_STATUS = Regex("Collection Status\\s*=\\s*(\\d+)", RegexOption.IGNORE_CASE)
 
 /**
  * [MS-ASCMD] Sync Status коллекции, при которых повтор того же изменения не поможет: 4 — ошибка протокола (запрос
- * неверен), 6 — ошибка преобразования данных, 7 — конфликт (побеждает сервер), 8 — объект не найден.
+ * неверен), 6 — ошибка преобразования данных, 7 — конфликт (побеждает сервер). 8 («объект не найден») — не отказ,
+ * см. [isRejectingChangeStatus].
  */
-private val REJECTING_COLLECTION_STATUSES = setOf(4, 6, 7, 8)
+private val REJECTING_COLLECTION_STATUSES = setOf(4, 6, 7)
 
 /**
  * Сервер отказал в самом локальном изменении (флаг, «прочитано»): откат. Всё остальное — устаревший SyncKey (3),
@@ -1431,9 +1473,37 @@ private val REJECTING_COLLECTION_STATUSES = setOf(4, 6, 7, 8)
  * терять его.
  */
 internal fun isChangeRejected(message: String): Boolean {
-    if (CHANGE_STATUS.containsMatchIn(message)) return true
+    CHANGE_STATUS.find(message)?.groupValues?.get(1)?.toIntOrNull()?.let { return isRejectingChangeStatus(it) }
     val status = COLLECTION_STATUS.find(message)?.groupValues?.get(1)?.toIntOrNull() ?: return false
     return status in REJECTING_COLLECTION_STATUSES
 }
+
+/**
+ * Status изменения в ответе Sync. 8 («объект не найден») — не отказ: состояние синхронизации на сервере ещё не знает
+ * этот ServerId (идёт полная синхронизация после SyncKey=0 — проверено на Exchange 2007: Change сразу после сброса
+ * получает 8). Изменение ждёт и уйдёт позже; если письма на сервере действительно нет, его уберёт синхронизация.
+ */
+internal fun isRejectingChangeStatus(status: Int): Boolean = status != SYNC_STATUS_OBJECT_NOT_FOUND
+
+private const val SYNC_STATUS_OBJECT_NOT_FOUND = 8
+
+/**
+ * Тело из ItemOperations — того письма, что в записи: тема и DateReceived элемента из того же ответа совпадают
+ * с записью (тема без учёта регистра и пробелов по краям, дата — в пределах [com.dedovmosol.iwomail.eas.EwsMailMatch.WIDE_WINDOW_MS]).
+ * Свойство, которое сервер не прислал (null или 0), не проверяется. Нет — Exchange 2007 после SyncKey=0 отдал этот
+ * ServerId другому письму, и тело было бы чужим.
+ */
+internal fun bodyBelongsTo(localSubject: String, localDateReceived: Long, itemSubject: String?, itemDateReceived: Long): Boolean {
+    if (itemSubject != null &&
+        !com.dedovmosol.iwomail.eas.EwsMailMatch.subjectsEqual(comparableSubject(localSubject), comparableSubject(itemSubject))
+    ) {
+        return false
+    }
+    return itemDateReceived <= 0L || localDateReceived <= 1L ||
+        kotlin.math.abs(itemDateReceived - localDateReceived) <= com.dedovmosol.iwomail.eas.EwsMailMatch.WIDE_WINDOW_MS
+}
+
+/** Sync подставляет "(No subject)" вместо пустой темы, ItemOperations присылает пустую. */
+private fun comparableSubject(subject: String): String = subject.trim().takeUnless { it == "(No subject)" }.orEmpty()
 
 internal fun isOfflineMailError(message: String): Boolean = message.contains("[NET:")

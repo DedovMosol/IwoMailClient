@@ -1062,7 +1062,13 @@ fun AppNavigation(
                 },
                 onReplyClick = { navController.navigate(Screen.Compose.createRoute(replyTo = emailId)) },
                 onForwardClick = { navController.navigate(Screen.Compose.createRoute(forwardId = emailId)) },
-                onComposeToEmail = { toEmail -> navController.navigate(Screen.Compose.createRoute(toEmail = toEmail)) }
+                onComposeToEmail = { toEmail -> navController.navigate(Screen.Compose.createRoute(toEmail = toEmail)) },
+                // Письмо под новым id (синхронизация перенумеровала папку): этот экран заменяется экраном того же письма
+                onReopen = { newId ->
+                    navController.navigate(Screen.EmailDetail.createRoute(newId)) {
+                        popUpTo(backStackEntry.destination.id) { inclusive = true }
+                    }
+                }
             )
         }
         

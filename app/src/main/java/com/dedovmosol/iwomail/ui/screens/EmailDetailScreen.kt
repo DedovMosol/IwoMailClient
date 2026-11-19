@@ -83,7 +83,9 @@ fun EmailDetailScreen(
     onBackClick: () -> Unit,
     onReplyClick: () -> Unit,
     onForwardClick: () -> Unit = {},
-    onComposeToEmail: (String) -> Unit = {}
+    onComposeToEmail: (String) -> Unit = {},
+    /** Синхронизация перенесла письмо под другой id: открыть его вместо этого экрана (нет — просто назад). */
+    onReopen: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
@@ -300,6 +302,7 @@ fun EmailDetailScreen(
     // пересоздания Activity, поэтому читаем актуальные значения через rememberUpdatedState.
     val currentIsRussian by rememberUpdatedState(isRussian)
     val onBackLatest by rememberUpdatedState(onBackClick)
+    val onReopenLatest by rememberUpdatedState(onReopen)
     val readReceiptSentText by rememberUpdatedState(Strings.readReceiptSent)
     val readReceiptNotDeclinedText by rememberUpdatedState(Strings.readReceiptNotDeclined)
     val unsubscribedText by rememberUpdatedState(Strings.unsubscribed)
@@ -319,6 +322,7 @@ fun EmailDetailScreen(
                 EmailDetailEvent.ReadReceiptSent -> SafeToast.short(context, readReceiptSentText)
                 EmailDetailEvent.ReadReceiptNotDeclined -> SafeToast.long(context, readReceiptNotDeclinedText)
                 EmailDetailEvent.DeletedOnServer -> SafeToast.short(context, if (ru) "Письмо удалено на сервере" else "Email deleted on server")
+                is EmailDetailEvent.Reopen -> onReopenLatest?.invoke(event.emailId) ?: onBackLatest()
                 EmailDetailEvent.NoBodyFromServer -> SafeToast.long(context, if (ru) "Сервер не вернул текст письма. Откройте его через Outlook Web Access." else "Server returned no message body. Try opening this email in Outlook Web Access.")
                 is EmailDetailEvent.Error -> SafeToast.long(context, NotificationStrings.localizeError(event.message, ru))
                 EmailDetailEvent.Unsubscribed -> SafeToast.short(context, unsubscribedText)

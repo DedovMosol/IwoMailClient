@@ -166,6 +166,37 @@ class OfflineMailChangesTest {
     }
 
     @Test
+    fun `object not found (Status 8) keeps the star and queues it instead of rolling back`() = runBlocking<Unit> {
+        // Exchange 2007: Change сразу после SyncKey=0 получает 8 — сервер ещё не знает id, это не отказ во флаге
+        val id = email()
+        coEvery { client.setFlag(any(), any(), any(), any()) } returns EasResult.Success(FlagWrite("K2", applied = null, changeStatus = 8))
+
+        val result = ops.toggleFlag(id)
+
+        assertThat(result).isEqualTo(EasResult.Success(true))
+        assertThat(stored(id).flagged).isTrue()
+        assertThat(pending(id)!!.flag).isTrue()
+        assertThat(key(inbox)).isEqualTo("K2")
+    }
+
+    @Test
+    fun `with no sync key the star and read state wait - no Sync(0) that would renumber the folder`() = runBlocking<Unit> {
+        val id = email(read = false)
+        db.folderDao().updateSyncKey(inbox, "0")
+
+        assertThat(ops.toggleFlag(id)).isEqualTo(EasResult.Success(true))
+        assertThat(ops.markAsRead(id, true)).isEqualTo(EasResult.Success(true))
+
+        assertThat(stored(id).flagged).isTrue()
+        assertThat(stored(id).read).isTrue()
+        assertThat(pending(id)!!.flag).isTrue()
+        assertThat(pending(id)!!.read).isTrue()
+        coVerify(exactly = 0) { client.sync(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { client.setFlag(any(), any(), any(), any()) }
+        assertThat(key(inbox)).isEqualTo("0")
+    }
+
+    @Test
     fun `server-adjusted flag (today's dates) is what the database keeps`() = runBlocking<Unit> {
         val id = email()
         val dated = MailFlag.due(5_000L, 5_000L)

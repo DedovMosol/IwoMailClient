@@ -40,7 +40,12 @@ class LocalOverlayAndFlagPolicyTest {
         assertThat(isChangeRejected("Exception: markAsRead failed: Change Status=5")).isTrue()
         assertThat(isChangeRejected("Exception: setFlag failed: Collection Status=6")).isTrue()
         assertThat(isChangeRejected("Exception: setFlag failed: Collection Status=4")).isTrue()
-        assertThat(isChangeRejected("Exception: markAsReadBatch failed: Collection Status=8")).isTrue()
+        // Объект не найден (8): Exchange 2007 после SyncKey=0 ещё не знает id — отправить позже, не откатывать
+        assertThat(isChangeRejected("Exception: markAsReadBatch failed: Collection Status=8")).isFalse()
+        assertThat(isChangeRejected("Exception: markAsRead failed: Change Status=8")).isFalse()
+        assertThat(isRejectingChangeStatus(8)).isFalse()
+        assertThat(isRejectingChangeStatus(6)).isTrue()
+        assertThat(isRejectingChangeStatus(7)).isTrue()
         // Устаревший ключ, иерархия папок, сбой сервера, HTTP, сеть — отправить позже
         assertThat(isChangeRejected("Exception: setFlag failed: Collection Status=3")).isFalse()
         assertThat(isChangeRejected("Exception: setFlag failed: Collection Status=12")).isFalse()

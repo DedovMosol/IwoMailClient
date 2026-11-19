@@ -85,7 +85,12 @@ internal suspend fun syncWithRetry(
     // Отказ авторизации/политики/TLS полный resync не лечит, а лишний вход с неверным паролем
     // приближает блокировку учётной записи в AD. Не уложились во время — тоже нет: SyncKey
     // сохраняется постранично, следующий запуск продолжит, а полный resync начал бы с нуля.
-    if (allowFullResync && !failure.connectionLevel && !failure.deterministic && !failure.isTimeout) {
+    // Полный resync — только когда сломано само состояние синхронизации (Status 3/12, неверный SyncKey). На Exchange 2007
+    // он раздаёт ServerId заново, а «синхронизация уже идёт», ошибка сервера или разбора им не лечатся: сброс ключа
+    // на каждую такую ошибку перенумеровывал письма папки, пока другая синхронизация ещё работала.
+    if (allowFullResync && !failure.connectionLevel && !failure.deterministic && !failure.isTimeout &&
+        needsFullResync(failure.message)
+    ) {
         android.util.Log.w(tag, "Incremental sync failed (${failure.summary}), trying full resync")
         failure = attempt(fullResyncTimeoutMs) { sync(true) }
             ?: return reportSuccess(accountId, hasAlternate, usedFallback = startedOnFallback)
@@ -130,6 +135,14 @@ suspend fun <T> withEndpointFailover(
     if (!failover.hasAlternateUrl(accountId) || !failover.switchToOtherEndpoint(accountId, startedOnFallback)) return result
     return request()
 }
+
+private val SYNC_STATE_ERROR = Regex(
+    "INVALID_SYNCKEY|неверный SyncKey|слишком много попыток|status\\s*=?\\s*(3|12)\\b",
+    RegexOption.IGNORE_CASE
+)
+
+/** [MS-ASCMD] Sync Status 3 (неверный SyncKey) и 12 (иерархия папок изменилась): клиент должен начать с SyncKey=0. */
+internal fun needsFullResync(message: String?): Boolean = message != null && SYNC_STATE_ERROR.containsMatchIn(message)
 
 /** Неудачная попытка: текст ошибки, исключение или таймаут всей попытки (оба null). */
 private class SyncFailure(val message: String?, val exception: Throwable?) {

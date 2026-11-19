@@ -302,6 +302,16 @@ class MailRepository(private val context: Context) {
     }
 
     /**
+     * Id записи того же письма, что [email], под другим ServerId (синхронизация сменила id: Exchange 2007 после
+     * SyncKey=0 нумерует письма заново). null — такой нет или их несколько.
+     */
+    suspend fun findSameEmailId(email: EmailEntity): String? =
+        emailDao.findSameItemIds(
+            email.folderId, email.subject, email.from,
+            email.dateReceived - SAME_EMAIL_WINDOW_MS, email.dateReceived + SAME_EMAIL_WINDOW_MS, email.id
+        ).singleOrNull()
+
+    /**
      * Записывает тело письма в БД (обёртка над DAO, единая точка записи — инвариант проекта).
      * Используется ComposeViewModel при открытии черновика: после резолвинга
      * `cid:` → `data:` тело самодостаточно и не требует повторного сетевого
@@ -1073,3 +1083,5 @@ if (result is EasResult.Success) {
 
 /** Ключа «Черновиков» нет (папка ещё не синхронизировалась): EAS Delete не отправить. */
 private const val DRAFT_SYNC_KEY_ZERO = "SyncKey is 0"
+/** Окно даты для [MailRepository.findSameEmailId]: та же, что у сверки Add с записью ([EmailSyncService.sameServerItem]). */
+private const val SAME_EMAIL_WINDOW_MS = 2_000L

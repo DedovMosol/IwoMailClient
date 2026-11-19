@@ -83,15 +83,20 @@ class LiveExchangeTest {
         return folders.first { it.type == FolderType.INBOX }.serverId
     }
 
+    /** Письма последнего [fullPass] по ServerId. */
+    private val lastPass = HashMap<String, com.dedovmosol.iwomail.eas.EasEmail>()
+
     /** Полный проход синхронизации папки с нуля: ServerId всех писем в порядке выдачи сервером. */
     private suspend fun fullPass(collectionId: String, stopAfterPages: Int = Int.MAX_VALUE): Pair<List<String>, String> {
         var key = (client.sync(collectionId, "0", 50) as EasResult.Success).data.syncKey
         val ids = mutableListOf<String>()
+        lastPass.clear()
         var pages = 0
         while (pages < stopAfterPages) {
             val page = (client.sync(collectionId, key, 50) as EasResult.Success).data
             key = page.syncKey
             ids += page.emails.map { it.serverId }
+            page.emails.forEach { lastPass[it.serverId] = it }
             pages++
             if (!page.moreAvailable) break
         }
@@ -109,8 +114,9 @@ class LiveExchangeTest {
         db.emailDao().insert(
             EmailEntity(
                 id = id, accountId = accountId, folderId = "${accountId}_$inbox", serverId = last,
-                from = "x@live.test", to = "y@live.test", subject = "live-${System.nanoTime()}", body = "",
-                dateReceived = 1L, read = true
+                // Запись — о том же письме, что под этим id на сервере: тело другого письма сервис не запишет
+                from = lastPass.getValue(last).from, to = "y@live.test", subject = lastPass.getValue(last).subject, body = "",
+                dateReceived = EmailSyncService.parseDate(lastPass.getValue(last).dateReceived), read = true
             )
         )
         val service = EmailOperationsService(context, db, db.folderDao(), db.emailDao(), db.attachmentDao(), accountRepo, mockk(relaxed = true))

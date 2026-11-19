@@ -312,6 +312,14 @@ interface EmailDao {
     @Query("UPDATE emails SET body = :body WHERE id = :id")
     suspend fun updateBody(id: String, body: String)
 
+    /** Записи того же письма (папка, тема, отправитель, дата в окне) кроме [excludeId] — до двух: больше одной — неоднозначно. */
+    @Query("SELECT id FROM emails WHERE folderId = :folderId AND subject = :subject AND `from` = :fromEmail AND dateReceived BETWEEN :dateFrom AND :dateTo AND id != :excludeId LIMIT 2")
+    suspend fun findSameItemIds(folderId: String, subject: String, fromEmail: String, dateFrom: Long, dateTo: Long, excludeId: String): List<String>
+
+    /** Запись [id] всё ещё о том же письме (тема, отправитель, дата) — не переписана синхронизацией под другое. */
+    @Query("SELECT COUNT(*) FROM emails WHERE id = :id AND subject = :subject AND `from` = :fromEmail AND dateReceived = :dateReceived")
+    suspend fun countSameItem(id: String, subject: String, fromEmail: String, dateReceived: Long): Int
+
     @Query("UPDATE emails SET preview = :preview WHERE id = :id")
     suspend fun updatePreview(id: String, preview: String)
 

@@ -9,11 +9,13 @@ import com.dedovmosol.iwomail.data.database.AttachmentEntity
 import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.repository.AccountRepository
 import com.dedovmosol.iwomail.data.repository.MailRepository
+import com.dedovmosol.iwomail.data.repository.RepositoryErrors
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.data.repository.isFlagRejected
 import com.dedovmosol.iwomail.domain.ReadReceipts
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
+import com.dedovmosol.iwomail.eas.XmlUtils
 import com.dedovmosol.iwomail.ui.screens.emaildetail.EmailDetailActions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -101,6 +103,8 @@ sealed interface EmailDetailEvent {
     data object ReadReceiptSent : EmailDetailEvent
     data object ReadReceiptNotDeclined : EmailDetailEvent
     data object DeletedOnServer : EmailDetailEvent
+    /** Синхронизация перенесла письмо под другой id ([emailId]): открыть его вместо этого экрана. */
+    data class Reopen(val emailId: String) : EmailDetailEvent
     data object NoBodyFromServer : EmailDetailEvent
     data class Error(val message: String) : EmailDetailEvent
     data object Unsubscribed : EmailDetailEvent
@@ -185,12 +189,13 @@ class EmailDetailViewModel(
                     combine(emailFlow, attachmentsFlow, foldersFlow) { email, attachments, folders ->
                         Triple(email, attachments, folders)
                     }.collect { (email, attachments, folders) ->
-                        onEmailPresence(email != null)
                         val currentFolder = folders.find { it.id == email?.folderId }
+                        // Запись пропала или теперь о другом письме — на экране не показывать (null)
+                        val shown = onEmailPresence(email, isDraft = currentFolder?.type == FolderType.DRAFTS)
                         _uiState.update {
                             it.copy(
-                                email = email,
-                                attachments = attachments,
+                                email = shown,
+                                attachments = if (shown != null) attachments else emptyList(),
                                 folders = folders,
                                 isInTrash = currentFolder?.type == FolderType.DELETED_ITEMS,
                                 isInSent = currentFolder?.type == FolderType.SENT_ITEMS,
@@ -211,9 +216,73 @@ class EmailDetailViewModel(
     /** Свои операции, после которых письма может не стать (перенос, удаление): закрывают экран сами. */
     private var localOps = 0
 
-    private fun onEmailPresence(present: Boolean) {
-        if (present) emailSeen = true
-        else if (emailSeen && localOps == 0) closeAsDeletedOnServer()
+    /** Открытое письмо (без тела): тема, отправитель, дата — по ним видно, что запись теперь о другом письме. */
+    private var opened: EmailEntity? = null
+    /** Запись пропала или переписана под другое письмо: ищем то же письмо под новым id ([reopenOrClose]). */
+    private var identityLost = false
+
+    /**
+     * Что показать на экране из записи [email]. Exchange 2007 после SyncKey=0 нумерует письма папки заново:
+     * синхронизация переносит письмо под другой id, а под прежним id может оказаться другое письмо. И то и другое —
+     * не удаление: экран открывает то же письмо по новому id. Черновик правится на устройстве (тема, время) — у него
+     * только исчезновение записи.
+     */
+    private fun onEmailPresence(email: EmailEntity?, isDraft: Boolean): EmailEntity? {
+        if (identityLost) return null
+        if (email == null) {
+            if (emailSeen && localOps == 0) reopenOrClose()
+            return null
+        }
+        val seen = opened
+        if (seen != null && !isDraft && localOps == 0 && !sameMessage(seen, email)) {
+            reopenOrClose()
+            return null
+        }
+        emailSeen = true
+        opened = email.copy(body = "")
+        return email
+    }
+
+    /** Сущности XML не в счёт: разовая починка БД ([MailRepository.syncEmails]) раскрывает их в той же записи. */
+    private fun sameMessage(a: EmailEntity, b: EmailEntity): Boolean =
+        kotlin.math.abs(a.dateReceived - b.dateReceived) <= SAME_MESSAGE_WINDOW_MS &&
+            sameText(a.from, b.from) && sameText(a.subject, b.subject)
+
+    private fun sameText(a: String, b: String) = a == b || XmlUtils.unescape(a) == XmlUtils.unescape(b)
+
+    /**
+     * То же письмо под другим id — открыть его ([EmailDetailEvent.Reopen]), нет — «удалено на сервере». Пока
+     * синхронизация папки идёт, письмо может прийти позже в ней же: ждём её (не дольше [REOPEN_WAIT_MS]).
+     */
+    private fun reopenOrClose(fallback: EmailEntity? = null) {
+        if (closed || identityLost) return
+        identityLost = true
+        val target = opened ?: fallback ?: return closeAsDeletedOnServer()
+        viewModelScope.launch {
+            val newId = try {
+                withContext(ioDispatcher) { findMovedEmail(target) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("EmailDetailViewModel", "Lookup of the same email failed: ${e.message}")
+                null
+            }
+            if (newId == null) {
+                closeAsDeletedOnServer()
+            } else if (!closed) {
+                closed = true
+                sendEvent(EmailDetailEvent.Reopen(newId))
+            }
+        }
+    }
+
+    private suspend fun findMovedEmail(target: EmailEntity): String? {
+        repeat((REOPEN_WAIT_MS / REOPEN_POLL_MS).toInt()) {
+            actions.findSameEmailId(target)?.takeIf { it.isNotBlank() }?.let { return it }
+            if (!actions.isFolderSyncing(target.folderId)) return null
+            kotlinx.coroutines.delay(REOPEN_POLL_MS)
+        }
+        return actions.findSameEmailId(target)?.takeIf { it.isNotBlank() }
     }
 
     private fun navigateBackOnce() {
@@ -398,16 +467,19 @@ class EmailDetailViewModel(
                     }
                 }
                 is EasResult.Error -> {
-                    if (result.message == "OBJECT_NOT_FOUND") {
+                    if (result.message == "OBJECT_NOT_FOUND" || result.message == RepositoryErrors.ITEM_MISMATCH) {
                         // PROTO-08: Status 6 — письмо удалено на сервере ИЛИ ещё не пришло в идущей полной
                         // синхронизации папки. Различает только синхронизация: удалённое она убирает из БД,
                         // остальное возвращает. Поэтому — один проход синхронизации и повторная загрузка.
+                        // ITEM_MISMATCH — под id письма на сервере другое письмо: синхронизация будет полной и
+                        // перепишет записи, а экран откроет это письмо под новым id (onEmailPresence).
                         val retry = if (withContext(ioDispatcher) { actions.getEmailSync(emailId) } != null) {
                             actions.syncAndReloadBody(emailId, current.accountId, current.folderId)
                         } else null
                         val fresh = withContext(ioDispatcher) { actions.getEmailSync(emailId) }
                         when {
-                            fresh == null -> closeAsDeletedOnServer()
+                            identityLost || closed -> Unit
+                            fresh == null || !sameMessage(current, fresh) -> reopenOrClose(fallback = current)
                             retry is EasResult.Success && fresh.body.isBlank() ->
                                 _uiState.update { it.copy(bodyLoadError = BodyLoadError.NoBodyFromServer) }
                             retry is EasResult.Success -> Unit
@@ -712,6 +784,12 @@ class EmailDetailViewModel(
     }
 
     companion object {
+        /** Та же дата, что у сверки записи с Add ([com.dedovmosol.iwomail.data.repository.EmailSyncService.sameServerItem]). */
+        private const val SAME_MESSAGE_WINDOW_MS = 2_000L
+        /** Сколько ждать идущую синхронизацию папки, прежде чем признать письмо удалённым. */
+        private const val REOPEN_WAIT_MS = 30_000L
+        private const val REOPEN_POLL_MS = 500L
+
         fun provideFactory(
             application: Application,
             emailId: String

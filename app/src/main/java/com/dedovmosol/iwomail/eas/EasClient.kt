@@ -2987,6 +2987,10 @@ data class EmailBodyResult(
     // получены, отписки нет; null — заголовки не запрашивались или не пришли (спросить позже)
     val listUnsubscribe: String? = null,
     val listUnsubscribeOneClick: Boolean = false,
-    val inReplyTo: String? = null
+    val inReplyTo: String? = null,
+    // Свойства элемента из ответа ItemOperations (EAS): тема и DateReceived как прислал сервер; null — не прислал.
+    // По ним проверяется, что под ServerId всё ещё то же письмо ([com.dedovmosol.iwomail.data.repository.bodyBelongsTo])
+    val itemSubject: String? = null,
+    val itemDateReceived: String? = null
 )
 

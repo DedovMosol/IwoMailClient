@@ -352,12 +352,21 @@ A star/flag change is written to the DB immediately, then sent to the server as 
 
 #### Offline changes (`pending_email_changes` → `PendingMailChangesWorker`)
 
-Only an explicit rejection of the change itself rolls it back (`isChangeRejected`): `Change Status=N`, or collection Status 4/6/7/8. A stale SyncKey (3), a changed folder hierarchy (12), a server error (5), HTTP errors and no connection keep the local value, mark it in `pending_email_changes` and return success: the star does not disappear, and a message read offline does not become unread again.
+Only an explicit rejection of the change itself rolls it back (`isChangeRejected`): `Change Status=N` (except 8), or collection Status 4/6/7. Status 8 ("object not found") is not a rejection: Exchange 2007 answers a Change with it right after a `SyncKey=0` reset, until the message is sent again (verified on the server); the change waits in the queue. With no key (`"0"`, the folder waits for a full sync) the change also waits: getting a key with `Sync(SyncKey=0)` would reset the sync state on the server. A stale SyncKey (3), a changed folder hierarchy (12), a server error (5), HTTP errors and no connection keep the local value, mark it in `pending_email_changes` and return success: the star does not disappear, and a message read offline does not become unread again.
 
 - `PendingMailChangesWorker` is unique work (`ExistingWorkPolicy.KEEP`) with the `NetworkType.CONNECTED` constraint, exponential backoff starting at 30 s and at most 20 attempts. It sends through the same path as a tap (`EmailOperationsService.retryPendingFlag`/`retryPendingRead` via `PendingMailChanges.flush`, which also picks up edits made during the run).
 - `KEEP` is deliberate: a failed send inside the worker enqueues nothing again, so there is no loop without a pause; leftovers are retried with backoff. After 20 failed attempts the queue stays in the DB, and `enqueueIfPending` is called from `SyncWorker` and `MailApplication`.
 - While a field waits, sync does not overwrite it: `EmailDao.updateReadStatusFromServer` and `updateFlagFromServer` (through `EmailFlags.saveServerFlag`) contain a `NOT EXISTS` condition on the queue.
 - On a ServerId change of the message (EAS 12.1 after `SyncKey=0`) the queue entry moves with it: `PendingEmailChangeDao.rename`.
+
+#### ServerId renumbering on Exchange 2007
+
+Exchange 2007 (EAS 12.1) gives ServerIds in the order the sync state sends the messages (`2:1`, `2:2`…). After `SyncKey=0` the numbers are given again: with no mailbox changes the layout is the same, but a new or deleted message shifts the numbers of every message after it (`LiveServerIdProbeTest`). A DB row left from the old layout then names another message with its id. Protection:
+
+- **Fewer resets.** `syncWithRetry` does a full resync only when the sync state is broken (`needsFullResync`: `INVALID_SYNCKEY`, Status 3/12), not on "sync already running" or a server error. The star and read state never send `Sync(SyncKey=0)` when the key is `"0"`.
+- **Add checked against the row.** `processNewEmailsBatch`: an Add with the id of an existing row but about another message (`EmailSyncService.sameServerItem`: the server's Message-ID, otherwise subject, sender and time ±2 s) rewrites the row (`replaceRemappedRows`): metadata, flag and attachments come from the server, waiting edits are dropped. The body and Message-ID come from the row of the same message in the same batch (the numbers shifted); otherwise the body loads on open.
+- **Only the message's own body.** The ItemOperations response carries the item's subject and `DateReceived` (`EmailBodyResult.itemSubject`/`itemDateReceived`). `loadEmailBody` and `prefetchEmailBodies` compare them with the row (`bodyBelongsTo`); on a mismatch the body is not written, the error is `ITEM_MISMATCH`, the folder is marked (`markServerIdsStale`) and its next sync is a full one (at most once per 15 minutes per folder). Load results (body, attachments, unsubscribe) are written in a transaction and only if the row is still about the same message (`writeIfSameItem`).
+- **Message screen.** `EmailDetailViewModel` remembers the opened message. If the row is gone or now describes another message, the screen does not show it, looks for the same message under a new id (`MailRepository.findSameEmailId`, waiting up to 30 s for a running folder sync) and opens it (`EmailDetailEvent.Reopen`); if nothing is found it says "Email deleted on server".
 
 #### Permanent delete
 

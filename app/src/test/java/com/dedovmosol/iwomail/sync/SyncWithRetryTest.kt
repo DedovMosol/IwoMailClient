@@ -186,6 +186,36 @@ class SyncWithRetryTest {
     }
 
     @Test
+    fun `sync already running or a server error does not reset the SyncKey`() {
+        // Exchange 2007 после SyncKey=0 нумерует письма папки заново (проверено на сервере): полный resync на любую
+        // ошибку перенумеровывал письма, пока другая синхронизация ещё шла
+        for (message in listOf(
+            "Синхронизация уже выполняется",
+            "Ошибка синхронизации папки: status=5",
+            "HTTP 500: Internal Server Error",
+            "Папка не найдена"
+        )) {
+            AccountServerHealthRepository.reset()
+            val sync = ScriptedSync(EasResult.Error(message))
+            run(FakeFailover(), sync)
+            assertThat(sync.forceFullCalls).doesNotContain(true)
+        }
+    }
+
+    @Test
+    fun `full resync is for a broken sync state only`() {
+        assertThat(needsFullResync("INVALID_SYNCKEY")).isTrue()
+        assertThat(needsFullResync("Ошибка синхронизации: неверный SyncKey после retry")).isTrue()
+        assertThat(needsFullResync("Ошибка синхронизации папки: status=3")).isTrue()
+        assertThat(needsFullResync("Sync failed: Status=12")).isTrue()
+        assertThat(needsFullResync("Синхронизация уже выполняется")).isFalse()
+        assertThat(needsFullResync("Ошибка синхронизации папки: status=5")).isFalse()
+        assertThat(needsFullResync("HTTP 302 Found")).isFalse()
+        assertThat(needsFullResync("Status=30")).isFalse()
+        assertThat(needsFullResync(null)).isFalse()
+    }
+
+    @Test
     fun `cancellation is never swallowed`() {
         assertThrows(CancellationException::class.java) {
             runBlocking {

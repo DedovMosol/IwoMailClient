@@ -15,6 +15,11 @@ object RepositoryErrors {
     const val FLAG_REJECTED = "Сервер не принял флаг"
     /** Правки без связи ещё не отправлены, а операции нужно, чтобы сервер их уже знал (корзина, сброс). */
     const val PENDING_CHANGES_NOT_SENT = "Изменения, сделанные без связи, ещё не отправлены на сервер"
+    /**
+     * Под ServerId письма на сервере теперь другое письмо (Exchange 2007 перенумеровал письма папки после SyncKey=0):
+     * тело не сохранено, папка помечена для полной синхронизации, которая перепишет устаревшие записи. Код, не текст.
+     */
+    const val ITEM_MISMATCH = "ITEM_MISMATCH"
     
     // Exchange-only features
     const val TASKS_EXCHANGE_ONLY = "Задачи поддерживаются только для Exchange"

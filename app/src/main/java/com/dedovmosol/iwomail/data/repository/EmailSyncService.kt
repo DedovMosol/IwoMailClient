@@ -110,6 +110,44 @@ class EmailSyncService(
             return one
         }
 
+        /**
+         * Запись и Add с тем же ServerId — одно письмо: тот же Message-ID, если он известен у обоих, иначе та же тема,
+         * отправитель и время получения (±2 с). Нет — сервер отдал этот ServerId другому письму (Exchange 2007 после
+         * SyncKey=0). Тема черновика меняется при правке, поэтому у черновиков сравниваются отправитель и время.
+         */
+        internal fun sameServerItem(existing: EmailEntity, incoming: EmailEntity, draft: Boolean = false): Boolean {
+            val a = com.dedovmosol.iwomail.eas.EwsMailMatch.normalizeMessageId(existing.internetMessageId)
+            val b = com.dedovmosol.iwomail.eas.EwsMailMatch.normalizeMessageId(incoming.internetMessageId)
+            if (a != null && b != null) return a == b
+            val sameTime = kotlin.math.abs(existing.dateReceived - incoming.dateReceived) < 2_000L
+            if (draft) return sameTime || existing.subject == incoming.subject
+            return sameTime && existing.subject == incoming.subject && existing.from == incoming.from
+        }
+
+        /** Папки, где под ServerId записи сервер отдаёт другое письмо: id → когда замечено. */
+        private val staleServerIdFolders = java.util.concurrent.ConcurrentHashMap<String, Long>()
+        /** Когда папку в последний раз ресинхронизировали из-за этого: не чаще [STALE_RESYNC_COOLDOWN_MS]. */
+        private val staleResyncAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+        private const val STALE_RESYNC_COOLDOWN_MS = 15 * 60_000L
+
+        /**
+         * Записи папки [folderId] устарели: сервер под их ServerId отдаёт другие письма (тело или свойства из
+         * ItemOperations не совпали). Следующая синхронизация папки будет полной — Add-ы перепишут такие записи
+         * ([sameServerItem]).
+         */
+        internal fun markServerIdsStale(folderId: String) {
+            staleServerIdFolders[folderId] = System.currentTimeMillis()
+        }
+
+        /** Нужна ли полная синхронизация из-за [markServerIdsStale]; true — один раз за [STALE_RESYNC_COOLDOWN_MS]. */
+        internal fun takeStaleResync(folderId: String, now: Long = System.currentTimeMillis()): Boolean {
+            if (staleServerIdFolders.remove(folderId) == null) return false
+            val last = staleResyncAt[folderId]
+            if (last != null && now - last < STALE_RESYNC_COOLDOWN_MS) return false
+            staleResyncAt[folderId] = now
+            return true
+        }
+
         /** Несколько старых записей в окне ±2 с — не угадывать, входящий Add не вставлять. */
         internal fun ambiguousServerIdHits(incoming: EmailDedupInfo, sameSubjectFrom: List<EmailDedupInfo>): Boolean {
             val hits = sameSubjectFrom.count { existing ->
@@ -199,6 +237,23 @@ class EmailSyncService(
         }
 
         private val tzColonRegex = Regex("([+-])(\\d{2}):(\\d{2})$")
+
+        /** Дата EAS (DateReceived и т. п.) в мс; 0 — пусто или не разобрать. */
+        internal fun parseDate(dateStr: String): Long {
+            if (dateStr.isEmpty()) return 0L
+            return try {
+                var cleaned = dateStr.replace("Z", "+0000")
+                cleaned = cleaned.replace(tzColonRegex, "$1$2$3")
+                val formatters = threadLocalDateFormats.get()!!
+                for (sdf in formatters) {
+                    try {
+                        val date = sdf.parse(cleaned)
+                        if (date != null) return date.time
+                    } catch (_: Exception) {}
+                }
+                0L
+            } catch (_: Exception) { 0L }
+        }
 
         fun initDeletedTracker(context: Context) = deletedTracker.init(context)
 
@@ -683,7 +738,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             // ручной sync) могли обнулить ключ ВНЕ секции и разъехаться по SyncKey на EAS 12.1
             // (Exchange 2007 SP2: ServerId могут меняться после SyncKey=0). Только на первичном
             // вызове (retryCount==0); рекурсивный ресинк по Status 3/12 управляет ключом сам.
-            if (forceFullSync && retryCount == 0) {
+            if (retryCount == 0 && (forceFullSync || takeStaleResync(folderId))) {
                 folderDao.updateSyncKey(folderId, "0")
             }
 
@@ -742,8 +797,9 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             val includeMime = folder.type == FolderType.SENT_ITEMS && !isFullResync
 
             if (syncKey == "0") {
-                // Через шлюз папки: локальное изменение с ключом "0" (ensureValidSyncKey) не сбросит состояние
-                // синхронизации на сервере между этим запросом и сохранением ключа.
+                // Через шлюз папки: локальное изменение (флаг, «прочитано») не уйдёт между этим запросом и
+                // сохранением ключа. Сервер знает только уже выданные id, и каждый батч обработан под шлюзом до
+                // следующего Change: запись к этому моменту названа своим письмом, невыданный id получит Status 8.
                 val initResult = FolderSyncGate.withFolder(folderId) {
                     client.sync(folder.serverId, "0", windowSize, false).also { response ->
                         if (response is EasResult.Success && isProcessableSyncStatus(response.data.status)) {
@@ -982,11 +1038,36 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
 
         val emailEntities = buildEmailEntities(syncData, accountId, folderId, folder, existingEmailsMap)
 
+        // Exchange 2007 (EAS 12.x): ServerId — порядковый номер в выдаче состояния синхронизации ("2:1", "2:2"…).
+        // После сброса (SyncKey=0) номера раздаются заново, и новое или удалённое письмо сдвигает их у всех
+        // (проверено на сервере). Add с id существующей записи, но о другом письме — запись устарела: под этим id
+        // на сервере теперь это письмо. Без перезаписи строка показывала бы прежние тему и отправителя, а тело,
+        // флаг и вложения грузились бы от другого письма.
+        // Message-ID сравнивается серверный: buildEmailEntities подставляет локальный, если сервер его не прислал
+        // (Exchange 2007 в Sync не присылает), и сравнение с самим собой всегда совпало бы.
+        val serverMessageIds = syncData.emails.associate {
+            "${accountId}_${it.serverId}" to it.internetMessageId?.takeIf { id -> id.isNotBlank() }
+        }
+        val isDraftFolder = folder.type == FolderType.DRAFTS
+        val remapped = emailEntities.mapNotNull { built ->
+            val existing = existingEmailsMap[built.id] ?: return@mapNotNull null
+            val incoming = built.copy(internetMessageId = serverMessageIds[built.id])
+            incoming.takeUnless { sameServerItem(existing, it, draft = isDraftFolder) }
+        }
+        if (remapped.isNotEmpty()) {
+            replaceRemappedRows(remapped, existingEmailsMap, syncData, accountId, folder)
+        }
+        val remappedIds = remapped.mapTo(HashSet()) { it.id }
+
         if (folder.type == FolderType.DRAFTS && existingIds.isNotEmpty()) {
-            updateExistingDraftBodies(syncData, accountId, existingIds, existingEmailsMap)
+            updateExistingDraftBodies(syncData, accountId, existingIds.filter { it !in remappedIds }, existingEmailsMap)
         }
 
-        val newEmails = emailEntities.filter { it.id !in existingIds }
+        // Номера сдвинулись: письмо, которое было в батче под другим id, приходит новым — тело берётся оттуда
+        val newEmails = emailEntities.filter { it.id !in existingIds }.let { list ->
+            if (remapped.isEmpty() || isDraftFolder) list
+            else list.map { e -> if (e.body.isBlank()) withBodyOfSameMessage(e, existingEmailsMap) ?: e else e }
+        }
 
         val filteredByServerId = deduplicateByServerId(newEmails, accountId)
 
@@ -1066,6 +1147,69 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             allInserted = allInserted,
             draftReplacements = contentResult.draftReplacements,
             insertedCount = toInsert.size + migratedEasIds.size
+        )
+    }
+
+    /**
+     * Записи, чей ServerId сервер отдал другому письму ([sameServerItem]), переписываются этим письмом: тема,
+     * адреса, дата, флаг, вложения — с сервера. Тело и Message-ID — от записи этого же письма из того же батча
+     * ([previous], номера сдвинулись), иначе сбрасываются (у черновика — тело из Sync, он отдаёт его целиком) и
+     * загрузятся при открытии. Ждущие отправки правки относились к прежнему письму — снимаются, иначе флаг или
+     * «прочитано» ушли бы на чужое письмо.
+     */
+    private suspend fun replaceRemappedRows(
+        remapped: List<EmailEntity>,
+        previous: Map<String, EmailEntity>,
+        syncData: SyncResponse,
+        accountId: Long,
+        folder: FolderEntity
+    ) {
+        val serverById = syncData.emails.associateBy { "${accountId}_${it.serverId}" }
+        val isDraftFolder = folder.type == FolderType.DRAFTS
+        database.withTransaction {
+            for (entity in remapped) {
+                val server = serverById[entity.id] ?: continue
+                val draftBody = server.body.takeIf {
+                    isDraftFolder && it.isNotBlank() && !server.bodyTruncated &&
+                        it.length <= DraftUpload.MAX_LOCAL_BODY_CHARS
+                }.orEmpty()
+                // Черновики не переносятся: их тело приходит в Sync, а правка на устройстве меняет тему и время
+                val carried = if (isDraftFolder) null else withBodyOfSameMessage(entity.copy(body = ""), previous)
+                attachmentDao.deleteByEmail(entity.id)
+                database.pendingEmailChangeDao().delete(entity.id)
+                emailDao.delete(entity.id)
+                emailDao.insert(carried ?: entity.copy(body = draftBody))
+                if (server.attachments.isNotEmpty()) {
+                    attachmentDao.insertAll(server.attachments.map { att ->
+                        AttachmentEntity(
+                            emailId = entity.id,
+                            fileReference = att.fileReference,
+                            displayName = att.displayName,
+                            contentType = att.contentType,
+                            estimatedSize = att.estimatedSize,
+                            isInline = att.effectiveIsInline,
+                            contentId = att.contentId
+                        )
+                    })
+                }
+            }
+        }
+        android.util.Log.w("EmailSync", "ServerIds reassigned by the server: ${remapped.size} rows rewritten in ${folder.id}")
+    }
+
+    /**
+     * [entity] с телом записи того же письма ([sameServerItem]) из [previous] — до перенумерации оно было под другим
+     * id. null — такой записи нет или у неё нет тела.
+     */
+    private fun withBodyOfSameMessage(entity: EmailEntity, previous: Map<String, EmailEntity>): EmailEntity? {
+        val source = previous.values.firstOrNull {
+            it.id != entity.id && it.body.isNotBlank() && sameServerItem(it, entity)
+        } ?: return null
+        return entity.copy(
+            body = source.body,
+            bodyType = source.bodyType,
+            internetMessageId = entity.internetMessageId ?: source.internetMessageId,
+            inReplyTo = source.inReplyTo
         )
     }
 
@@ -1997,22 +2141,6 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         } catch (e: Exception) {
             0L
         }
-    }
-
-    private fun parseDate(dateStr: String): Long {
-        if (dateStr.isEmpty()) return 0L
-        return try {
-            var cleaned = dateStr.replace("Z", "+0000")
-            cleaned = cleaned.replace(tzColonRegex, "$1$2$3")
-            val formatters = threadLocalDateFormats.get()!!
-            for (sdf in formatters) {
-                try {
-                    val date = sdf.parse(cleaned)
-                    if (date != null) return date.time
-                } catch (_: Exception) {}
-            }
-            0L
-        } catch (_: Exception) { 0L }
     }
 
     /**

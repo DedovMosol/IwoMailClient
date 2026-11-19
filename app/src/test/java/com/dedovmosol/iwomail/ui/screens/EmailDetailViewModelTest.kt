@@ -185,6 +185,94 @@ class EmailDetailViewModelTest {
         assertThat(vm.uiState.value.email).isNull()
     }
 
+    // ===================== Exchange 2007 перенумеровал папку: то же письмо под новым id =====================
+
+    @Test
+    fun `email moved under a new id by a resync is reopened, not reported deleted`() = runTest(dispatcher) {
+        val flow = kotlinx.coroutines.flow.MutableStateFlow<EmailEntity?>(email())
+        every { mailRepo.getEmail(EMAIL_ID) } returns flow
+        coEvery { actions.findSameEmailId(any()) } returns "acc_msg9"
+        val vm = createViewModel()
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        flow.value = null
+        advanceUntilIdle()
+
+        assertThat(events).containsExactly(EmailDetailEvent.Reopen("acc_msg9"))
+    }
+
+    @Test
+    fun `row rewritten to another message is never shown and the original message is reopened`() = runTest(dispatcher) {
+        val flow = kotlinx.coroutines.flow.MutableStateFlow<EmailEntity?>(email())
+        every { mailRepo.getEmail(EMAIL_ID) } returns flow
+        coEvery { actions.findSameEmailId(match { it.subject == "s" && it.from == "a@b.c" }) } returns "acc_msg9"
+        val vm = createViewModel()
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        flow.value = email(body = "<p>чужое</p>").copy(subject = "Отчёт.xlsx", from = "hr@corp.example", dateReceived = 3_600_000L)
+        advanceUntilIdle()
+
+        assertThat(vm.uiState.value.email).isNull()
+        assertThat(vm.uiState.value.attachments).isEmpty()
+        assertThat(events).containsExactly(EmailDetailEvent.Reopen("acc_msg9"))
+    }
+
+    @Test
+    fun `while the folder sync runs the screen waits for the message to come back`() = runTest(dispatcher) {
+        val flow = kotlinx.coroutines.flow.MutableStateFlow<EmailEntity?>(email())
+        every { mailRepo.getEmail(EMAIL_ID) } returns flow
+        coEvery { actions.findSameEmailId(any()) } returnsMany listOf(null, null, "acc_msg9")
+        every { actions.isFolderSyncing(INBOX_ID) } returns true
+        val vm = createViewModel()
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        flow.value = null
+        advanceUntilIdle()
+
+        assertThat(events).containsExactly(EmailDetailEvent.Reopen("acc_msg9"))
+    }
+
+    @Test
+    fun `row rewritten and the message is nowhere - deleted on server, screen closed once`() = runTest(dispatcher) {
+        val flow = kotlinx.coroutines.flow.MutableStateFlow<EmailEntity?>(email())
+        every { mailRepo.getEmail(EMAIL_ID) } returns flow
+        coEvery { actions.findSameEmailId(any()) } returns null
+        val vm = createViewModel()
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        flow.value = email().copy(subject = "Отчёт.xlsx")
+        advanceUntilIdle()
+        flow.value = null
+        advanceUntilIdle()
+
+        assertThat(events).containsExactly(EmailDetailEvent.DeletedOnServer, EmailDetailEvent.NavigateBack).inOrder()
+        assertThat(vm.uiState.value.email).isNull()
+    }
+
+    @Test
+    fun `body of another message under the id (ITEM_MISMATCH) syncs the folder, then reopens the message`() = runTest(dispatcher) {
+        val flow = kotlinx.coroutines.flow.MutableStateFlow<EmailEntity?>(email(body = ""))
+        every { mailRepo.getEmail(EMAIL_ID) } returns flow
+        coEvery { actions.getEmailSync(EMAIL_ID) } returnsMany listOf(email(body = ""), email(body = ""), email().copy(subject = "Отчёт.xlsx"))
+        coEvery { actions.loadEmailBody(EMAIL_ID) } returns EasResult.Error(com.dedovmosol.iwomail.data.repository.RepositoryErrors.ITEM_MISMATCH)
+        coEvery { actions.syncAndReloadBody(EMAIL_ID, ACCOUNT_ID, INBOX_ID) } coAnswers {
+            flow.value = email().copy(subject = "Отчёт.xlsx") // полная синхронизация переписала запись
+            EasResult.Success(Unit)
+        }
+        coEvery { actions.findSameEmailId(any()) } returns "acc_msg9"
+        val vm = createViewModel()
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { actions.syncAndReloadBody(EMAIL_ID, ACCOUNT_ID, INBOX_ID) }
+        assertThat(events).containsExactly(EmailDetailEvent.Reopen("acc_msg9"))
+        assertThat(vm.uiState.value.email).isNull()
+    }
+
     @Test
     fun `permanent deletion closes the screen once without deleted-on-server toast`() = runTest(dispatcher) {
         val flow = kotlinx.coroutines.flow.MutableStateFlow<EmailEntity?>(email())

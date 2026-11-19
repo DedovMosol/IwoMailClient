@@ -35,9 +35,14 @@ The 9 scenarios: TLS 1.0/3DES control, EAS body plus EWS fallback, certificate r
 accept-all, Status 6 during a full resync, attachments to file (PROTO-17), the EWS exception
 supplement, IMAP/POP3 sign-in on 4 ports, the sanitizer on real bodies, trust by fingerprint (ONB-08, UI2-03).
 
+`LiveServerIdProbeTest` (same variables, its own partnership) checks how Exchange 2007 numbers
+ServerIds after `SyncKey=0`: ItemOperations names the item (subject and date), a full resync of the
+app rewrites rows whose ids now name other messages, and the star through the app service never
+resets the server sync state. It sets and clears the flag of one Inbox message and restores it.
+
 ```powershell
 $env:IWO_LIVE_HOST='<host>'; $env:IWO_LIVE_DOMAIN='<domain>'; $env:IWO_LIVE_USER='<user>'; $env:IWO_LIVE_PASS='<password>'
-./gradlew testDebugUnitTest --tests "*LiveExchangeTest"
+./gradlew testDebugUnitTest --tests "*LiveExchangeTest" --tests "*LiveServerIdProbeTest"
 Remove-Item Env:IWO_LIVE_PASS
 ```
 
