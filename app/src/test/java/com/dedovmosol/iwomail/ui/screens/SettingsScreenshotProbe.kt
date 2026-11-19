@@ -16,6 +16,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.LocalLanguage
@@ -76,28 +78,35 @@ class SettingsScreenshotProbe {
 
     @Composable
     private fun Hub() = SettingsPageScaffold(title = "Настройки", onBackClick = {}) {
-        item { SettingsGroup { SettingsHubRow("Аккаунты", "user@example.com", AppIcons.Person) {} } }
+        item { SettingsGroup { HubRow("Аккаунты", "user@example.com", SettingsSearchDest.Accounts) } }
         item {
             SettingsGroup {
-                SettingsHubRow("Почта", "Цепочки, свайпы, картинки", AppIcons.Email) {}
-                SettingsHubRow("Уведомления", "Тихие часы, важные отправители", AppIcons.Notifications) {}
+                HubRow("Почта", "Цепочки, свайпы, картинки", SettingsSearchDest.Mail)
+                HubRow("Уведомления о почте", "Тихие часы, звук", SettingsSearchDest.Alerts)
             }
         }
         item {
             SettingsGroup {
-                SettingsHubRow("Оформление", "Язык, шрифт, тема", AppIcons.Palette) {}
-                SettingsHubRow("Блокировка приложения", "Пароль и отпечаток", AppIcons.Lock) {}
+                HubRow("Внешний вид", "Тема, размер текста", SettingsSearchDest.Appearance)
+                HubRow("Безопасность", "Защита входа паролем и отпечатком пальца", SettingsSearchDest.Security)
             }
         }
-        item { SettingsGroup { SettingsHubRow("О приложении", "Версия, обновления", AppIcons.Info) {} } }
+        item { SettingsGroup { HubRow("О приложении", "Версия, политика конфиденциальности", SettingsSearchDest.About) } }
+        item { SettingsInfoNote(com.dedovmosol.iwomail.ui.Strings.settingsPerAccountHint) }
     }
+
+    @Composable
+    private fun HubRow(title: String, subtitle: String, dest: SettingsSearchDest) =
+        SettingsHubRow(title, subtitle, dest.icon, dest.hue) {}
 
     @Composable
     private fun Swatch(theme: AppColorTheme, size: Int = 20) =
         Box(Modifier.size(size.dp).clip(CircleShape).background(theme.gradientStart))
 
     @Composable
-    private fun Appearance() = SettingsPageScaffold(title = "Персонализация", onBackClick = {}) {
+    private fun Appearance() = SettingsPageScaffold(
+        title = "Персонализация интерфейса", onBackClick = {}, hue = SettingsSearchDest.Appearance.hue
+    ) {
         item {
             SettingsGroup {
                 SettingsChoiceRow("Язык", listOf("Русский", "English"), "Русский", { it }, {}, icon = AppIcons.Language)
@@ -127,15 +136,23 @@ class SettingsScreenshotProbe {
 
     @Test fun hubLightPurple() { render(false, AppColorTheme.PURPLE) { Hub() }; shot("hub_light_purple") }
     @Test fun hubDarkYellow() { render(true, AppColorTheme.YELLOW) { Hub() }; shot("hub_dark_yellow") }
+    @Test fun hubLightGreen() { render(false, AppColorTheme.GREEN) { Hub() }; shot("hub_light_green") }
+    @Test fun hubFont2() { render(false, AppColorTheme.BLUE, fontScale = 1.6f) { Hub() }; shot("hub_font16") }
+
+    @Test fun hubScrolled() {
+        render(false, AppColorTheme.PURPLE) { Hub() }
+        rule.onRoot().performTouchInput { swipeUp() }
+        shot("hub_scrolled")
+    }
     @Test fun appearanceLightBlue() { render(false, AppColorTheme.BLUE) { Appearance() }; shot("appearance_light_blue") }
     @Test fun appearanceDarkGreen() { render(true, AppColorTheme.GREEN) { Appearance() }; shot("appearance_dark_green") }
     @Test fun appearanceFont2() { render(false, AppColorTheme.PURPLE, fontScale = 2f) { Appearance() }; shot("appearance_font2") }
 
-    @Test fun dropdownOpen() {
+    @Test fun themeSheetOpen() {
         render(false, AppColorTheme.GREEN) { Appearance() }
         rule.onNodeWithText("Цветовая тема").performClick()
         rule.waitForIdle()
-        shot("appearance_dropdown")
+        shot("appearance_theme_sheet")
     }
 
     @Test fun sheetOpen() {

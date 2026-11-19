@@ -39,7 +39,7 @@ internal fun SettingsAccountsScreen(
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val accounts by accountRepo.accounts.collectAsStateWithLifecycle(initialValue = emptyList())
 
-    SettingsPageScaffold(title = Strings.accounts, onBackClick = onBackClick) {
+    SettingsPageScaffold(title = Strings.accounts, onBackClick = onBackClick, hue = SettingsSearchDest.Accounts.hue) {
         items(accounts, key = { it.id }) { account ->
             SettingsGroup {
                 AccountCard(
@@ -54,6 +54,7 @@ internal fun SettingsAccountsScreen(
                     title = Strings.addAccount,
                     subtitle = null,
                     icon = AppIcons.Add,
+                    hue = SettingsSearchDest.Accounts.hue,
                     onClick = onAddAccount
                 )
             }

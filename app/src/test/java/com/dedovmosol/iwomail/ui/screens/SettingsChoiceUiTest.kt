@@ -52,7 +52,7 @@ class SettingsChoiceUiTest {
         SemanticsMatcher.expectValue(SemanticsProperties.Selected, true)
 
     @Test
-    fun `short list opens a dropdown and applies the choice`() {
+    fun `short list also opens a bottom sheet with radio buttons and applies the choice`() {
         val picked = mutableListOf<String>()
         content {
             var value by remember { mutableStateOf("Light") }
@@ -69,13 +69,16 @@ class SettingsChoiceUiTest {
         // Значение справа в строке
         rule.onNodeWithText("Light").assertIsDisplayed()
         rule.onNodeWithText("Theme").performClick()
+        rule.waitForIdle()
+        // Лист с заголовком выбора: название строки — и в строке, и в листе
+        rule.onAllNodes(hasText("Theme")).assertCountEquals(2)
         rule.onNodeWithText("Dark").assertIsDisplayed()
         // Текущий вариант отмечен для TalkBack как выбранная радиокнопка
         rule.onNode(hasText("Light") and radioSelected, useUnmergedTree = false).assertExists()
         rule.onNodeWithText("Dark").performClick()
         rule.waitForIdle()
         assertThat(picked).containsExactly("Dark")
-        rule.onNodeWithText("System").assertDoesNotExist()
+        rule.waitUntil(5_000) { rule.onAllNodes(hasText("System")).fetchSemanticsNodes().isEmpty() }
         rule.onNodeWithText("Dark").assertIsDisplayed()
     }
 
@@ -164,7 +167,25 @@ class SettingsChoiceUiTest {
         rule.waitForIdle()
         val collapsed = rule.onNodeWithTag(SETTINGS_TOP_BAR_TAG).fetchSemanticsNode().size.height
         assertThat(collapsed).isLessThan(expanded)
+        // Свёрнуто — только панель со стрелкой; название по-прежнему одно для TalkBack и видно
+        val density = rule.density.density
+        assertThat(collapsed / density).isWithin(1f).of(SettingsTokens.TopBarHeight.value)
         rule.onNodeWithText("Appearance").assertIsDisplayed()
+    }
+
+    @Test
+    fun `large title sits right under the back arrow, no empty band above it`() {
+        content {
+            SettingsPageScaffold(title = "Settings", onBackClick = {}) {
+                items(3) { i -> Text("Row $i") }
+            }
+        }
+        val headerDp = rule.onNodeWithTag(SETTINGS_TOP_BAR_TAG).fetchSemanticsNode().size.height / rule.density.density
+        // Панель 56 dp + строка крупного названия (36 dp) + 16 dp снизу; у M3 LargeTopAppBar было 152 dp
+        assertThat(headerDp).isWithin(2f).of(56f + 36f + 16f)
+        // Одно название для TalkBack, отмечено заголовком
+        rule.onAllNodes(hasText("Settings")).assertCountEquals(1)
+        rule.onNode(hasText("Settings") and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).assertExists()
     }
 
     @Test

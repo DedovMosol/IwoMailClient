@@ -179,6 +179,11 @@ object Strings {
     val settingsHubAppearanceDesc: String @Composable get() = if (isRussian()) "Тема, размер текста" else "Theme, text size"
     val settingsHubAboutDesc: String @Composable get() = if (isRussian()) "Версия, политика конфиденциальности" else "Version, privacy policy"
     val searchSettings: String @Composable get() = if (isRussian()) "Поиск настроек" else "Search settings"
+    val settingsPerAccountHint: String @Composable get() = if (isRussian())
+        "Подпись, черновики, синхронизация, автоочистка и сертификаты задаются у каждого аккаунта: " +
+            "«Аккаунты» → аккаунт. Звук — в «Уведомлениях о почте». Остальное общее для всех аккаунтов."
+        else "Signature, drafts, sync, auto-cleanup and certificates are set per account: " +
+            "Accounts → account. Sound is in Mail notifications. Everything else applies to all accounts."
     val syncSettings: String @Composable get() = if (isRussian()) "Синхронизация" else "Sync"
     val sync: String @Composable get() = if (isRussian()) "Синхронизация" else "Sync"
     val serverCertificate: String @Composable get() = if (isRussian()) "Сертификат сервера" else "Server certificate"

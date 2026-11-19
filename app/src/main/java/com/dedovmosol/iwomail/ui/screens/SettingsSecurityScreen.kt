@@ -105,7 +105,7 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit, highlight: String =
     val rowHighlight =
         // Строки отпечатка и смены пароля видны только при включённой блокировке — иначе подсветить её переключатель
         if ((highlight == "fingerprint" || highlight == "changePassword") && !appLockEnabled) "appLock" else highlight
-    SettingsPageScaffold(title = Strings.appLockSection, onBackClick = onBackClick) {
+    SettingsPageScaffold(title = Strings.appLockSection, onBackClick = onBackClick, hue = SettingsSearchDest.Security.hue) {
         item {
             SettingsGroup {
                 SettingsSwitchRow(

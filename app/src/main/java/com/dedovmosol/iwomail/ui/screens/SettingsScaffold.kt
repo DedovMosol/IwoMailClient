@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -36,7 +37,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemColors
 import androidx.compose.material3.ListItemDefaults
@@ -50,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarScrollBehavior
+import androidx.compose.material3.TopAppBarState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
@@ -61,46 +62,63 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
+import com.dedovmosol.iwomail.ui.components.ScrollbarColor
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
- * Настройки в стиле HyperOS (SET-24, вариант А): крупный заголовок на градиенте темы сворачивается при прокрутке
- * в обычную панель; светло-серая страница и белые карточки без разделителей (в тёмной теме — чёрная страница и
- * тёмно-серые карточки); значение справа со стрелкой; короткий выбор — выпадающим списком у строки, длинный —
- * нижним листом; иконки одной формы ([SettingsIconTile]). Всё на ролях Material 3 и цветах [LocalColorTheme].
+ * Настройки в стиле HyperOS (SET-24): крупное название на градиенте темы сразу под стрелкой «Назад», при прокрутке
+ * оно уезжает в обычную панель; светло-серая страница и почти во всю ширину белые карточки без разделителей
+ * (в тёмной теме — чёрная страница и тёмно-серые карточки); значение справа со стрелкой; выбор значения — нижним
+ * листом (внутри листа — списком у строки); иконки — в плитках одной формы статичных цветов ([SettingsIconTile]).
  */
 internal object SettingsTokens {
-    val CardShape = RoundedCornerShape(20.dp)
+    val CardShape = RoundedCornerShape(24.dp)
     val TileShape = RoundedCornerShape(12.dp)
     val TileSize = 40.dp
-    val HorizontalPadding = 16.dp
+    /** Плитка корня настроек: крупнее и с заливкой. */
+    val HubTileShape = RoundedCornerShape(15.dp)
+    val HubTileSize = 48.dp
+    /** Поля карточки от края экрана: карточки почти во всю ширину. */
+    val HorizontalPadding = 8.dp
+    /** Начало текста подписей над и под карточками — на линии содержимого карточки (поле карточки + 16 dp ListItem). */
+    val TextInset = 24.dp
     val RowMinHeight = 64.dp
-    val HubRowMinHeight = 72.dp
-    /** До стольких вариантов — выпадающий список у строки, больше — нижний лист. */
-    const val DROPDOWN_MAX_OPTIONS = 5
+    val HubRowMinHeight = 84.dp
+    /** Панель со стрелкой «Назад» (без блока крупного названия). */
+    val TopBarHeight = 56.dp
 
     val isDark: Boolean @Composable get() = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
@@ -122,6 +140,30 @@ internal object SettingsTokens {
     val WARNING_DARK = Color(0xFFFFB960)
 }
 
+/**
+ * Цвет плиток иконок раздела — из палитры цветов скроллбара ([ScrollbarColor]): статичный, не зависит от цветовой
+ * темы и обоев (dynamic color). Задаёт его каркас раздела ([SettingsPageScaffold]), у корня — каждая строка своим.
+ */
+internal val LocalSettingsHue = staticCompositionLocalOf { ScrollbarColor.GRAY }
+
+/**
+ * Цвета плиток — чистые функции, контраст глифа с плиткой проверяет SettingsTileColorsTest (не ниже 3:1, WCAG 1.4.11
+ * для значимой графики). Тональная плитка смешивается с постоянной основой, а не с цветом карточки: у карточки
+ * с dynamic color свой оттенок.
+ */
+internal object SettingsTileColors {
+    private val TONAL_BASE_DARK = Color(0xFF262628)
+
+    /** Залитая плитка корня: цвет палитры, к нижнему правому углу темнее; глиф белый. */
+    fun filled(hue: Color): List<Color> = listOf(hue, lerp(hue, Color.Black, 0.22f))
+
+    fun tonalBackground(hue: Color, dark: Boolean): Color =
+        if (dark) lerp(TONAL_BASE_DARK, hue, 0.32f) else lerp(Color.White, hue, 0.14f)
+
+    fun tonalGlyph(hue: Color, dark: Boolean): Color =
+        if (dark) lerp(hue, Color.White, 0.5f) else lerp(hue, Color.Black, 0.2f)
+}
+
 /** Маленькая градиентная панель — для экранов вне настроек (обновления). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -139,43 +181,99 @@ internal fun SettingsTopBar(title: String, onBackClick: () -> Unit) {
 }
 
 @Composable
-private fun themeGradient(): Brush = Brush.horizontalGradient(
-    colors = listOf(LocalColorTheme.current.gradientStart, LocalColorTheme.current.gradientEnd)
-)
+private fun themeGradient(): Brush {
+    val theme = LocalColorTheme.current
+    return remember(theme) { Brush.horizontalGradient(listOf(theme.gradientStart, theme.gradientEnd)) }
+}
 
-/** Крупный заголовок на градиенте темы; при прокрутке сворачивается в панель обычной высоты. */
+/**
+ * Заголовок раздела на градиенте темы: стрелка «Назад», сразу под ней — крупное название. У M3 LargeTopAppBar
+ * (Material 3 1.2) развёрнутая панель — 152 dp, название прижато к низу с отступом 28 dp, и высоту не задать: над
+ * названием оставалась пустая полоса. Здесь блок названия по своей высоте, при прокрутке он уезжает под панель
+ * ([collapsibleTitle]); состояние и доводку даёт [TopAppBarScrollBehavior] (exitUntilCollapsed), в панели
+ * проявляется название обычного размера. Прокрутка меняет только раскладку и прозрачность — без перекомпоновки
+ * на каждом кадре.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SettingsLargeTopBar(title: String, onBackClick: () -> Unit, scrollBehavior: TopAppBarScrollBehavior) {
-    LargeTopAppBar(
-        title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        navigationIcon = {
-            IconButton(onClick = onBackClick) {
-                Icon(AppIcons.ArrowBack, Strings.back)
-            }
-        },
-        colors = TopAppBarDefaults.largeTopAppBarColors(
-            containerColor = Color.Transparent,
-            scrolledContainerColor = Color.Transparent,
-            navigationIconContentColor = Color.White,
-            titleContentColor = Color.White,
-            actionIconContentColor = Color.White
-        ),
-        scrollBehavior = scrollBehavior,
+    val state = scrollBehavior.state
+    Column(
         modifier = Modifier
+            .fillMaxWidth()
             .background(themeGradient())
+            .windowInsetsPadding(TopAppBarDefaults.windowInsets)
             .testTag(SETTINGS_TOP_BAR_TAG)
-    )
+            // Одна точка для TalkBack и поиска по тексту: заголовок экрана, оба текста ниже — его оформление
+            .semantics {
+                heading()
+                text = AnnotatedString(title)
+            }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(SettingsTokens.TopBarHeight)
+                .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBackClick) {
+                Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
+            }
+            Text(
+                title,
+                color = Color.White,
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 4.dp, end = 12.dp)
+                    .graphicsLayer { alpha = ((state.collapsedFraction - 0.5f) * 2f).coerceIn(0f, 1f) }
+                    .clearAndSetSemantics { }
+            )
+        }
+        Text(
+            title,
+            color = Color.White,
+            style = MaterialTheme.typography.headlineMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .fillMaxWidth()
+                .collapsibleTitle(state)
+                .padding(start = 20.dp, end = 20.dp, bottom = 16.dp)
+                .graphicsLayer { alpha = (1f - state.collapsedFraction * 1.6f).coerceIn(0f, 1f) }
+                .clearAndSetSemantics { }
+        )
+    }
+}
+
+/**
+ * Блок крупного названия, который при прокрутке уезжает вверх и обрезается. Предел сворачивания — его высота (она
+ * зависит от длины названия и размера шрифта), записывается при раскладке; смещение читается тоже при раскладке.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+private fun Modifier.collapsibleTitle(state: TopAppBarState): Modifier = clipToBounds().layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+    val limit = -placeable.height.toFloat()
+    if (state.heightOffsetLimit != limit) state.heightOffsetLimit = limit
+    val offset = state.heightOffset.coerceIn(limit, 0f).roundToInt()
+    layout(placeable.width, placeable.height + offset) { placeable.place(0, offset) }
 }
 
 internal const val SETTINGS_TOP_BAR_TAG = "settings_top_bar"
 
-/** Общий каркас экрана настроек (корень и разделы): крупный заголовок, список, скроллбар. */
+/**
+ * Общий каркас экрана настроек (корень и разделы): крупный заголовок, список, скроллбар. [hue] — цвет плиток иконок
+ * раздела ([LocalSettingsHue]).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SettingsPageScaffold(
     title: String,
     onBackClick: () -> Unit,
+    hue: ScrollbarColor = ScrollbarColor.GRAY,
     content: LazyListScope.() -> Unit
 ) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
@@ -190,12 +288,14 @@ internal fun SettingsPageScaffold(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
-                content = content
-            )
+            CompositionLocalProvider(LocalSettingsHue provides hue) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
+                    content = content
+                )
+            }
             LazyColumnScrollbar(listState = listState)
         }
     }
@@ -211,6 +311,7 @@ internal fun SettingsPageScaffold(
 internal fun SettingsScrollScaffold(
     title: String,
     onBackClick: () -> Unit,
+    hue: ScrollbarColor = ScrollbarColor.GRAY,
     footer: @Composable () -> Unit = {},
     content: @Composable ColumnScope.() -> Unit
 ) {
@@ -228,13 +329,15 @@ internal fun SettingsScrollScaffold(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(scrollState)
-                    .padding(top = 8.dp, bottom = with(density) { footerPx.toDp() })
-            ) {
-                content()
+            CompositionLocalProvider(LocalSettingsHue provides hue) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scrollState)
+                        .padding(top = 8.dp, bottom = with(density) { footerPx.toDp() })
+                ) {
+                    content()
+                }
             }
             Box(
                 modifier = Modifier
@@ -256,7 +359,7 @@ internal fun SettingsSectionTitle(text: String) {
         text = text,
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 28.dp, end = 28.dp, top = 16.dp, bottom = 4.dp)
+        modifier = Modifier.padding(start = SettingsTokens.TextInset, end = SettingsTokens.TextInset, top = 16.dp, bottom = 4.dp)
     )
 }
 
@@ -267,8 +370,27 @@ internal fun SettingsGroupHint(text: String) {
         text = text,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 28.dp, end = 28.dp, top = 2.dp, bottom = 6.dp)
+        modifier = Modifier.padding(start = SettingsTokens.TextInset, end = SettingsTokens.TextInset, top = 2.dp, bottom = 6.dp)
     )
+}
+
+/** Заметка внизу страницы: значок «i» и пояснение, как устроены настройки (крупнее и заметнее [SettingsGroupHint]). */
+@Composable
+internal fun SettingsInfoNote(text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = SettingsTokens.TextInset, end = SettingsTokens.TextInset, top = 12.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(
+            AppIcons.Info,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }
 
 /** Группа строк: карточка без разделителей. */
@@ -282,46 +404,55 @@ internal fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
         colors = CardDefaults.cardColors(containerColor = SettingsTokens.cardColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Column(modifier = Modifier.padding(vertical = 4.dp), content = content)
+        Column(modifier = Modifier.padding(vertical = 6.dp), content = content)
     }
 }
 
 /**
- * Плитка иконки — одна форма и один размер во всех настройках. [accent]: на корне — градиент темы и белый глиф,
- * в разделах — тональная плитка.
+ * Плитка иконки — одна форма во всех настройках, цвет из палитры ([LocalSettingsHue]), не из темы. [filled] — плитка
+ * корня: крупнее, заливка цветом с переходом и белый глиф; иначе — тональная плитка с глифом того же цвета.
  */
 @Composable
-internal fun SettingsIconTile(accent: Boolean = false, content: @Composable () -> Unit) {
-    val background = if (accent) {
-        Modifier.background(themeGradient())
+internal fun SettingsIconTile(
+    hue: ScrollbarColor = LocalSettingsHue.current,
+    filled: Boolean = false,
+    content: @Composable () -> Unit
+) {
+    val dark = SettingsTokens.isDark
+    val background = if (filled) {
+        val brush = remember(hue) { Brush.linearGradient(SettingsTileColors.filled(hue.color)) }
+        Modifier.background(brush)
     } else {
-        Modifier.background(MaterialTheme.colorScheme.primaryContainer)
+        Modifier.background(SettingsTileColors.tonalBackground(hue.color, dark))
     }
     Box(
         modifier = Modifier
-            .size(SettingsTokens.TileSize)
-            .clip(SettingsTokens.TileShape)
+            .size(if (filled) SettingsTokens.HubTileSize else SettingsTokens.TileSize)
+            .clip(if (filled) SettingsTokens.HubTileShape else SettingsTokens.TileShape)
             .then(background),
         contentAlignment = Alignment.Center
     ) {
         CompositionLocalProvider(
-            LocalContentColor provides if (accent) Color.White else MaterialTheme.colorScheme.onPrimaryContainer,
+            LocalContentColor provides if (filled) Color.White else SettingsTileColors.tonalGlyph(hue.color, dark),
             content = content
         )
     }
 }
 
 @Composable
-internal fun SettingsIconTile(icon: ImageVector, accent: Boolean = false) {
-    SettingsIconTile(accent) { Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp)) }
+internal fun SettingsIconTile(icon: ImageVector, hue: ScrollbarColor = LocalSettingsHue.current, filled: Boolean = false) {
+    SettingsIconTile(hue, filled) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(if (filled) 28.dp else 22.dp))
+    }
 }
 
-/** Строка корня настроек: крупнее заголовок, градиентная плитка, высота под палец. */
+/** Строка корня настроек: крупная залитая плитка цвета [hue], заголовок и пояснение, высота под палец. */
 @Composable
 internal fun SettingsHubRow(
     title: String,
     subtitle: String?,
     icon: ImageVector,
+    hue: ScrollbarColor,
     onClick: () -> Unit
 ) {
     ListItem(
@@ -329,7 +460,7 @@ internal fun SettingsHubRow(
         supportingContent = if (subtitle.isNullOrBlank()) null else ({
             Text(subtitle, style = MaterialTheme.typography.bodyMedium)
         }),
-        leadingContent = { SettingsIconTile(icon, accent = true) },
+        leadingContent = { SettingsIconTile(icon, hue = hue, filled = true) },
         trailingContent = { Icon(AppIcons.ChevronRight, contentDescription = null) },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier
@@ -476,9 +607,9 @@ internal fun SettingsNavRow(
 }
 
 /**
- * Выбор одного варианта (вместо диалога с радиокнопками): значение справа; до
- * [SettingsTokens.DROPDOWN_MAX_OPTIONS] вариантов — выпадающий список у строки, больше — нижний лист.
- * [optionLeading] — образец у варианта (цвет темы), [description] — пояснение в нижнем листе.
+ * Выбор одного варианта: значение справа, варианты — в нижнем листе с образцом, названием и радиокнопкой (как цвет
+ * скроллбара); внутри другого листа — списком у строки. [optionLeading] — образец у варианта (цвет темы, иконка),
+ * [description] — пояснение в листе.
  */
 @Composable
 internal fun <T> SettingsChoiceRow(
@@ -497,8 +628,8 @@ internal fun <T> SettingsChoiceRow(
     highlight: String = ""
 ) {
     var open by rememberSaveable { mutableStateOf(false) }
-    // Внутри нижнего листа — всегда список у строки: лист поверх листа даёт два затемнения и двойное «Назад»
-    val dropdown = options.size <= SettingsTokens.DROPDOWN_MAX_OPTIONS || LocalInSettingsSheet.current
+    // Внутри нижнего листа — список у строки: лист поверх листа даёт два затемнения и двойное «Назад»
+    val dropdown = LocalInSettingsSheet.current
     Box(modifier = Modifier.fillMaxWidth()) {
         SettingsNavRow(
             title = title,

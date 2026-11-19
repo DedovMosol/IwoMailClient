@@ -1,4 +1,4 @@
-﻿package com.dedovmosol.iwomail.ui.screens
+package com.dedovmosol.iwomail.ui.screens
 
 import com.dedovmosol.iwomail.ui.utils.findActivity
 import com.dedovmosol.iwomail.util.SafeToast
@@ -59,6 +59,7 @@ fun AboutScreen(
     SettingsScrollScaffold(
         title = Strings.aboutApp,
         onBackClick = onBackClick,
+        hue = SettingsSearchDest.About.hue,
         footer = {
             if (easterFound || base64Revealed) {
                 Column(

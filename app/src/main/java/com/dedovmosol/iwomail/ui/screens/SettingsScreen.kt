@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.ui.Strings
+import com.dedovmosol.iwomail.ui.components.ScrollbarColor
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 
 @Composable
@@ -86,7 +87,7 @@ fun SettingsScreen(
                 onValueChange = { query = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = SettingsTokens.HorizontalPadding, vertical = 8.dp),
                 placeholder = { Text(Strings.searchSettings) },
                 leadingIcon = { Icon(AppIcons.Search, contentDescription = null) },
                 trailingIcon = {
@@ -127,7 +128,8 @@ fun SettingsScreen(
                             SettingsHubRow(
                                 title = hit.title,
                                 subtitle = hit.section,
-                                icon = destIcon(hit.dest),
+                                icon = hit.dest.icon,
+                                hue = hit.dest.hue,
                                 onClick = { open(hit.dest, hit.focus); keyboard?.hide() }
                             )
                         }
@@ -140,7 +142,8 @@ fun SettingsScreen(
                     SettingsHubRow(
                         title = Strings.accounts,
                         subtitle = accountsSubtitle,
-                        icon = AppIcons.Person,
+                        icon = SettingsSearchDest.Accounts.icon,
+                        hue = SettingsSearchDest.Accounts.hue,
                         onClick = onNavigateToAccounts
                     )
                 }
@@ -150,13 +153,15 @@ fun SettingsScreen(
                     SettingsHubRow(
                         title = Strings.mailSection,
                         subtitle = Strings.settingsHubMailDesc,
-                        icon = AppIcons.Email,
+                        icon = SettingsSearchDest.Mail.icon,
+                        hue = SettingsSearchDest.Mail.hue,
                         onClick = { onNavigateToMail("") }
                     )
                     SettingsHubRow(
                         title = Strings.mailAlertsSection,
                         subtitle = Strings.settingsHubAlertsDesc,
-                        icon = AppIcons.Notifications,
+                        icon = SettingsSearchDest.Alerts.icon,
+                        hue = SettingsSearchDest.Alerts.hue,
                         onClick = { onNavigateToNotifications("") }
                     )
                 }
@@ -166,13 +171,15 @@ fun SettingsScreen(
                     SettingsHubRow(
                         title = Strings.appearance,
                         subtitle = Strings.settingsHubAppearanceDesc,
-                        icon = AppIcons.Palette,
+                        icon = SettingsSearchDest.Appearance.icon,
+                        hue = SettingsSearchDest.Appearance.hue,
                         onClick = { onNavigateToPersonalization("") }
                     )
                     SettingsHubRow(
                         title = Strings.appLockSection,
                         subtitle = Strings.appLockDesc,
-                        icon = AppIcons.Lock,
+                        icon = SettingsSearchDest.Security.icon,
+                        hue = SettingsSearchDest.Security.hue,
                         onClick = { onNavigateToSecurity("") }
                     )
                 }
@@ -182,21 +189,38 @@ fun SettingsScreen(
                     SettingsHubRow(
                         title = Strings.aboutApp,
                         subtitle = Strings.settingsHubAboutDesc,
-                        icon = AppIcons.Info,
+                        icon = SettingsSearchDest.About.icon,
+                        hue = SettingsSearchDest.About.hue,
                         onClick = { onNavigateToAbout("") }
                     )
                 }
             }
+            // Что настраивается у каждого аккаунта отдельно и где: остальное на этих экранах — общее
+            item { SettingsInfoNote(Strings.settingsPerAccountHint) }
         }
     }
 }
 
-@Composable
-private fun destIcon(dest: SettingsSearchDest): ImageVector = when (dest) {
-    SettingsSearchDest.Accounts -> AppIcons.Person
-    SettingsSearchDest.Mail -> AppIcons.Email
-    SettingsSearchDest.Alerts -> AppIcons.Notifications
-    SettingsSearchDest.Appearance -> AppIcons.Palette
-    SettingsSearchDest.Security -> AppIcons.Lock
-    SettingsSearchDest.About -> AppIcons.Info
-}
+/**
+ * Иконка и статичный цвет раздела ([LocalSettingsHue]) — одни на строке корня, в поиске и в плитках самого раздела.
+ * Цвета — из палитры скроллбара, не из темы.
+ */
+internal val SettingsSearchDest.icon: ImageVector
+    @Composable get() = when (this) {
+        SettingsSearchDest.Accounts -> AppIcons.HubAccounts
+        SettingsSearchDest.Mail -> AppIcons.HubMail
+        SettingsSearchDest.Alerts -> AppIcons.HubAlerts
+        SettingsSearchDest.Appearance -> AppIcons.HubAppearance
+        SettingsSearchDest.Security -> AppIcons.HubSecurity
+        SettingsSearchDest.About -> AppIcons.HubAbout
+    }
+
+internal val SettingsSearchDest.hue: ScrollbarColor
+    get() = when (this) {
+        SettingsSearchDest.Accounts -> ScrollbarColor.BLUE
+        SettingsSearchDest.Mail -> ScrollbarColor.ORANGE
+        SettingsSearchDest.Alerts -> ScrollbarColor.RED
+        SettingsSearchDest.Appearance -> ScrollbarColor.PURPLE
+        SettingsSearchDest.Security -> ScrollbarColor.GREEN
+        SettingsSearchDest.About -> ScrollbarColor.GRAY
+    }

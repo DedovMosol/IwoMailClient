@@ -117,7 +117,10 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 
 ### UI and settings
 - HyperOS-style settings: a large title on the theme gradient collapses on scroll, white cards without dividers sit on a light gray page (dark gray on black in dark theme), and the value is on the right with an arrow. About ten radio button dialogs are replaced by a shared `SettingsChoiceRow`, auto-cleanup is one row per folder, and settings search finds scrollbar color, animations, password change and account settings.
-- A short choice (up to 5 options) opens a dropdown at the row, a long one a bottom sheet. A long choice inside a bottom sheet opens a dropdown instead of a second sheet.
+- Every value choice in settings (color theme, theme mode, language, font size, mail, account and sync options) opens a bottom sheet with a sample, name and radio button, like the scrollbar color. A choice inside a bottom sheet (Daily themes) opens a list at the row instead of a second sheet.
+- The title of settings and their sections, including account settings, sits right under the back arrow with no empty band above it; the gradient header is a third lower (108 dp instead of 152 dp) and collapses into a bar with the title on scroll.
+- Settings cards are larger and almost full width. Section icons are new (Material Symbols Rounded) in filled tiles of their own scrollbar-palette color, row icons inside sections are in tonal tiles of the section color. The colors do not depend on the theme or wallpaper.
+- The bottom of settings explains that signature, drafts, sync, auto-cleanup and certificates are set per account and where to set them.
 - Without dynamic color, containers and surfaces follow the chosen theme instead of the M3 purple scheme. The "Server impersonation protection" card uses theme colors and localized strings, with no emoji.
 - The theme mode (light, dark or system) is chosen in Personalization and during onboarding, and system bar icons follow the app theme.
 - The yellow theme is darker (`#A86400`/`#8F4F00`), so white text on bars and buttons reaches a contrast of at least 4.5:1. This text threshold is checked in every theme.

@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.ui.screens
 
 import android.net.Uri
+import com.dedovmosol.iwomail.ui.components.ScrollbarColor
 import com.dedovmosol.iwomail.ui.components.launchLeavingApp
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -607,7 +608,7 @@ fun AccountSettingsScreen(
     }
     val hasTlsEndpoint = com.dedovmosol.iwomail.data.repository.ServerCertificateEndpoint.of(currentAccount) != null
 
-    SettingsPageScaffold(title = Strings.accountSettings, onBackClick = onBackClick) {
+    SettingsPageScaffold(title = Strings.accountSettings, onBackClick = onBackClick, hue = SettingsSearchDest.Accounts.hue) {
         // Заголовок аккаунта и состояние подключения
         item {
             SettingsGroup {
@@ -732,11 +733,7 @@ fun AccountSettingsScreen(
                 SettingsNavRow(
                     title = Strings.deleteAccountAction,
                     titleColor = MaterialTheme.colorScheme.error,
-                    leading = {
-                        SettingsIconTile {
-                            Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(22.dp))
-                        }
-                    },
+                    leading = { SettingsIconTile(AppIcons.Delete, hue = ScrollbarColor.RED) },
                     trailingIcon = null,
                     onClick = { showDeleteAccount = true }
                 )

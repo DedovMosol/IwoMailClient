@@ -36,7 +36,8 @@ class SettingsHubUiTest {
                         SettingsHubRow(
                             title = "Mail",
                             subtitle = "Conversations, swipes, images",
-                            icon = AppIcons.Email,
+                            icon = AppIcons.HubMail,
+                            hue = SettingsSearchDest.Mail.hue,
                             onClick = { clicks++ }
                         )
                     }

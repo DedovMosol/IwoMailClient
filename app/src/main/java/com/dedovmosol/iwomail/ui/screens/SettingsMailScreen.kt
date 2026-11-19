@@ -12,7 +12,7 @@ import com.dedovmosol.iwomail.ui.Strings
 internal fun SettingsMailScreen(onBackClick: () -> Unit, highlight: String = "") {
     val context = LocalContext.current
     val settingsRepo = remember { RepositoryProvider.getSettingsRepository(context) }
-    SettingsPageScaffold(title = Strings.mailSection, onBackClick = onBackClick) {
+    SettingsPageScaffold(title = Strings.mailSection, onBackClick = onBackClick, hue = SettingsSearchDest.Mail.hue) {
         item {
             SettingsGroup {
                 MailSettingsSection(settingsRepo, highlight)
@@ -27,7 +27,7 @@ internal fun SettingsNotificationsScreen(onBackClick: () -> Unit, highlight: Str
     val settingsRepo = remember { RepositoryProvider.getSettingsRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val accounts by accountRepo.accounts.collectAsStateWithLifecycle(initialValue = emptyList())
-    SettingsPageScaffold(title = Strings.mailAlertsSection, onBackClick = onBackClick) {
+    SettingsPageScaffold(title = Strings.mailAlertsSection, onBackClick = onBackClick, hue = SettingsSearchDest.Alerts.hue) {
         item {
             SettingsGroup {
                 MailAlertsSettingsSection(settingsRepo, accounts, highlight)

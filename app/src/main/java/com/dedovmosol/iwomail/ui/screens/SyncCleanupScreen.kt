@@ -46,7 +46,7 @@ fun SyncCleanupScreen(
     val daysLabel: @Composable (Int) -> String = { getContactsSyncIntervalText(it, isRu) }
     val cleanupLabel: @Composable (AutoCleanupDays) -> String = { it.getDisplayName(isRu) }
 
-    SettingsPageScaffold(title = Strings.syncAndCleanup, onBackClick = onBackClick) {
+    SettingsPageScaffold(title = Strings.syncAndCleanup, onBackClick = onBackClick, hue = SettingsSearchDest.Accounts.hue) {
         item { SettingsSectionTitle(Strings.syncSettings) }
         item {
             SettingsGroup {
