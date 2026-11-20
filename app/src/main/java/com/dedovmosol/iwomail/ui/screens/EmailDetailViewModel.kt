@@ -168,6 +168,8 @@ class EmailDetailViewModel(
     private val attachmentsFlow: StateFlow<List<AttachmentEntity>> =
         mailRepo.getAttachments(emailId).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+    private val inlineRetry = MutableStateFlow(0L)
+
     init {
         observeData()
         observeInlineImages()
@@ -312,8 +314,9 @@ class EmailDetailViewModel(
         if (emailSeen && emailFlow.value == null) navigateBackOnce()
     }
 
-    /** Ключ для inline-картинок: пересчитываем загрузку только при реальном изменении входных данных. */
+    /** Ключ для inline-картинок: пересчитываем при изменении данных или ручном обновлении. */
     private data class InlineKey(
+        val attempt: Long,
         val body: String,
         val bodyType: Int,
         val serverId: String,
@@ -329,36 +332,30 @@ class EmailDetailViewModel(
      */
     private fun observeInlineImages() {
         viewModelScope.launch {
-            combine(emailFlow, attachmentsFlow) { email, attachments ->
-                email?.let { InlineKey(it.body, it.bodyType, it.serverId, it.folderId, it.accountId, attachments) }
+            combine(emailFlow, attachmentsFlow, inlineRetry) { email, attachments, attempt ->
+                email?.let { InlineKey(attempt, it.body, it.bodyType, it.serverId, it.folderId, it.accountId, attachments) }
             }.distinctUntilChanged().collectLatest { key ->
                 if (key == null || key.body.isEmpty()) {
-                    _uiState.update { it.copy(inlineContentIds = null) }
+                    _uiState.update { it.copy(inlineContentIds = null, inlineImages = emptyMap()) }
                     return@collectLatest
                 }
-                // Ссылки cid: тела (MIME — по его HTML-части): какие вложения показаны в тексте, а какие — файлы.
-                val referenced = try {
-                    withContext(ioDispatcher) {
-                        com.dedovmosol.iwomail.util.referencedContentIds(
-                            com.dedovmosol.iwomail.util.processEmailBodyForDisplay(key.body, key.bodyType).text
+                _uiState.update { it.copy(isLoadingInlineImages = true, inlineImages = emptyMap(), inlineContentIds = null) }
+                try {
+                    val referenced = withContext(ioDispatcher) {
+                        val display = com.dedovmosol.iwomail.util.processEmailBodyForDisplay(key.body, key.bodyType)
+                        if (!display.isHtml) emptySet()
+                        else com.dedovmosol.iwomail.util.referencedContentIds(
+                            com.dedovmosol.iwomail.util.sanitizeEmailHtml(display.text)
                         )
                     }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    null
-                }
-                _uiState.update { it.copy(isLoadingInlineImages = true, inlineContentIds = referenced) }
-                try {
-                    val loaded = withTimeoutOrNull(20_000L) {
-                        actions.loadInlineImages(
-                            emailBody = key.body,
-                            bodyType = key.bodyType,
-                            emailServerId = key.serverId,
-                            folderId = key.folderId,
-                            attachments = key.attachments
-                        )
-                    } ?: emptyMap()
+                    _uiState.update { it.copy(inlineContentIds = referenced) }
+                    val loaded = actions.loadInlineImages(
+                        emailId = emailId,
+                        accountId = key.accountId,
+                        cids = referenced,
+                        mimeBody = key.body.takeIf { key.bodyType == 4 },
+                        attachments = key.attachments
+                    )
                     _uiState.update { it.copy(inlineImages = loaded) }
                 } catch (e: CancellationException) {
                     throw e
@@ -516,6 +513,7 @@ class EmailDetailViewModel(
                             _uiState.update { it.copy(bodyLoadError = BodyLoadError.NoBodyFromServer) }
                             sendEvent(EmailDetailEvent.NoBodyFromServer)
                         } else {
+                            inlineRetry.update { it + 1 }
                             sendEvent(EmailDetailEvent.Refreshed)
                         }
                     }

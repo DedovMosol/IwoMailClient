@@ -20,7 +20,8 @@ What you expected to happen.
 - App version: (e.g. 1.7.0)
 - Android version: (e.g. 12)
 - Device: (e.g. Pixel 6)
-- Server: (e.g. Exchange 2010 SP3, protocol EAS 14.1 / EWS)
+- Account type: Exchange / IMAP (beta) / POP3 (beta)
+- Server version and protocol, if known (e.g. Exchange 2010 SP3, EAS 14.1 / EWS; omit internal addresses)
 
 **Logs / screenshots**
 If applicable, add screenshots or logcat output (redact credentials!).

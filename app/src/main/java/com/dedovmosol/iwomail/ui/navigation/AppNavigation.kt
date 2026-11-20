@@ -93,15 +93,21 @@ object ShareIntentData {
         val copied = mutableListOf<android.net.Uri>()
         for (uri in uris) {
             if (total >= com.dedovmosol.iwomail.ui.screens.MAX_TOTAL_ATTACHMENT_BYTES) { skipped++; continue }
+            // NAV-11: только чужие content:// — свой файл приложения (база, настройки) или file:// чужое приложение
+            // иначе вложило бы в письмо нашими правами
+            if (!com.dedovmosol.iwomail.util.isForeignContentUri(context, uri)) { skipped++; continue }
             try {
-                val baseName = com.dedovmosol.iwomail.util.queryOpenableFileMeta(context.contentResolver, uri)?.name
-                    ?: "share_${System.nanoTime()}"
-                val name = if (usedNames.add(baseName)) baseName else {
+                // Имя от провайдера — без «/», «..» и управляющих символов: иначе копия легла бы вне каталога
+                val baseName = com.dedovmosol.iwomail.util.safeAttachmentFileName(
+                    com.dedovmosol.iwomail.util.queryOpenableFileMeta(context.contentResolver, uri)?.name
+                        ?: "share_${System.nanoTime()}"
+                )
+                val name = if (usedNames.add(baseName) && !java.io.File(shareDir, baseName).exists()) baseName else {
                     val dot = baseName.lastIndexOf('.')
                     val stem = if (dot > 0) baseName.substring(0, dot) else baseName
                     val ext = if (dot > 0) baseName.substring(dot) else ""
                     var unique = "${stem}_${System.nanoTime()}$ext"
-                    while (!usedNames.add(unique)) unique = "${stem}_${System.nanoTime()}$ext"
+                    while (!usedNames.add(unique) || java.io.File(shareDir, unique).exists()) unique = "${stem}_${System.nanoTime()}$ext"
                     unique
                 }
                 val localFile = java.io.File(shareDir, name)
@@ -273,53 +279,43 @@ sealed class Screen(val route: String) {
             }
         }
     }
-    object Compose : Screen("compose?replyTo={replyTo}&forwardId={forwardId}&toEmail={toEmail}&draftId={draftId}&subject={subject}&body={body}") {
-        fun createRoute(replyTo: String? = null, forwardId: String? = null, toEmail: String? = null, draftId: String? = null, subject: String? = null, body: String? = null): String {
-            val params = mutableListOf<String>()
-            if (replyTo != null) {
-                val encoded = android.util.Base64.encodeToString(
-                    replyTo.toByteArray(Charsets.UTF_8), 
-                    android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
-                )
-                params.add("replyTo=$encoded")
-            }
-            if (forwardId != null) {
-                val encoded = android.util.Base64.encodeToString(
-                    forwardId.toByteArray(Charsets.UTF_8), 
-                    android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
-                )
-                params.add("forwardId=$encoded")
-            }
-            if (toEmail != null) {
-                val encoded = android.util.Base64.encodeToString(
-                    toEmail.toByteArray(Charsets.UTF_8), 
-                    android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
-                )
-                params.add("toEmail=$encoded")
-            }
-            if (draftId != null) {
-                val encoded = android.util.Base64.encodeToString(
-                    draftId.toByteArray(Charsets.UTF_8), 
-                    android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
-                )
-                params.add("draftId=$encoded")
-            }
-            if (subject != null) {
-                val encoded = android.util.Base64.encodeToString(
-                    subject.toByteArray(Charsets.UTF_8), 
-                    android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
-                )
-                params.add("subject=$encoded")
-            }
-            if (body != null) {
-                val encoded = android.util.Base64.encodeToString(
-                    body.toByteArray(Charsets.UTF_8), 
-                    android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
-                )
-                params.add("body=$encoded")
+    object Compose : Screen("compose?replyTo={replyTo}&forwardId={forwardId}&toEmail={toEmail}&cc={cc}&bcc={bcc}&draftId={draftId}&subject={subject}&body={body}") {
+        /** Аргументы маршрута; значения — Base64 URL_SAFE (адреса, тема и текст содержат «&», «?», «/»). */
+        val argNames = listOf("replyTo", "forwardId", "toEmail", "cc", "bcc", "draftId", "subject", "body")
+
+        fun createRoute(
+            replyTo: String? = null,
+            forwardId: String? = null,
+            toEmail: String? = null,
+            draftId: String? = null,
+            subject: String? = null,
+            body: String? = null,
+            cc: String? = null,
+            bcc: String? = null
+        ): String {
+            val params = listOf(
+                "replyTo" to replyTo, "forwardId" to forwardId, "toEmail" to toEmail, "cc" to cc, "bcc" to bcc,
+                "draftId" to draftId, "subject" to subject, "body" to body
+            ).mapNotNull { (name, value) ->
+                value?.let {
+                    name + "=" + android.util.Base64.encodeToString(
+                        it.toByteArray(Charsets.UTF_8),
+                        android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
+                    )
+                }
             }
             return if (params.isNotEmpty()) "compose?${params.joinToString("&")}" else "compose"
         }
+
+        /** Письмо по ссылке mailto: — все её поля, а не только первый адрес. */
+        fun createRoute(link: com.dedovmosol.iwomail.util.MailtoLink): String = createRoute(
+            toEmail = link.to.joinToString(", ").ifEmpty { null },
+            cc = link.cc.joinToString(", ").ifEmpty { null },
+            bcc = link.bcc.joinToString(", ").ifEmpty { null },
+            subject = link.subject,
+            body = link.body
+        )
+
         fun decodeId(encoded: String?): String? {
             if (encoded == null) return null
             return try {
@@ -385,12 +381,15 @@ fun AppNavigation(
     openEmailIntentId: Long = 0L,
     switchToAccountId: Long? = null,
     composeToEmail: String? = null,
+    composeCc: String? = null,
+    composeBcc: String? = null,
     composeSubject: String? = null,
     composeBody: String? = null,
     composeAttachments: List<android.net.Uri> = emptyList(),
     composeIntentId: Long = 0L,
     onComposeHandled: () -> Unit = {},
     onAccountSwitched: () -> Unit = {},
+    onAccountSwitchFailed: () -> Unit = onAccountSwitched,
     // App Shortcuts
     shortcutCompose: Boolean = false,
     shortcutInbox: Boolean = false,
@@ -449,31 +448,28 @@ fun AppNavigation(
     
     // Обработка переключения аккаунта при клике на уведомление
     // Храним ID последнего обработанного аккаунта, чтобы повторные уведомления обрабатывались
+    // Never route against the old mailbox while the requested switch is in flight. A previous
+    // notification for this account is not evidence that it is still the active account.
     var lastSwitchedAccountId by rememberSaveable { mutableStateOf<Long?>(null) }
-    var accountSwitchCompleted by rememberSaveable { mutableStateOf(switchToAccountId == null) }
-    
+    val accountSwitchCompleted = switchToAccountId == null
     LaunchedEffect(switchToAccountId, hasCheckedAccounts) {
-        if (switchToAccountId != null && switchToAccountId > 0 && switchToAccountId != lastSwitchedAccountId && hasCheckedAccounts) {
-            lastSwitchedAccountId = switchToAccountId
-            accountSwitchCompleted = false
-            try {
-                withContext(Dispatchers.IO) {
-                    accountRepo.setActiveAccount(switchToAccountId)
+        val target = switchToAccountId ?: return@LaunchedEffect
+        if (target <= 0 || !hasCheckedAccounts) return@LaunchedEffect
+        try {
+            val ready = withContext(Dispatchers.IO) {
+                if (accountRepo.getActiveAccountSync()?.id != target && accountRepo.getAccount(target) != null) {
+                    accountRepo.setActiveAccount(target)
                 }
-                // Задержка чтобы Flow успел обновиться
-                kotlinx.coroutines.delay(100)
-                accountSwitchCompleted = true
-                onAccountSwitched()
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                accountSwitchCompleted = true
+                accountRepo.getActiveAccountSync()?.id == target
             }
-        } else if (switchToAccountId == null && hasCheckedAccounts) {
-            // Нет переключения аккаунта — сразу готовы
-            accountSwitchCompleted = true
-        } else if (switchToAccountId == lastSwitchedAccountId) {
-            // Тот же аккаунт — уже переключён
-            accountSwitchCompleted = true
+            if (ready) {
+                lastSwitchedAccountId = target
+                onAccountSwitched()
+            } else onAccountSwitchFailed()
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.w("AppNavigation", "Unable to switch mailbox for incoming navigation")
+            onAccountSwitchFailed()
         }
     }
     
@@ -491,7 +487,8 @@ fun AppNavigation(
     
     LaunchedEffect(composeIntentId, hasCheckedAccounts, startDestination) {
         if (composeIntentId > 0 && composeIntentId != lastHandledComposeId &&
-            (composeToEmail != null || composeSubject != null || composeBody != null || composeAttachments.isNotEmpty()) && 
+            (composeToEmail != null || composeCc != null || composeBcc != null || composeSubject != null ||
+                composeBody != null || composeAttachments.isNotEmpty()) &&
             hasCheckedAccounts && startDestination == Screen.Main.route) {
             // Сохраняем вложения в глобальное хранилище. Отметка «обработано» — после копирования: копирование
             // прерываемо (смена ключей эффекта), и повторный запуск должен скопировать файлы заново
@@ -510,11 +507,11 @@ fun AppNavigation(
             navigateWithRetry("Compose") {
                 navController.navigate(Screen.Compose.createRoute(
                     toEmail = composeToEmail,
+                    cc = composeCc,
+                    bcc = composeBcc,
                     subject = composeSubject,
                     body = composeBody
-                )) {
-                    launchSingleTop = true
-                }
+                )) // Each incoming intent owns a fresh editor; keep any existing draft below it.
                 onComposeHandled()
             }
         }
@@ -1062,6 +1059,7 @@ fun AppNavigation(
                 onReplyClick = { navController.navigate(Screen.Compose.createRoute(replyTo = emailId)) },
                 onForwardClick = { navController.navigate(Screen.Compose.createRoute(forwardId = emailId)) },
                 onComposeToEmail = { toEmail -> navController.navigate(Screen.Compose.createRoute(toEmail = toEmail)) },
+                onComposeMailto = { link -> navController.navigate(Screen.Compose.createRoute(link)) },
                 // Письмо под новым id (синхронизация перенумеровала папку): этот экран заменяется экраном того же письма
                 onReopen = { newId ->
                     navController.navigate(Screen.EmailDetail.createRoute(newId)) {
@@ -1077,52 +1075,24 @@ fun AppNavigation(
             exitTransition = { fadeOut(animationSpec = tween(200)) },
             popEnterTransition = { fadeIn(animationSpec = tween(250)) },
             popExitTransition = { fadeOut(animationSpec = tween(200)) },
-            arguments = listOf(
-                navArgument("replyTo") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                },
-                navArgument("forwardId") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                },
-                navArgument("toEmail") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                },
-                navArgument("draftId") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                },
-                navArgument("subject") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                },
-                navArgument("body") {
+            arguments = Screen.Compose.argNames.map { name ->
+                navArgument(name) {
                     type = NavType.StringType
                     nullable = true
                     defaultValue = null
                 }
-            )
+            }
         ) { backStackEntry ->
-            val replyTo = Screen.Compose.decodeId(backStackEntry.arguments?.getString("replyTo"))
-            val forwardId = Screen.Compose.decodeId(backStackEntry.arguments?.getString("forwardId"))
-            val toEmail = Screen.Compose.decodeId(backStackEntry.arguments?.getString("toEmail"))
-            val draftId = Screen.Compose.decodeId(backStackEntry.arguments?.getString("draftId"))
-            val subject = Screen.Compose.decodeId(backStackEntry.arguments?.getString("subject"))
-            val body = Screen.Compose.decodeId(backStackEntry.arguments?.getString("body"))
+            fun arg(name: String) = Screen.Compose.decodeId(backStackEntry.arguments?.getString(name))
             ComposeScreen(
-                replyToEmailId = replyTo,
-                forwardEmailId = forwardId,
-                initialToEmail = toEmail,
-                editDraftId = draftId,
-                initialSubject = subject,
-                initialBody = body,
+                replyToEmailId = arg("replyTo"),
+                forwardEmailId = arg("forwardId"),
+                initialToEmail = arg("toEmail"),
+                initialCc = arg("cc"),
+                initialBcc = arg("bcc"),
+                editDraftId = arg("draftId"),
+                initialSubject = arg("subject"),
+                initialBody = arg("body"),
                 onBackClick = { navController.popBackStack() },
                 onSent = {
                     navController.popBackStack()
@@ -1153,8 +1123,10 @@ fun AppNavigation(
                     navController.navigate(Screen.SettingsSecurity.highlightDest(h)) { launchSingleTop = true }
                 },
                 onNavigateToAbout = { h ->
-                    navController.navigate(Screen.About.highlightDest(h)) { launchSingleTop = true }
+                    val dest = if (h == "autoUpdateCheck") Screen.Updates else Screen.About
+                    navController.navigate(dest.highlightDest(h)) { launchSingleTop = true }
                 },
+                onAddAccount = { navController.navigate(Screen.Setup.createRoute()) { launchSingleTop = true } },
                 onNavigateToAccountSettings = { id, h ->
                     navController.navigate(Screen.AccountSettings.createRoute(id, h)) { launchSingleTop = true }
                 },
@@ -1252,9 +1224,12 @@ fun AppNavigation(
             )
         }
         
-        composable(Screen.Updates.route) {
+        composable(Screen.Updates.highlightGraph(),
+            arguments = listOf(navArgument("h") { type = NavType.StringType; defaultValue = "" })
+        ) { entry ->
             UpdatesScreen(
-                onBackClick = { navController.popBackStack() }
+                onBackClick = { navController.popBackStack() },
+                highlight = entry.arguments?.getString("h").orEmpty()
             )
         }
         
@@ -1330,6 +1305,7 @@ fun AppNavigation(
                 onComposeClick = { email ->
                     navController.navigate(Screen.Compose.createRoute(toEmail = email))
                 },
+                onComposeMailto = { link -> navController.navigate(Screen.Compose.createRoute(link)) },
                 initialDateFilter = initialDateFilter,
                 initialEventId = visibleNotificationItemId(
                     openCalendarEventId, accountSwitchCompleted, switchToAccountId, lastSwitchedAccountId

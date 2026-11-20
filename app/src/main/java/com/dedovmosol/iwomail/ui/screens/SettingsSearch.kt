@@ -22,7 +22,8 @@ data class SettingsSearchEntry(
     val section: String,
     val dest: SettingsSearchDest,
     val focus: String = "",
-    val account: SettingsAccountTarget? = null
+    val account: SettingsAccountTarget? = null,
+    val contextTerms: String = ""
 )
 
 /**
@@ -32,15 +33,22 @@ data class SettingsSearchEntry(
 data class SettingsSearchState(
     val appLockEnabled: Boolean = false,
     val dailyThemesEnabled: Boolean = false,
-    val accounts: List<AccountEntity> = emptyList()
+    val accounts: List<AccountEntity> = emptyList(),
+    val trustedSenderCount: Int = 0,
+    val quietHoursEnabled: Boolean = false,
+    val storageDegraded: Boolean = false
 )
+
+internal fun usesFallbackStorage(context: android.content.Context): Boolean =
+    com.dedovmosol.iwomail.data.security.PasswordStorage.getInstance(context).isUsingInsecureStorage() ||
+        com.dedovmosol.iwomail.data.security.AppLockManager.isUsingInsecureStorage()
 
 /** Как в системных настройках: подстрока в названии пункта или разделе, без учёта регистра. */
 fun filterSettingsEntries(query: String, catalog: List<SettingsSearchEntry>): List<SettingsSearchEntry> {
-    val q = query.trim().lowercase()
+    val q = query.trim()
     if (q.isEmpty()) return emptyList()
     return catalog.filter { e ->
-        e.title.lowercase().contains(q) || e.section.lowercase().contains(q)
+        e.title.contains(q, ignoreCase = true) || e.section.contains(q, ignoreCase = true) || e.contextTerms.contains(q, ignoreCase = true)
     }
 }
 
@@ -57,7 +65,7 @@ fun rememberSettingsCatalog(state: SettingsSearchState): List<SettingsSearchEntr
     val about = Strings.aboutApp
     val catalog = mutableListOf(
         SettingsSearchEntry(accounts, accounts, SettingsSearchDest.Accounts),
-        SettingsSearchEntry(Strings.addAccount, accounts, SettingsSearchDest.Accounts),
+        SettingsSearchEntry(Strings.addAccount, accounts, SettingsSearchDest.Accounts, "addAccount"),
         SettingsSearchEntry(mail, mail, SettingsSearchDest.Mail),
         SettingsSearchEntry(Strings.remoteImagesSetting, mail, SettingsSearchDest.Mail, "remoteImages"),
         SettingsSearchEntry(Strings.galPhotosSetting, mail, SettingsSearchDest.Mail, "galPhotos"),
@@ -68,7 +76,7 @@ fun rememberSettingsCatalog(state: SettingsSearchState): List<SettingsSearchEntr
         SettingsSearchEntry(alerts, alerts, SettingsSearchDest.Alerts),
         SettingsSearchEntry(Strings.quietHours, alerts, SettingsSearchDest.Alerts, "quietHours"),
         SettingsSearchEntry(Strings.vipSenders, alerts, SettingsSearchDest.Alerts, "vipSenders"),
-        SettingsSearchEntry(appearance, appearance, SettingsSearchDest.Appearance),
+        SettingsSearchEntry(appearance, appearance, SettingsSearchDest.Appearance, contextTerms = Strings.interfacePersonalization),
         SettingsSearchEntry(Strings.language, appearance, SettingsSearchDest.Appearance, "language"),
         SettingsSearchEntry(Strings.fontSize, appearance, SettingsSearchDest.Appearance, "fontSize"),
         SettingsSearchEntry(Strings.colorTheme, appearance, SettingsSearchDest.Appearance, "colorTheme"),
@@ -83,9 +91,22 @@ fun rememberSettingsCatalog(state: SettingsSearchState): List<SettingsSearchEntr
         SettingsSearchEntry(Strings.supportedProtocols, about, SettingsSearchDest.About, "protocols"),
         SettingsSearchEntry(Strings.developer, about, SettingsSearchDest.About, "developer"),
     )
+    catalog += SettingsSearchEntry(Strings.appOverviewLabel, about, SettingsSearchDest.About, "overview")
+    catalog += SettingsSearchEntry(Strings.softwareUpdateLabel, about, SettingsSearchDest.About, "updates")
+    catalog += SettingsSearchEntry(Strings.autoUpdateCheck, Strings.softwareUpdateLabel, SettingsSearchDest.About, "autoUpdateCheck")
+    if (state.trustedSenderCount > 0) catalog += SettingsSearchEntry(Strings.trustedImageSenders(state.trustedSenderCount), mail, SettingsSearchDest.Mail, "trustedSenders")
+    if (state.quietHoursEnabled) {
+        catalog += SettingsSearchEntry(Strings.quietStartLabel, alerts, SettingsSearchDest.Alerts, "quietStart")
+        catalog += SettingsSearchEntry(Strings.quietEndLabel, alerts, SettingsSearchDest.Alerts, "quietEnd")
+    }
+    if (state.storageDegraded) catalog += SettingsSearchEntry(Strings.failClosedTitle, security, SettingsSearchDest.Security, "failClosed")
     // Строки, которые есть на экране только при включённой настройке
     if (state.dailyThemesEnabled) {
         catalog += SettingsSearchEntry(Strings.configureDailyThemes, appearance, SettingsSearchDest.Appearance, "configureDailyThemes")
+        for ((day, name) in weekDays()) {
+            catalog += SettingsSearchEntry("$name · ${Strings.colorTheme}", appearance, SettingsSearchDest.Appearance, "dayTheme_$day")
+            catalog += SettingsSearchEntry("$name · ${Strings.scrollbarColor}", appearance, SettingsSearchDest.Appearance, "dayScroll_$day")
+        }
     }
     if (state.appLockEnabled) {
         catalog += SettingsSearchEntry(Strings.appLockChangePassword, security, SettingsSearchDest.Security, "changePassword")
@@ -95,7 +116,7 @@ fun rememberSettingsCatalog(state: SettingsSearchState): List<SettingsSearchEntr
         catalog += accountEntries(account, appFiles = index == 0)
         catalog += SettingsSearchEntry(
             Strings.accountNotificationSettings, account.email, SettingsSearchDest.Alerts,
-            accountNotificationsFocus(account.id)
+            accountNotificationsFocus(account.id), contextTerms = "$alerts ${account.displayName}"
         )
     }
     return catalog
@@ -113,8 +134,11 @@ private fun accountEntries(account: AccountEntity, appFiles: Boolean): List<Sett
     val section = account.email
     val settings = SettingsAccountTarget(account.id)
     val sync = SettingsAccountTarget(account.id, sync = true)
+    val accountTerms = "${Strings.accountSettings} ${account.displayName}"
+    val cleanupTerms = "$accountTerms ${Strings.autoCleanup}"
     fun entry(title: String, focus: String, target: SettingsAccountTarget) =
-        SettingsSearchEntry(title, section, SettingsSearchDest.Accounts, focus, target)
+        SettingsSearchEntry(title, section, SettingsSearchDest.Accounts, focus, target,
+            if (focus.startsWith("autoCleanup")) cleanupTerms else accountTerms)
     return buildList {
         add(entry(Strings.changeCredentials, "credentials", settings))
         add(entry(Strings.signature, "signature", settings))
@@ -123,7 +147,7 @@ private fun accountEntries(account: AccountEntity, appFiles: Boolean): List<Sett
         if (hasServerCert) add(entry(Strings.serverCertificate, "serverCertificate", settings))
         if (!account.clientCertificatePath.isNullOrBlank()) add(entry(Strings.clientCertificate, "clientCertificate", settings))
         if (hasServerCert || ServerCertificateEndpoint.of(account) != null) {
-            add(entry(Strings.certProtectionTitle, "", settings))
+            add(entry(Strings.certProtectionTitle, "certProtection", settings))
         }
         add(entry(Strings.deleteAccountAction, "deleteAccount", settings))
         if (exchange) add(entry(Strings.syncMode, "syncMode", sync))

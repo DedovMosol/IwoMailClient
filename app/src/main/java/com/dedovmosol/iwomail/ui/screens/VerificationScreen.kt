@@ -21,6 +21,7 @@ import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.ui.NotificationStrings
 import com.dedovmosol.iwomail.ui.Strings
+import com.dedovmosol.iwomail.ui.utils.animatedRotation
 import com.dedovmosol.iwomail.ui.utils.rememberRotation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -641,7 +642,7 @@ fun VerificationScreen(
             CircularProgressIndicator(
                 modifier = Modifier
                     .size(64.dp)
-                    .rotate(rotation),
+                    .animatedRotation(rotation),
                 strokeWidth = 4.dp,
                 color = MaterialTheme.colorScheme.primary
             )

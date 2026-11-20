@@ -179,6 +179,16 @@ class MailRepository(private val context: Context) {
     suspend fun refreshAttachmentMetadata(emailId: String) = 
         emailOperationsService.refreshAttachmentMetadata(emailId)
 
+    internal suspend fun loadInlineAttachmentBytes(
+        emailId: String,
+        accountId: Long,
+        cids: Set<String>,
+        attachments: List<AttachmentEntity>,
+        maxPerImage: Long,
+        maxTotal: Long,
+        onImage: (String, ByteArray) -> Unit
+    ) = emailOperationsService.loadInlineAttachmentBytes(emailId, accountId, cids, attachments, maxPerImage, maxTotal, onImage)
+
     /** @see EmailOperationsService.downloadAttachmentToFile */
     suspend fun downloadAttachmentToFile(attachment: AttachmentEntity, destFile: java.io.File) =
         emailOperationsService.downloadAttachmentToFile(attachment, destFile)
@@ -312,25 +322,6 @@ class MailRepository(private val context: Context) {
         ).singleOrNull()
 
     /**
-     * Записывает тело письма в БД (обёртка над DAO, единая точка записи — инвариант проекта).
-     * Используется ComposeViewModel при открытии черновика: после резолвинга
-     * `cid:` → `data:` тело самодостаточно и не требует повторного сетевого
-     * запроса при каждом открытии (эталонное поведение старого ComposeScreen).
-     */
-    suspend fun updateEmailBody(emailId: String, body: String) {
-        emailDao.updateBody(emailId, body)
-    }
-
-    /**
-     * История получателей для автодополнения (сортировка по частоте использования).
-     * Обёртка над DAO для presentation-слоя (Этап 3, CS-16).
-     */
-    suspend fun searchEmailHistory(accountId: Long, query: String, ownEmail: String, limit: Int = 10): List<EmailHistoryResult> {
-        if (query.isBlank()) return emptyList()
-        return emailDao.searchEmailHistory(accountId, query, ownEmail, limit)
-    }
-
-    /**
      * Атомарно воссоздаёт запись черновика (email + вложения) в одной транзакции.
      * Используется как защита в [saveDraft] delete+create-потоке: если фоновый
      * sync удалил новую запись между её созданием и верификацией — воссоздаём.
@@ -343,14 +334,6 @@ class MailRepository(private val context: Context) {
                 attachmentDao.insertAll(attachments)
             }
         }
-    }
-    
-    /**
-     * Синхронное получение папки по локальному ID (паттерн [getEmailSync]).
-     * Используется в presentation layer (ComposeViewModel) для определения коллекции вложений.
-     */
-    suspend fun getFolderSync(folderId: String): FolderEntity? {
-        return folderDao.getFolder(folderId)
     }
     
     suspend fun getAttachmentsSync(emailId: String): List<AttachmentEntity> {

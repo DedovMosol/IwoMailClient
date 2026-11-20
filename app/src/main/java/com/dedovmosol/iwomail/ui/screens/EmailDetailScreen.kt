@@ -84,6 +84,8 @@ fun EmailDetailScreen(
     onReplyClick: () -> Unit,
     onForwardClick: () -> Unit = {},
     onComposeToEmail: (String) -> Unit = {},
+    /** Ссылка mailto: в тексте письма — новое письмо со всеми её полями (адреса, копия, тема, текст). */
+    onComposeMailto: (com.dedovmosol.iwomail.util.MailtoLink) -> Unit = { onComposeToEmail(it.to.joinToString(", ")) },
     /** Синхронизация перенесла письмо под другой id: открыть его вместо этого экрана (нет — просто назад). */
     onReopen: ((String) -> Unit)? = null
 ) {
@@ -1705,7 +1707,7 @@ fun EmailDetailScreen(
                             HtmlBodyView(
                                 html = sanitizedBody,
                                 contentKey = emailId,
-                                onMailto = onComposeToEmail,
+                                onMailto = onComposeMailto,
                                 remoteContentAllowed = remoteAllowed
                             )
                         }

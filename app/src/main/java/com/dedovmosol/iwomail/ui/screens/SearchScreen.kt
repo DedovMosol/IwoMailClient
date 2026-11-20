@@ -47,8 +47,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.ui.screens.emaillist.MailRow
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.dedovmosol.iwomail.ui.screens.emaillist.MailConfirmation
+import com.dedovmosol.iwomail.ui.screens.emaillist.MailListQuickScroll
+import com.dedovmosol.iwomail.ui.screens.emaillist.mailListContentPadding
+import com.dedovmosol.iwomail.ui.screens.emaillist.mailListLabel
+import com.dedovmosol.iwomail.ui.screens.emaillist.ContextMailLabel
+import com.dedovmosol.iwomail.ui.screens.emaillist.rememberMailListScope
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.NotificationStrings
@@ -80,16 +84,14 @@ fun SearchScreen(
     val viewModel: SearchViewModel = viewModel(
         factory = SearchViewModel.provideFactory(context.applicationContext as android.app.Application)
     )
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val uiState = viewModel.uiState.collectAsStateWithLifecycle().value
     val query = uiState.query
     val dateFilter = uiState.dateFilter
     val isSearching = uiState.isSearching
-    val selectedIds = uiState.selectedIds
-    val isSelectionMode = selectedIds.isNotEmpty()
-    BackHandler(enabled = isSelectionMode) { viewModel.clearSelection() }
+    BackHandler(enabled = uiState.selectedIds.isNotEmpty()) { viewModel.clearSelection() }
 
     var showEasterEgg by rememberSaveable { mutableStateOf(false) }
-    var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
+    var deleteConfirmation by remember { mutableStateOf<MailConfirmation?>(null) }
 
     // Сохранение фокуса при повороте экрана
     val searchFocusRequester = remember { FocusRequester() }
@@ -101,29 +103,37 @@ fun SearchScreen(
         }
     }
 
-    val filteredResults = remember(uiState.allResults, dateFilter, uiState.pendingRemovalIds) {
-        val pending = uiState.pendingRemovalIds
-        uiState.allResults.filter { email ->
-            email.id !in pending && dateFilter.days?.let { days ->
-                val cutoff = System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
-                email.dateReceived >= cutoff
-            } ?: true
-        }
+    val results = remember(uiState.allResults, uiState.pendingRemovalIds) {
+        uiState.allResults.distinctBy { it.id }.filterNot { it.id in uiState.pendingRemovalIds }
+    }
+    val filteredResults = remember(results, dateFilter) {
+        val cutoff = dateFilter.days?.let { System.currentTimeMillis() - it * 86_400_000L }
+        if (cutoff == null) results else results.filter { it.dateReceived >= cutoff }
     }
     val listSettings = remember { RepositoryProvider.getSettingsRepository(context) }
     val conversationView by remember { listSettings.conversationView }
         .collectAsStateWithLifecycle(initialValue = listSettings.getConversationViewSync())
-    val searchThreads by androidx.compose.runtime.produceState<List<com.dedovmosol.iwomail.domain.EmailThread>?>(
-        null, filteredResults, conversationView
-    ) {
-        value = if (!conversationView) null else withContext(Dispatchers.Default) {
-            com.dedovmosol.iwomail.domain.EmailThreads.group(filteredResults)
-        }
-    }
+    val onlyThreads = uiState.onlyThreads
+    val mailScope = rememberMailListScope(results, filteredResults, conversationView || onlyThreads, onlyThreads)
     var expandedSearchThreads by rememberSaveable { mutableStateOf(emptyList<String>()) }
-    val searchRows = remember(filteredResults, conversationView, searchThreads, expandedSearchThreads) {
-        if (!conversationView) MailRow.flat(filteredResults)
-        else searchThreads?.let { MailRow.threaded(it, expandedSearchThreads.toSet()) }
+    val searchRows = remember(mailScope, expandedSearchThreads) {
+        mailScope?.rows(expandedSearchThreads.toSet()).orEmpty()
+    }
+    val allIds = mailScope?.selectableIds.orEmpty()
+    val selectedIds = remember(mailScope, uiState.selectedIds) { mailScope?.selectOnly(uiState.selectedIds).orEmpty() }
+    val isSelectionMode = selectedIds.isNotEmpty()
+    SideEffect {
+        if (mailScope != null && selectedIds != uiState.selectedIds && viewModel.uiState.value === uiState) {
+            viewModel.setSelection(selectedIds)
+        }
+        if (mailScope != null && deleteConfirmation?.matches(selectedIds, results) == false) deleteConfirmation = null
+    }
+    fun updateSelection(ids: Set<String>) {
+        if (viewModel.uiState.value === uiState && mailScope != null) viewModel.setSelection(mailScope.selectOnly(ids))
+    }
+    fun withSelection(confirmation: MailConfirmation? = null, action: () -> Unit) {
+        if (viewModel.uiState.value === uiState && selectedIds.isNotEmpty() && selectedIds == uiState.selectedIds &&
+            (confirmation == null || confirmation.matches(selectedIds, results))) action()
     }
 
     // Дебаунс поиска: состояние и корутина живут в ViewModel, здесь — только UI-триггер
@@ -155,21 +165,24 @@ fun SearchScreen(
     }
 
     // Диалог удаления
-    if (showDeleteDialog) {
+    deleteConfirmation?.let { confirmation ->
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
+            onDismissRequest = { deleteConfirmation = null },
             icon = { Icon(AppIcons.Delete, null) },
-            title = { Text(if (selectedIds.size == 1) Strings.deleteEmail else Strings.deleteEmails) },
-            text = { Text(Strings.emailsWillBeMovedToTrash(selectedIds.size)) },
+            title = { Text(if (confirmation.count == 1) Strings.deleteEmail else Strings.deleteEmails) },
+            text = { Text(Strings.emailsWillBeMovedToTrash(confirmation.count)) },
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
-                    onClick = { showDeleteDialog = false; viewModel.deleteSelected() },
+                    onClick = {
+                        deleteConfirmation = null
+                        withSelection(confirmation) { viewModel.deleteSelected() }
+                    },
                     text = Strings.yes
                 )
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { showDeleteDialog = false },
+                    onClick = { deleteConfirmation = null },
                     text = Strings.no
                 )
             }
@@ -178,7 +191,7 @@ fun SearchScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
-        contentWindowInsets = WindowInsets.statusBars,
+        contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             if (isSelectionMode) {
                 // Панель выбора
@@ -190,13 +203,13 @@ fun SearchScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = { viewModel.markSelectedAsRead(true) }) {
+                        IconButton(onClick = { withSelection { viewModel.markSelectedAsRead(true) } }) {
                             Icon(AppIcons.MarkEmailRead, Strings.markRead)
                         }
-                        IconButton(onClick = { viewModel.starSelected() }) {
+                        IconButton(onClick = { withSelection { viewModel.starSelected() } }) {
                             Icon(AppIcons.Star, Strings.star)
                         }
-                        IconButton(onClick = { showDeleteDialog = true }) {
+                        IconButton(onClick = { deleteConfirmation = MailConfirmation(selectedIds, results) }) {
                             Icon(AppIcons.Delete, Strings.delete)
                         }
                     },
@@ -266,20 +279,23 @@ fun SearchScreen(
         }
     ) { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding)
+            modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
         ) {
             // Фильтры
             FilterBar(
                 dateFilter = dateFilter,
                 onDateFilterChange = { viewModel.setDateFilter(it) },
-                hasResults = uiState.allResults.isNotEmpty()
+                hasResults = uiState.allResults.isNotEmpty(),
+                onlyThreads = onlyThreads,
+                onToggleThreads = { viewModel.setOnlyThreads(!onlyThreads) }
             )
 
             // Плавные переходы между состояниями контента при смене фильтров
             val contentState = when {
                 isSearching -> 0
                 query.isEmpty() -> 1
-                filteredResults.isEmpty() && query.length >= 2 -> 2
+                mailScope == null -> 0
+                allIds.isEmpty() && query.length >= 2 -> 2
                 uiState.allResults.isEmpty() -> 3
                 else -> 4
             }
@@ -309,89 +325,73 @@ fun SearchScreen(
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Text(Strings.noResults, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                if (dateFilter != DateFilter.ALL) {
-                                    TextButton(onClick = { viewModel.setDateFilter(DateFilter.ALL) }) {
+                                if (dateFilter != DateFilter.ALL || onlyThreads) {
+                                    TextButton(onClick = { viewModel.clearFilters() }) {
                                         Text(Strings.resetAll)
                                     }
                                 }
                             }
                         }
                         else -> {
-
-                            Box(modifier = Modifier.fillMaxSize()) {
-                            LazyColumn(state = listState) {
-                                // Выбрать всё (только в режиме выбора)
-                                if (isSelectionMode) {
-                                    item(key = "select_all") {
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable {
-                                                    viewModel.setSelection(
-                                                        if (selectedIds.size == filteredResults.size) emptySet()
-                                                        else filteredResults.map { it.id }.toSet()
-                                                    )
-                                                }
-                                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Checkbox(
-                                                checked = selectedIds.size == filteredResults.size,
-                                                onCheckedChange = {
-                                                    viewModel.setSelection(if (it) filteredResults.map { e -> e.id }.toSet() else emptySet())
-                                                }
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(Strings.selectAll)
+                            // Don't expose outgoing results/actions while the search transitions.
+                            if (contentState == 4) {
+                                LazyColumn(state = listState, contentPadding = mailListContentPadding(isSelectionMode)) {
+                                    if (isSelectionMode) {
+                                        item(key = "select_all") {
+                                            val allSelected = selectedIds == allIds
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth()
+                                                    .clickable { updateSelection(if (allSelected) emptySet() else allIds) }
+                                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Checkbox(checked = allSelected, onCheckedChange = null)
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(Strings.selectAll)
+                                            }
+                                            HorizontalDivider()
                                         }
-                                        HorizontalDivider()
+                                    }
+                                    item(key = "results_count") {
+                                        Text(
+                                            text = "${if (isRussian) "Найдено" else "Found"}: ${allIds.size}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                        )
+                                    }
+                                    items(searchRows, key = { it.key }, contentType = { it::class }) { row ->
+                                        val email = row.email
+                                        val header = row as? MailRow.Header
+                                        val selectable = header != null || email.id in allIds
+                                        SearchResultItem(
+                                            email = email,
+                                            query = query,
+                                            showsRecipient = email.folderId in uiState.recipientFolderIds,
+                                            isSelected = header?.let { selectedIds.containsAll(it.selectableIds) } ?: (email.id in selectedIds),
+                                            contextOnly = !selectable,
+                                            isSelectionMode = isSelectionMode,
+                                            threadExpanded = header?.expanded,
+                                            threadCount = header?.thread?.emails?.size,
+                                            onClick = {
+                                                if (viewModel.uiState.value === uiState) {
+                                                    if (isSelectionMode && selectable) {
+                                                        updateSelection(MailRow.toggleThread(selectedIds, header?.selectableIds ?: listOf(email.id)))
+                                                    } else if (header != null) {
+                                                        val key = header.thread.key
+                                                        expandedSearchThreads = if (header.expanded) expandedSearchThreads - key else expandedSearchThreads + key
+                                                    } else if (!isSelectionMode) {
+                                                        onEmailClick(email.id)
+                                                    }
+                                                }
+                                            },
+                                            onLongClick = { updateSelection(selectedIds + (header?.selectableIds ?: listOf(email.id))) },
+                                            modifier = if (row is MailRow.Child) Modifier.padding(start = 24.dp) else Modifier
+                                        )
                                     }
                                 }
-
-                                // Количество результатов
-                                item(key = "results_count") {
-                                    Text(
-                                        text = "${if (isRussian) "Найдено" else "Found"}: ${filteredResults.size}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier
-                                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                                    )
-                                }
-
-                                items(searchRows ?: MailRow.flat(filteredResults), key = { it.key }) { row ->
-                                    val email = row.email
-                                    SearchResultItem(
-                                        email = email,
-                                        query = query,
-                                        showsRecipient = email.folderId in uiState.recipientFolderIds,
-                                        isSelected = if (row is MailRow.Header) selectedIds.containsAll(row.thread.ids) else email.id in selectedIds,
-                                        threadExpanded = (row as? MailRow.Header)?.expanded,
-                                        threadCount = (row as? MailRow.Header)?.thread?.emails?.size,
-                                        onClick = {
-                                            if (isSelectionMode) {
-                                                if (row is MailRow.Header) {
-                                                    viewModel.setSelection(MailRow.toggleThread(selectedIds, row.thread.ids))
-                                                } else {
-                                                    viewModel.toggleSelection(email.id)
-                                                }
-                                            } else if (row is MailRow.Header) {
-                                                expandedSearchThreads =
-                                                    if (row.thread.key in expandedSearchThreads) expandedSearchThreads - row.thread.key
-                                                    else expandedSearchThreads + row.thread.key
-                                            } else {
-                                                onEmailClick(email.id)
-                                            }
-                                        },
-                                        onLongClick = {
-                                            if (row is MailRow.Header) viewModel.setSelection(selectedIds + row.thread.ids)
-                                            else viewModel.addToSelection(email.id)
-                                        },
-                                        modifier = if (row is MailRow.Child) Modifier.padding(start = 24.dp) else Modifier
-                                    )
-                                }
-                            }
                                 LazyColumnScrollbar(listState)
+                                MailListQuickScroll(listState, enabled = !isSelectionMode, modifier = Modifier.align(Alignment.BottomStart))
                             }
                         }
                     }
@@ -427,7 +427,9 @@ fun SearchScreen(
 private fun FilterBar(
     dateFilter: DateFilter,
     onDateFilterChange: (DateFilter) -> Unit,
-    hasResults: Boolean
+    hasResults: Boolean,
+    onlyThreads: Boolean,
+    onToggleThreads: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -437,6 +439,12 @@ private fun FilterBar(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        FilterChip(
+            selected = onlyThreads,
+            onClick = onToggleThreads,
+            enabled = hasResults || onlyThreads,
+            label = { Text(mailListLabel("Только цепочки", "Threads only")) }
+        )
         DateFilter.entries.filter { it != DateFilter.ALL }.forEach { filter ->
             val label = when (filter) {
                 DateFilter.TODAY -> Strings.today
@@ -466,6 +474,8 @@ private fun SearchResultItem(
     query: String,
     showsRecipient: Boolean,
     isSelected: Boolean,
+    contextOnly: Boolean,
+    isSelectionMode: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -555,16 +565,14 @@ private fun SearchResultItem(
         }
     }
 
+    val interaction = when {
+        contextOnly && isSelectionMode -> Modifier
+        contextOnly -> Modifier.clickable(onClick = onClick)
+        isSelectionMode -> Modifier.clickable(onClick = { haptic.tick(); onClick() })
+        else -> Modifier.combinedClickable(onClick = onClick, onLongClick = { haptic.confirm(); onLongClick() })
+    }
     Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = {
-                    haptic.confirm()
-                    onLongClick()
-                }
-            ),
+        modifier = modifier.fillMaxWidth().then(interaction),
         color = backgroundColor
     ) {
         Row(
@@ -576,18 +584,7 @@ private fun SearchResultItem(
                 modifier = Modifier
                     .size(40.dp)
                     .clip(CircleShape)
-                    .background(if (isSelected) MaterialTheme.colorScheme.primary else avatarColor)
-                    .combinedClickable(
-                        onClick = {
-                            // Клик на аватар = клик на письмо (открыть или выделить/снять в режиме выделения)
-                            onClick()
-                        },
-                        onLongClick = {
-                            // Долгий клик = выделение
-                            haptic.confirm()
-                            onLongClick()
-                        }
-                    ),
+                    .background(if (isSelected) MaterialTheme.colorScheme.primary else avatarColor),
                 contentAlignment = Alignment.Center
             ) {
                 if (isSelected) {
@@ -641,6 +638,7 @@ private fun SearchResultItem(
                     fontWeight = if (email.read) FontWeight.Normal else FontWeight.SemiBold
                 )
                 Spacer(modifier = Modifier.height(2.dp))
+                if (contextOnly) ContextMailLabel()
                 highlightText(
                     text = email.preview,
                     query = query,

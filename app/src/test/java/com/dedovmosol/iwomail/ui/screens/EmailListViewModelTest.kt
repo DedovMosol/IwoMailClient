@@ -82,6 +82,38 @@ class EmailListViewModelTest {
     }
 
     @Test
+    fun `threads filter subscribes to the paired folder without enabling conversation view globally`() = runTest(dispatcher) {
+        every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(listOf(
+            folderMock(INBOX_ID, FolderType.INBOX), folderMock("sent", FolderType.SENT_ITEMS)
+        ))
+        every { mailRepo.getEmails("sent") } returns flowOf(listOf(email("peer").copy(folderId = "sent")))
+        val vm = createViewModel()
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.peerEmails).isEmpty()
+        vm.setOnlyThreads(true)
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.peerEmails.map { it.id }).containsExactly("peer")
+        vm.clearFilters()
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.onlyThreads).isFalse()
+        assertThat(vm.uiState.value.peerEmails).isEmpty()
+    }
+
+    @Test
+    fun `sync drops a selected reused ServerId and retains an unchanged message`() = runTest(dispatcher) {
+        val first = email("a")
+        val second = email("b")
+        val source = kotlinx.coroutines.flow.MutableStateFlow(listOf(first, second))
+        every { mailRepo.getEmails(INBOX_ID) } returns source
+        val vm = createViewModel()
+        advanceUntilIdle()
+        vm.setSelection(setOf("a", "b"))
+        source.value = listOf(first.copy(subject = "New message sharing the old ServerId"), second.copy(read = !second.read))
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.selectedIds).containsExactly("b")
+    }
+
+    @Test
     fun `opening inbox syncs incrementally without the pull-to-refresh spinner`() = runTest(dispatcher) {
         val vm = createViewModel()
         advanceUntilIdle()
@@ -549,8 +581,8 @@ class EmailListViewModelTest {
     @Test
     fun `swipe read toggles the read state of that email`() = runTest(dispatcher) {
         coEvery { mailRepo.markAsRead(any(), any()) } returns EasResult.Success(true)
-        val unread = email("a").also { every { it.read } returns false }
-        val read = email("b").also { every { it.read } returns true }
+        val unread = email("a")
+        val read = email("b").copy(read = true)
         val vm = createViewModel()
         advanceUntilIdle()
 
@@ -637,9 +669,11 @@ class EmailListViewModelTest {
     }
 
     private fun email(id: String): EmailEntity {
-        val e = mockk<EmailEntity>(relaxed = true)
-        every { e.id } returns id
-        return e
+        return EmailEntity(
+            id = id, accountId = ACCOUNT_ID, folderId = INBOX_ID, serverId = id,
+            from = "sender@example.test", to = "recipient@example.test",
+            subject = "Subject $id", body = "", dateReceived = 100L, read = false
+        )
     }
 
     private fun folderMock(id: String, type: Int): FolderEntity {

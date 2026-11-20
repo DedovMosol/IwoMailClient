@@ -93,26 +93,14 @@ data class ListUnsubscribe(val https: String?, val mailto: Mailto?, val oneClick
             false
         }
 
-        /** mailto:адрес?subject=…&body=… (RFC 6068): первый адрес; «+» — сам символ, а не пробел. */
+        /** mailto: ([MailtoLink], RFC 6068): письмо отписки — первому адресу, тема по умолчанию, если её нет. */
         private fun parseMailto(uri: String): Mailto? {
-            if (!uri.startsWith("mailto:", ignoreCase = true)) return null
-            val rest = uri.substring("mailto:".length)
-            val fields = rest.substringAfter('?', "").split('&').filter { it.isNotEmpty() }.associate { field ->
-                decode(field.substringBefore('=')).lowercase() to decode(field.substringAfter('=', ""))
-            }
-            val to = decode(rest.substringBefore('?')).split(',').map { it.trim() }.firstOrNull { it.isNotEmpty() }
-                ?: fields["to"]?.split(',')?.map { it.trim() }?.firstOrNull { it.isNotEmpty() }
-                ?: return null
+            val link = com.dedovmosol.iwomail.util.MailtoLink.parse(uri) ?: return null
+            val to = link.to.firstOrNull() ?: return null
             if (!EMAIL.matches(to)) return null
-            return Mailto(to, fields["subject"]?.takeIf { it.isNotBlank() } ?: DEFAULT_SUBJECT, fields["body"].orEmpty())
+            return Mailto(to, link.subject?.takeIf { it.isNotBlank() } ?: DEFAULT_SUBJECT, link.body.orEmpty())
         }
 
         private val EMAIL = Regex("""[^\s@<>()",;]+@[^\s@<>()",;]+\.[^\s@<>()",;]+""")
-
-        private fun decode(value: String): String = try {
-            java.net.URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
-        } catch (_: IllegalArgumentException) {
-            value
-        }
     }
 }

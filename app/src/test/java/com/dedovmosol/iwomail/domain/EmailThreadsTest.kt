@@ -217,6 +217,48 @@ class EmailThreadsTest {
     }
 
     @Test
+    fun `unique server id propagates along exact reply links despite changed subjects`() {
+        val root = email("one", "Root", "C1", internetMessageId = "<root@corp>")
+        val reply = email("two", "Different subject", internetMessageId = "<reply@corp>", inReplyTo = "<root@corp>")
+        val leaf = email("three", "Yet another subject", inReplyTo = "<reply@corp>")
+        val serverSibling = email("four", "Another server member", "C1")
+        val grouped = EmailThreads.group(listOf(leaf, reply, root, serverSibling)).single()
+        assertThat(grouped.key).isEqualTo("c:1:C1")
+        assertThat(grouped.ids).containsExactly("three", "two", "one", "four").inOrder()
+    }
+
+    @Test
+    fun `conflicting exact links do not grant unknown messages either server key or a subject fallback`() {
+        val root = email("one", "Original", "C1", internetMessageId = "<one@corp>")
+        val other = email("two", "Different", "C2", internetMessageId = "<two@corp>")
+        val bridge = email("three", "Re: Original", inReplyTo = "<one@corp> <two@corp>")
+        val sibling = email("four", "Re: Original", "C1")
+        assertThat(EmailThreads.group(listOf(root, other, bridge, sibling)).ids())
+            .containsExactly(listOf("one", "four"), listOf("two"), listOf("three")).inOrder()
+    }
+
+    @Test
+    fun `same RFC id across accounts does not shadow the local parent and key survives renumbering`() {
+        val foreign = email("one", "Foreign", "C2", accountId = 2, internetMessageId = "<root@corp>")
+        val root = email("two", "Root", internetMessageId = "<root@corp>")
+        val child = email("three", "Changed", inReplyTo = "<root@corp>")
+        val grouped = EmailThreads.group(listOf(foreign, root, child))
+        assertThat(grouped.ids()).containsExactly(listOf("one"), listOf("two", "three")).inOrder()
+        val resynced = EmailThreads.group(listOf(child.copy(id = "new-3", serverId = "3"), root.copy(id = "new-2", serverId = "2")))
+        assertThat(resynced.single().key).isEqualTo(grouped.last().key)
+    }
+
+    @Test
+    fun `missing or ambiguous exact parent does not invent a link and duplicate rows do not form a thread`() {
+        val root = email("one", "Root", "C1", internetMessageId = "<duplicate@corp>")
+        val other = email("two", "Other", "C2", internetMessageId = "<duplicate@corp>")
+        val child = email("three", "Changed", inReplyTo = "<duplicate@corp>")
+        assertThat(EmailThreads.group(listOf(root, root, other, child)).ids())
+            .containsExactly(listOf("one"), listOf("two"), listOf("three")).inOrder()
+        assertThat(EmailThreads.group(listOf(child)).single().isThread).isFalse()
+    }
+
+    @Test
     fun `old message without replies around stays apart from the conversation`() {
         val threads = EmailThreads.group(
             listOf(

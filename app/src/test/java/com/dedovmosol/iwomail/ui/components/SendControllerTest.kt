@@ -74,6 +74,7 @@ class SendControllerTest {
 
     @After
     fun tearDown() {
+        WorkManagerTestInitHelper.closeWorkDatabase()
         File(context.filesDir, ScheduledSend.ROOT_DIR).deleteRecursively()
     }
 

@@ -43,7 +43,8 @@ data class SearchUiState(
     val selectedIds: Set<String> = emptySet(),
     /** Папки «Отправленные» и «Черновики»: в поиске строка показывает Кому, не From. */
     val recipientFolderIds: Set<String> = emptySet(),
-    val pendingRemovalIds: Set<String> = emptySet()
+    val pendingRemovalIds: Set<String> = emptySet(),
+    val onlyThreads: Boolean = false
 )
 
 /**
@@ -87,13 +88,22 @@ class SearchViewModel(
     private val activeAccount = accountRepo.activeAccount
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    private var searchJob: Job? = null
+
     init {
         viewModelScope.launch {
-            accountRepo.activeAccount.collectLatest { account ->
-                if (account == null) {
-                    _uiState.update { it.copy(recipientFolderIds = emptySet()) }
-                    return@collectLatest
+            var previousAccountId = activeAccount.value?.id
+            activeAccount.collectLatest { account ->
+                if (previousAccountId != account?.id) {
+                    previousAccountId = account?.id
+                    searchJob?.cancel()
+                    _uiState.update {
+                        it.copy(allResults = emptyList(), selectedIds = emptySet(), isSearching = false,
+                            recipientFolderIds = emptySet(), pendingRemovalIds = emptySet())
+                    }
+                    if (account != null && !_uiState.value.query.trim().equals("I Want Out", ignoreCase = true)) search()
                 }
+                if (account == null) return@collectLatest
                 mailRepo.getFolders(account.id).collect { folders ->
                     val ids = folders.filter { folderShowsRecipient(it.type) }.mapTo(HashSet()) { it.id }
                     _uiState.update { it.copy(recipientFolderIds = ids) }
@@ -102,19 +112,24 @@ class SearchViewModel(
         }
     }
 
-    private var searchJob: Job? = null
-
     fun onQueryChange(value: String) {
-        _uiState.update { it.copy(query = value) }
+        if (_uiState.value.query == value) return
+        searchJob?.cancel()
+        _uiState.update { it.copy(query = value, allResults = emptyList(), selectedIds = emptySet(), isSearching = false) }
     }
 
-    fun clearQuery() {
-        searchJob?.cancel()
-        _uiState.update { it.copy(query = "", allResults = emptyList(), selectedIds = emptySet()) }
-    }
+    fun clearQuery() = onQueryChange("")
 
     fun setDateFilter(filter: DateFilter) {
         _uiState.update { it.copy(dateFilter = filter) }
+    }
+
+    fun setOnlyThreads(enabled: Boolean) {
+        _uiState.update { it.copy(onlyThreads = enabled) }
+    }
+
+    fun clearFilters() {
+        _uiState.update { it.copy(dateFilter = DateFilter.ALL, onlyThreads = false) }
     }
 
     fun search() {

@@ -633,6 +633,18 @@ data class EmailServerRef(
     val dateReceived: Long
 )
 
+/** Server identity for inline attachments, without re-reading the cached MIME body. */
+data class InlineAttachmentTarget(
+    val id: String,
+    val accountId: Long,
+    val folderId: String,
+    val serverId: String,
+    val subject: String,
+    val from: String,
+    val dateReceived: Long,
+    val internetMessageId: String?
+)
+
 /** Черновик на устройстве без тела (автоочистка): [dateReceived] у черновика — время последнего сохранения. */
 data class LocalDraftRef(
     val id: String,

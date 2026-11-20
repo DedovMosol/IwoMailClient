@@ -501,11 +501,8 @@ fun AccountSettingsScreen(
                             PasswordVisualTransformation()
                         },
                         trailingIcon = {
-                            IconButton(onClick = { clientCertPasswordVisible = !clientCertPasswordVisible }) {
-                                Icon(
-                                    if (clientCertPasswordVisible) AppIcons.VisibilityOff else AppIcons.Visibility,
-                                    contentDescription = null
-                                )
+                            com.dedovmosol.iwomail.ui.components.PasswordVisibilityToggle(clientCertPasswordVisible) {
+                                clientCertPasswordVisible = it
                             }
                         },
                         singleLine = true
@@ -732,11 +729,14 @@ fun AccountSettingsScreen(
             // С импортированным сертификатом — закрепление его ключа; без него — доверие по отпечатку (ONB-08).
             // У Exchange по http TLS нет — карточки нет.
             if (hasServerCert || hasTlsEndpoint) {
-                CertificatePinningCard(
-                    account = currentAccount,
-                    accountRepo = accountRepo,
-                    onAccountUpdated = { updatedAccount -> account = updatedAccount }
-                )
+                val (anchor, _) = rememberSettingsHighlight("certProtection", highlight)
+                Box(modifier = anchor) {
+                    CertificatePinningCard(
+                        account = currentAccount,
+                        accountRepo = accountRepo,
+                        onAccountUpdated = { updatedAccount -> account = updatedAccount }
+                    )
+                }
             }
 
             SettingsGroup {

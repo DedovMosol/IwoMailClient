@@ -20,13 +20,16 @@
     <string name="widget_calendar">Календарь</string>
     <string name="widget_tasks">Задачи</string>
     <string name="widget_no_new_mail">Нет новых писем</string>
-    <string name="widget_content_hidden">Содержимое скрыто: включена блокировка приложения</string>
     <string name="widget_notes">Заметки</string>
     <string name="widget_unread">непрочитанных</string>
     <string name="widget_synced_just_now">Только что</string>
     <string name="widget_no_events_today">Нет событий на сегодня</string>
     <string name="widget_no_tasks">Нет задач на сегодня</string>
     <string name="widget_no_notes">Нет заметок</string>
+    <string name="widget_compose">Написать письмо</string>
+    <string name="widget_sync_now">Синхронизировать</string>
+    <string name="widget_account">Аккаунт %1$s</string>
+    <string name="widget_account_unread">Аккаунт %1$s, непрочитанных: %2$d</string>
 
     <!-- L-7: Предупреждения безопасности для небезопасного хранения паролей -->
     <string name="security_warning_insecure_storage_title">⚠️ Предупреждение безопасности</string>

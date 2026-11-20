@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.eas
 
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -476,6 +477,20 @@ class EasClient(
         }
     }
 
+    /** A successful OPTIONS response advertises capabilities, not access to a mailbox. */
+    internal suspend fun checkMailboxAccess(): EasResult<Boolean> {
+        when (val version = detectEasVersion()) {
+            is EasResult.Error -> return version
+            is EasResult.Success -> Unit
+        }
+        return executeEasCommand("Settings", """<Settings xmlns="Settings"><UserInformation><Get/></UserInformation></Settings>""") { xml ->
+            val settings = XmlUtils.extractTopLevelBlocks(xml, "Settings").singleOrNull().orEmpty()
+            val user = XmlUtils.extractTopLevelBlocks(settings, "UserInformation").singleOrNull().orEmpty()
+            extractValue(settings, "Status") == "1" && extractValue(user, "Status") == "1" &&
+                XmlUtils.extractTopLevelBlocks(user, "Get").isNotEmpty()
+        }
+    }
+
     suspend fun provision(): EasResult<String> = transport.provision()
 
     /**
@@ -920,10 +935,10 @@ class EasClient(
      * Пользовательская папка: тот же FindFolder, что и отказ от MDN ([EwsReadReceipts.findFolderByName]).
      * Ровно один FolderId — иначе null. Exchange 2007 SP1+.
      */
-    private suspend fun findEwsFolderIdByDisplayName(displayName: String): EasResult<String?> {
+    private suspend fun findEwsFolderIdByDisplayName(displayName: String, bounded: Boolean = false): EasResult<String?> {
         if (displayName.isBlank()) return EasResult.Success(null)
         val request = transport.buildEwsSoapRequest(EwsReadReceipts.findFolderByName(displayName))
-        val response = transport.executeEwsWithAuth(request, "FindFolder")
+        val response = readEwsLookup(request, "FindFolder", bounded)
             ?: return EasResult.Error("FindFolder request failed")
         val ids = EwsIds.parseFolderIds(response)
         return when (ids.size) {
@@ -940,7 +955,8 @@ class EasClient(
         subject: String,
         folder: EwsMailFolder,
         dateReceived: Long,
-        internetMessageId: String?
+        internetMessageId: String?,
+        bounded: Boolean = false
     ): EasResult<String?> = withContext(Dispatchers.IO) {
             val distinguishedFolderId = (folder as? EwsMailFolder.Distinguished)?.id
             val parentFolderXml = when (folder) {
@@ -952,7 +968,7 @@ class EasClient(
                         android.util.Log.w("EasClient", "fetchEmailBodyViaEws: unnamed user folder, skipping fallback")
                         return@withContext EasResult.Success(null)
                     }
-                    when (val found = findEwsFolderIdByDisplayName(name)) {
+                    when (val found = findEwsFolderIdByDisplayName(name, bounded)) {
                         is EasResult.Error -> return@withContext found
                         is EasResult.Success -> {
                             val id = found.data
@@ -1055,7 +1071,7 @@ class EasClient(
         </m:FindItem>
     </soap:Body>
 </soap:Envelope>""".trimIndent()
-                val findResponse = transport.executeEwsWithAuth(findRequest, "FindItem")
+                val findResponse = readEwsLookup(findRequest, "FindItem", bounded)
                     ?: return EasResult.Error("FindItem request failed")
                 val ids = itemIdPattern.findAll(findResponse).map { it.groupValues[1] }.toList()
                 return EasResult.Success(ids)
@@ -1294,7 +1310,7 @@ class EasClient(
         withContext(Dispatchers.IO) {
             try {
                 val streamed = ewsClient.executeStreaming(EwsAttachments.contentRequest(attachmentId), "GetAttachment") { input, checkActive ->
-                    java.io.FileOutputStream(destFile).use { out -> EwsAttachmentContent.extract(input, out, checkActive) }
+                    java.io.FileOutputStream(destFile).use { out -> EwsAttachmentContent.extract(input, out, onChunk = checkActive) }
                 }
                 val result: EasResult<java.io.File> = when (streamed) {
                     is EasResult.Error -> EasResult.Error(streamed.message)
@@ -1317,6 +1333,65 @@ class EasClient(
                 EasResult.Error(AttachmentErrors.of(e))
             }
         }
+
+    internal suspend fun fetchInlineAttachmentMetadata(
+        collectionId: String, serverId: String
+    ): EasResult<EasEmailService.AttachmentMetadata> {
+        val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+        return transport.openEasCommand("ItemOperations", emailService.attachmentMetadataRequest(collectionId, serverId)) { response ->
+            if (!response.isSuccessful) return@openEasCommand EasResult.Error("HTTP ${response.code}")
+            val body = response.body ?: return@openEasCommand EasResult.Error(AttachmentErrors.NOT_FOUND)
+            try {
+                val buffer = EasAttachmentService.BoundedBuffer(256L * 1024)
+                EasAttachmentService.copy(body.byteStream(), buffer) { job?.ensureActive() }
+                emailService.parseAttachmentMetadata(wbxmlParser.parse(buffer.toByteArray()))
+            } catch (_: EasAttachmentService.BoundedBuffer.Overflow) {
+                EasResult.Error(AttachmentErrors.TOO_LARGE_FOR_MEMORY)
+            }
+        }
+    }
+
+    internal suspend fun downloadSmallEasAttachment(ref: String, maxBytes: Long): EasResult<ByteArray> =
+        attachmentService.downloadSmallAttachment(ref, maxBytes)
+
+    internal suspend fun downloadSmallEwsAttachment(id: String, maxBytes: Long): EasResult<ByteArray> {
+        val out = EasAttachmentService.BoundedBuffer(maxBytes)
+        return when (val result = ewsClient.executeStreaming(EwsAttachments.contentRequest(id), "GetAttachment") { input, check ->
+            try {
+                EwsAttachmentContent.extract(input, out, EasAttachmentService.smallAttachmentResponseLimit(maxBytes), check)
+            } catch (_: EasAttachmentService.BoundedBuffer.Overflow) {
+                EwsAttachmentContent.Result.Error(AttachmentErrors.TOO_LARGE_FOR_MEMORY)
+            }
+        }) {
+            is EasResult.Error -> result
+            is EasResult.Success -> when (val content = result.data) {
+                is EwsAttachmentContent.Result.Written -> EasResult.Success(out.toByteArray())
+                is EwsAttachmentContent.Result.Error -> EasResult.Error(content.code)
+                EwsAttachmentContent.Result.NoContent -> EasResult.Error(AttachmentErrors.NOT_FOUND)
+            }
+        }
+    }
+
+    /** Only attachment metadata, never MimeContent or Body. [itemId] is used for native EWS drafts. */
+    internal suspend fun listInlineAttachmentCandidates(
+        itemId: String?, locator: EwsMailLocator?
+    ): List<EwsAttachments.FileAttachment> {
+        val id = itemId ?: locator?.let {
+            (findEwsMailItemId(it.subject, it.folder, it.dateReceived, it.internetMessageId, bounded = true) as? EasResult.Success)?.data
+        } ?: return emptyList()
+        val xml = readEwsLookup(EwsAttachments.listRequest(id), "GetItem", bounded = true) ?: return emptyList()
+        return EwsAttachments.parse(xml)
+    }
+
+    private suspend fun readEwsLookup(request: String, action: String, bounded: Boolean): String? {
+        if (!bounded) return transport.executeEwsWithAuth(request, action)
+        val result = ewsClient.executeStreaming(request, action) { input, check ->
+            val buffer = EasAttachmentService.BoundedBuffer(256L * 1024)
+            EasAttachmentService.copy(input, buffer, check)
+            buffer.toString(Charsets.UTF_8.name())
+        }
+        return (result as? EasResult.Success)?.data
+    }
 
     /** Вложение черновика: EAS FileReference — ItemOperations, EWS AttachmentId — GetAttachment. */
     suspend fun downloadDraftAttachment(fileReference: String): EasResult<ByteArray> {

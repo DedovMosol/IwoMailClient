@@ -20,7 +20,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 
 > **Important:** 🚧 The project is under active development. The next release is **1.7.0**, coming right after 1.6.1. See the [changelog](docs/CHANGELOG_EN.md) for what changes.
 
-**Version:** 1.7.0 (in preparation, versionCode 27; latest published release — 1.6.1) · **Package:** `com.dedovmosol.iwomail` · **Developer:** DedovMosol · **Telegram:** [@i_wantout](https://t.me/i_wantout) · **Email:** andreyid@outlook.com
+**Version:** 1.7.0 in the [source tree](app/build.gradle.kts) (`versionCode` 27), the [update channel](update.json) lists 1.6.1 (`versionCode` 24) · **Package:** `com.dedovmosol.iwomail` · **Developer:** DedovMosol · **Telegram:** [@i_wantout](https://t.me/i_wantout) · **Email:** andreyid@outlook.com
 
 ## 📖 About
 
@@ -32,29 +32,30 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 
 ## ✨ Features
 
-- **📧 Mail:** sync of system and user folders, HTML sending, attachments, inline images, CC/BCC, importance, search, filters, favorites, conversation threads (by `ConversationId` on EAS 14.0+, by subject on Exchange 2007), multi-select, batch operations, configurable left/right swipes (to Deleted Items, read/unread, flag).
-- **🚩 Flags:** follow-up flag with due date and reminder (`[MS-ASEMAIL] Flag`, as in Outlook); the star is set immediately and reverts to the server value if the server rejects it. A star or read state set while offline is kept locally, queued in `pending_email_changes` and sent to the server later (`PendingMailChangesWorker`).
+- **📧 Mail:** sync of system and user folders, HTML sending, attachments, inline images, CC/BCC, importance, search, filters, favorites, conversation threads (by `ConversationId` on EAS 14.0+, on Exchange 2007 by `Message-ID`/`In-Reply-To`/`References`, with a subject fallback only when the original message is unambiguous), multi-select, batch operations, configurable left/right swipes (to Deleted Items, read/unread, flag).
+- **🚩 Flags:** follow-up flag with due date and reminder (`[MS-ASEMAIL] Flag`, as in Outlook), the star is set immediately and reverts to the server value if the server rejects it. A star or read state set while offline is kept locally, queued in `pending_email_changes` and sent to the server later (`PendingMailChangesWorker`).
 - **📖 Reading:** remote images are not loaded by default (show for one message, trusted senders, "always load"), unsubscribe from mailing lists (`List-Unsubscribe`, one-click per RFC 8058), print and save as PDF via the system print dialog, save a message as `.eml`, answer read-receipt requests (decline — EWS `SuppressReadReceipt`), Outlook RSS items (`IPM.Post.RSS`) with a link to the article.
+- **Mail lists:** the “Threads only” filter in folders and search hides single messages. Messages from another folder may appear as context without being added to bulk delete or move. Long lists offer a jump to the start or end, the button is hidden during selection.
 - **📝 Drafts:** server mode via Exchange/EWS and a local beta mode, selectable in onboarding and account settings.
 - **📤 Sending:** scheduled send (exact alarm + WorkManager) and a scheduled mail screen (send now, reschedule, cancel), outbox queue for offline scenarios, undo send (0/5/10/20/30 s), MDN/DSN requests.
 - **👥 Contacts:** local and Exchange contacts, GAL, groups, favorites, vCard/CSV import/export, address autocomplete.
 - **🗓 Calendar:** events, meetings, attendees, invitation responses, recurrences, exceptions, reminders, attachments, online links, category colors (Master Category List on Exchange 2010+, standard Outlook colors, manual assignment), local trash, permanent delete only after server confirmation, reset and resync.
-- **✅ Tasks:** active/completed/important/overdue tasks, due dates, priorities, assignment, reminders, trash and restore, reset and resync; edits and moves to trash made offline are kept on the device and sent when the connection is back (`pending_pim_changes`).
-- **🗒 Notes:** Exchange Notes sync, create/edit, trash and restore, reset and resync; offline edits and trash work as for tasks.
+- **✅ Tasks:** active/completed/important/overdue tasks, due dates, priorities, assignment, reminders, trash and restore, reset and resync, edits and moves to trash made offline are kept on the device and sent when the connection is back (`pending_pim_changes`).
+- **🗒 Notes:** Exchange Notes sync, create/edit, trash and restore, reset and resync, offline edits and trash work as for tasks.
 - **🔔 Notifications:** Direct Push via EAS Ping, WorkManager sync, AlarmManager fallback, notifications for mail, calendar, tasks, flags, updates and outbox, a calendar/task/flag reminder tap switches to that account and opens the item, separate notification channels per account (sound and importance in system settings), quiet hours and VIP senders (their mail still sounds during quiet hours), server connection-loss notification.
-- **🔐 App lock:** password (only a PBKDF2-HMAC-SHA256 hash is stored, 600,000 iterations) and fingerprint; locks on cold start and when the app goes to the background. Growing pauses after 5 wrong passwords. While the lock is on, messages are hidden in Recents, the widget and lock-screen notifications.
+- **🔐 App lock:** password (only a PBKDF2-HMAC-SHA256 hash is stored, 600,000 iterations) and fingerprint, locks on cold start and when the app goes to the background. Growing pauses after 5 wrong passwords. While the lock is on, messages are hidden in Recents, the widget and lock-screen notifications.
 - **🎨 Interface:** Jetpack Compose, Material 3, RU/EN localization, light/dark/system theme, color schemes, daily themes, custom file icons, drag selection with haptics, HyperOS-style settings (large title, cards with colored icons, choices in a bottom sheet) split into Accounts, Mail, Notifications, Personalization, Security, About.
-- **📊 Widget & shortcuts:** Glance home-screen widget, quick access to mail, search, calendar, tasks and compose; widget data is read via lightweight Room projections without loading heavy mail/event bodies.
+- **📊 Widget & shortcuts:** Glance home-screen widget, quick access to mail, search, calendar, tasks and compose, widget data is read via lightweight Room projections without loading heavy mail/event bodies.
 - **⬆️ Updates:** `update.json` check on GitHub, APK selection by ABI, download, install and rollback preparation.
 
 <details>
 <summary><b>🗓 Calendar and attachments — how it works</b></summary>
 
 - **DRY for recurring events:** calendar attachments are stored as JSON metadata (`fileReference`, name, size), not as file copies for each occurrence.
-- **Exchange 2007 SP1:** calendar attachment upload/fetch goes through EWS `CreateAttachment`/`GetItem`; recurring series use the master ItemId.
-- **Permanent delete:** local DB deletion happens only after successful server-side deletion; operations are serialized with calendar sync via a per-account mutex.
-- **CRA resurrection prevention:** attendee meetings are declined through `MeetingResponse`/EWS `DeclineItem` before deletion; if the original meeting request cannot be found, local deletion is not performed.
-- **Meeting invitations:** on Exchange 2010/2013 (EAS 14.x) meetings with attendees are created and edited through EWS `CreateItem`/`UpdateItem` so the server sends invitations/updates; a plain appointment without attendees stays on EAS.
+- **Exchange 2007 SP1:** calendar attachment upload/fetch goes through EWS `CreateAttachment`/`GetItem`, recurring series use the master ItemId.
+- **Permanent delete:** local DB deletion happens only after successful server-side deletion, operations are serialized with calendar sync via a per-account mutex.
+- **CRA resurrection prevention:** attendee meetings are declined through `MeetingResponse`/EWS `DeclineItem` before deletion, if the original meeting request cannot be found, local deletion is not performed.
+- **Meeting invitations:** on Exchange 2010/2013 (EAS 14.x) meetings with attendees are created and edited through EWS `CreateItem`/`UpdateItem` so the server sends invitations/updates, a plain appointment without attendees stays on EAS.
 - **Preview cache:** attachment previews use a temporary `cacheDir/calendar_preview` directory, stable names derived from `fileReference`, and delayed cleanup without races with external viewers.
 
 </details>
@@ -65,7 +66,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **Lightweight DAO projections:** the widget reads only displayed fields for recent unread emails, the next task and the next calendar event.
 - **Correct unread logic:** the widget's new-mail list is filtered by Inbox and `read = 0`.
 - **Race protection:** `updateMailWidget()` serializes `GlanceAppWidget.updateAll()` through a shared mutex and uses `applicationContext`.
-- **Width-adaptive layout:** the bottom action row adapts to widget width (a Glance `Row` never wraps its content) — narrow sizes show fewer avatars and hide the last-sync label so the buttons aren't clipped; avatars scale with the widget.
+- **Width-adaptive layout:** the bottom action row adapts to widget width (a Glance `Row` never wraps its content) — narrow sizes show fewer avatars and hide the last-sync label so the buttons aren't clipped, avatars scale with the widget.
 - **Room indexes (migration 41→42):** indexes for hot widget queries: unread Inbox, folder type, active tasks, current and upcoming calendar events. The current schema version is v54.
 
 </details>
@@ -93,7 +94,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
    | `universal` | a single APK for all architectures |
 
 3. Allow installation from this source and install the APK.
-4. On first launch, go through onboarding and add an Exchange account.
+4. On first launch, choose Exchange for mail and groupware, or IMAP/POP3 to receive mail. IMAP/POP3 use implicit TLS or require a TLS upgrade before sign-in, there is no SMTP sending.
 
 > The built-in updater checks `update.json` in the repository, picks an APK by ABI and prepares a rollback.
 
@@ -102,8 +103,6 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 | Parameter | Minimum | Recommended |
 |-----------|---------|-------------|
 | Android | 8.0+ (API 26) | 13+ (API 33) |
-| RAM | 2 GB | 4+ GB |
-| Storage | 50 MB | 100+ MB |
 | CPU/ABI | armeabi-v7a / x86 | arm64-v8a / x86_64 |
 
 - **Compile SDK:** 36 · **Target SDK:** 36 · **Java/Kotlin target:** JVM 17
@@ -116,7 +115,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 |--------|--------|
 | Exchange 2007 SP1/SP2 | ✅ Stable primary scenario |
 | Exchange 2010/2013/2016 on-premise | 🟡 Architecturally supported via EAS/EWS, needs verification on the specific infrastructure |
-| Office 365 / Exchange Online | 🟠 Limited: requires OAuth/Modern Auth, which is not yet implemented |
+| Exchange Online / Microsoft 365 with Modern Auth | Not supported: the client does not implement OAuth 2.0 |
 | IMAP/POP3 | 🧪 Beta: read/sync via JavaMail, without full parity with Exchange |
 
 ## 🔒 Security and compatibility
@@ -127,20 +126,20 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **Trust by fingerprint:** if the system cannot verify the certificate (internal CA, IP address), the app shows its fingerprints and pins the public key (SPKI SHA-256) once the user confirms. This works for EAS, EWS, IMAP and POP3, and the backup server has its own key. "Accept all certificates" stays optional.
 - **Hostname verification:** for an imported server certificate — `Rfc6125HostnameVerifier` (SAN dNSName/iPAddress, CN only when there is no SAN).
 - **No cleartext:** `network_security_config.xml` forbids HTTP (`cleartextTrafficPermitted="false"`).
-- **Passwords:** `EncryptedSharedPreferences` (Android KeyStore, AES256-SIV/AES256-GCM) for the primary path; when the Keystore is unavailable — a fallback `ObfuscatedSharedPreferences`: XOR with a key derived by PBKDF2-HMAC-SHA256 from `ANDROID_ID` (obfuscation, not encryption). A one-time warning in the app language (the language code is cached before the async DataStore read, so the startup toast is not the system locale). Security then shows a fail-closed switch: do not write mailbox passwords or the app lock password until encryption is back. Existing secrets stay. A new mailbox is not left in the database without a secret.
+- **Passwords:** `EncryptedSharedPreferences` (Android KeyStore, AES256-SIV/AES256-GCM) for the primary path, when the Keystore is unavailable — a fallback `ObfuscatedSharedPreferences`: XOR with a key derived by PBKDF2-HMAC-SHA256 from `ANDROID_ID` (obfuscation, not encryption). A one-time warning in the app language (the language code is cached before the async DataStore read, so the startup toast is not the system locale). Security then shows a fail-closed switch: do not write mailbox passwords or the app lock password until encryption is back. Existing secrets stay. A new mailbox is not left in the database without a secret.
 - **Alternate URL:** primary and backup Exchange URL with fallback on network errors and later auto-switchback.
-- **Email body XSS protection:** `sanitizeEmailHtml` blocks `<script>`, plugin containers (`iframe`/`object`/`embed`/`applet`), event handlers, `meta http-equiv="refresh"`, `javascript:` and `data:text/html` URIs in all URL-context attributes; combined with a nonce CSP and `loadDataWithBaseURL(null, ...)` in the WebView for isolation from cross-origin context.
+- **Email body XSS protection:** `sanitizeEmailHtml` blocks `<script>`, plugin containers (`iframe`/`object`/`embed`/`applet`), event handlers, `meta http-equiv="refresh"`, `javascript:` and `data:text/html` URIs in all URL-context attributes, combined with a nonce CSP and `loadDataWithBaseURL(null, ...)` in the WebView for isolation from cross-origin context.
 
 ## ⚠️ Known limitations
 
 - **OAuth 2.0 / Modern Auth:** not supported.
-- **Office 365:** typically does not work without Basic Auth.
-- **NTLM for EAS:** the EAS transport supports Basic Auth only (NTLMv2 applies to EWS operations only); the `/Microsoft-Server-ActiveSync` virtual directory must allow Basic Auth.
+- **Outgoing attachments:** files and inline images share a 10 MiB budget, including when saving a draft. This is not a download limit for incoming attachments.
+- **NTLM for EAS:** the EAS transport supports Basic Auth only (NTLMv2 applies to EWS operations only), the `/Microsoft-Server-ActiveSync` virtual directory must allow Basic Auth.
 - **IMAP/POP3:** beta implementation, does not cover calendar, contacts, tasks, notes, Direct Push and EWS features. There is no SMTP sending: the outgoing server address is only stored in the account.
 - **Offline queue:** message star and read state, message moves (including to trash), creating, editing and moving tasks and notes to trash. The calendar and folder operations are still server-first and are not deferred without a connection.
-- **Exchange contacts:** read-only. They come from the server's Contacts folder (EAS Sync); edit and delete them in Outlook or OWA. In the app an Exchange contact can be copied to personal contacts, which are editable.
+- **Exchange contacts:** read-only. They come from the server's Contacts folder (EAS Sync), edit and delete them in Outlook or OWA. In the app an Exchange contact can be copied to personal contacts, which are editable.
 - **S/MIME:** signing and encryption not implemented.
-- **EAS 16.x:** explicitly not a target version of the project; the code's main range is EAS 12.x-14.1.
+- **EAS 16.x:** explicitly not a target version of the project, the code's main range is EAS 12.x-14.1.
 
 ## 🧱 Tech stack
 
@@ -187,7 +186,7 @@ Details: [Project Architecture](docs/ARCHITECTURE_EN.md) · [RU](docs/ARCHITECTU
 
 ## 🛠 Build from source
 
-Recommended production build path is Android Studio with JDK 17. The CLI commands below are a supplemental option when `JAVA_HOME` is configured correctly.
+Install JDK 17 and Android SDK Platform 36. On a fresh clone, provide `app/src/main/res/raw/pashalka_iwo.m4a` first: the source references this resource, but the audio file is not tracked. For a build without easter-egg audio, use the [placeholder in the contributor guide](CONTRIBUTING.md#getting-started). Run the Gradle wrapper from the project root.
 
 ```bash
 ./gradlew assembleDebug

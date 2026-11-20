@@ -5,8 +5,8 @@ import org.junit.Test
 import kotlin.random.Random
 
 /**
- * MAIL-03: линейный санитайзер даёт тот же результат, что прежний на регулярных выражениях (он заморожен здесь как
- * эталон), и не зависает на «письме-яде». Эталон медленный только на ядовитых входах, поэтому сверка идёт на
+ * MAIL-03: линейный санитайзер даёт тот же результат, что эталон на регулярных выражениях ([LegacySanitizer]: прежний
+ * плюс шаг MAIL-09), и не зависает на «письме-яде». Эталон медленный только на ядовитых входах, поэтому сверка идёт на
  * коротких случайных строках из «опасных» фрагментов.
  */
 class HtmlUtilsSanitizePerformanceTest {
@@ -20,7 +20,11 @@ class HtmlUtilsSanitizePerformanceTest {
         "<META HTTP-EQUIV='Refresh'>", "<metax http-equiv=refresh>", " onclick=\"x\"", " onload='y'", " onerror=z", "  on",
         " one", "\tonx = \"", "'", "\"", " href=\"javascript:a\"", " src='javascript:b'", " href=\"data:text/html,c\"",
         " formaction='data:text/html;x'", "javascript:", "x", "Привет", ">", "<", "</", "\n", " ", "  ", "<b>", "</b>",
-        "<p style=\"color:red\">", "=", "İ", "ſcript", "_"
+        "<p style=\"color:red\">", "=", "İ", "ſcript", "_",
+        // MAIL-09
+        "<form action=x>", "</FORM>", "<fo", "rm>", "<input type=password>", "<inputs>", "<INPUT", "<button>", "</button>",
+        "<textarea>", "<select>", "</select>", "<base href=//e/>", "<basefont>", "<link rel=dns-prefetch href=//e>",
+        "<linked>", "<use href=//e#x>", "<user>", "<use-x>", "<frame src=x>", "<frameset>", "</frameset>", "<form-x>", "-"
     )
 
     @Test fun `same result as the legacy regex sanitizer on 200 000 random fragments`() {
@@ -47,7 +51,9 @@ class HtmlUtilsSanitizePerformanceTest {
             "<div onclick=\"x\"><script>e</script><a href=\"javascript:y\">L</a></div>",
             "<img/onerror=alert(1) src=x>", "<svg/onload=alert(1)>",
             "<meta http-equiv=\"refresh\" content=\"0;url=evil\"><p>ok</p>",
-            "<embed src=x><embedded>keep</embedded>"
+            "<embed src=x><embedded>keep</embedded>",
+            "<form action=\"https://evil.example\"><input type=password name=p><button>Sign in</button></form>",
+            "<fo<input>rm action=x>", "<base href=\"https://evil.example/\"><a href=\"login\">L</a>"
         )
         for (c in cases) assertThat(sanitizeEmailHtml(c)).isEqualTo(legacySanitize(c))
     }
@@ -67,6 +73,10 @@ class HtmlUtilsSanitizePerformanceTest {
             " ".repeat(n * 4) + "x",        // длинный пробельный отрезок
             " o".repeat(n),
             " onx=\"".repeat(n / 2),
+            "<input".repeat(n),             // нет '>'
+            "<use ".repeat(n) + ">",
+            "<u".repeat(n),                 // начало имени без совпадения
+            "</form>".repeat(n),
             "<p>" + "a".repeat(n * 4) + "</p>"
         )
         for (p in poisons) {

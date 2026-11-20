@@ -32,6 +32,49 @@ class HtmlUtilsTest {
         assertThat("".escapeHtml()).isEqualTo("")
     }
 
+    // ===================== sanitizeEmailHtml: формы, base, link, фреймы (MAIL-09) =====================
+
+    @Test
+    fun `a phishing form loses its fields but keeps its text`() {
+        val result = sanitizeEmailHtml(
+            "<form action=\"https://evil.example/steal\" method=post><p>Session expired</p>" +
+                "<input type=\"password\" name=\"p\"><textarea>t</textarea><select><option>o</option></select>" +
+                "<button type=submit>Sign in</button></form>"
+        )
+        for (tag in listOf("<form", "</form", "<input", "<textarea", "<select", "<button")) {
+            assertThat(result.lowercase()).doesNotContain(tag)
+        }
+        assertThat(result).contains("<p>Session expired</p>")
+        assertThat(result).contains("Sign in")
+    }
+
+    @Test
+    fun `base link frames and svg use are removed`() {
+        val result = sanitizeEmailHtml(
+            "<BASE href=\"https://evil.example/\"><link rel=\"dns-prefetch\" href=\"//track.example\">" +
+                "<frameset><frame src=\"https://evil.example\"></frameset>" +
+                "<svg><use href=\"https://evil.example/s.svg#a\"/></svg><a href=\"login\">Login</a>"
+        )
+        for (tag in listOf("<base", "<link", "<frameset", "<frame", "<use")) {
+            assertThat(result.lowercase()).doesNotContain(tag)
+        }
+        assertThat(result).contains("<svg>")
+        assertThat(result).contains("<a href=\"login\">Login</a>")
+    }
+
+    @Test
+    fun `removed tags do not glue into a new one`() {
+        // Без пробела на месте удалённого <input> получилось бы <form action=x>
+        val result = sanitizeEmailHtml("<fo<input>rm action=x>")
+        assertThat(result.lowercase()).doesNotContain("<form")
+    }
+
+    @Test
+    fun `tags whose names only start like a removed tag are kept`() {
+        val safe = "<inputs>a</inputs><user>b</user><basefont>c<linked>d</linked><use-x>e</use-x><formula>f</formula>"
+        assertThat(sanitizeEmailHtml(safe)).isEqualTo(safe)
+    }
+
     // ===================== sanitizeEmailHtml (XSS) =====================
 
     @Test

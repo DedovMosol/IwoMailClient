@@ -28,7 +28,8 @@ class EmailPrintDocumentTest {
 
         assertThat(blocked).contains("img-src data: cid: blob:;")
         assertThat(blocked).doesNotContain("https:")
-        assertThat(allowed).contains("img-src data: cid: blob: https: http:;")
+        assertThat(allowed).contains("img-src data: cid: blob: https:;")
+        assertThat(allowed).doesNotContain(" http:")
     }
 
     @Test

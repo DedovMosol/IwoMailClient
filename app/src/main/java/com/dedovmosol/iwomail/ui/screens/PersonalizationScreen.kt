@@ -52,7 +52,7 @@ private fun ColorSwatch(color: Color, size: Dp = 20.dp) {
 
 /** Дни недели в порядке недели (с понедельника) и их подписи. */
 @Composable
-private fun weekDays(): List<Pair<Int, String>> = listOf(
+internal fun weekDays(): List<Pair<Int, String>> = listOf(
     Calendar.MONDAY to Strings.monday,
     Calendar.TUESDAY to Strings.tuesday,
     Calendar.WEDNESDAY to Strings.wednesday,
@@ -71,7 +71,7 @@ private val DEFAULT_DAY_THEMES = mapOf(
 
 /** Темы и цвета скроллбара по дням недели — нижний лист вместо диалога с 14 выпадающими списками. */
 @Composable
-private fun DailyThemesSheet(settingsRepo: SettingsRepository, onDismiss: () -> Unit) {
+private fun DailyThemesSheet(settingsRepo: SettingsRepository, highlight: String, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val isRu = isRussian()
@@ -85,6 +85,7 @@ private fun DailyThemesSheet(settingsRepo: SettingsRepository, onDismiss: () -> 
             SettingsChoiceRow(
                 title = name,
                 options = AppColorTheme.entries,
+                highlightId = "dayTheme_$day", highlight = highlight,
                 selected = current,
                 label = { getThemeDisplayName(it) },
                 optionLeading = { ColorSwatch(it.gradientStart) },
@@ -104,6 +105,7 @@ private fun DailyThemesSheet(settingsRepo: SettingsRepository, onDismiss: () -> 
             SettingsChoiceRow(
                 title = name,
                 options = ScrollbarColor.entries,
+                highlightId = "dayScroll_$day", highlight = highlight,
                 selected = current,
                 label = { it.getDisplayName(isRu) },
                 optionLeading = { ColorSwatch(it.color) },
@@ -131,10 +133,12 @@ fun PersonalizationScreen(
     val animationsEnabled by settingsRepo.animationsEnabled.collectAsStateWithLifecycle(initialValue = true)
     val themeMode by settingsRepo.themeMode.collectAsStateWithLifecycle(initialValue = settingsRepo.getThemeModeSync())
     val scrollbarColorCode by settingsRepo.scrollbarColor.collectAsStateWithLifecycle(initialValue = "blue")
-    var showDailyThemes by rememberSaveable { mutableStateOf(false) }
+    var showDailyThemes by rememberSaveable(highlight) {
+        mutableStateOf(highlight.startsWith("dayTheme_") || highlight.startsWith("dayScroll_"))
+    }
 
-    if (showDailyThemes) {
-        DailyThemesSheet(settingsRepo, onDismiss = { showDailyThemes = false })
+    if (showDailyThemes && dailyThemesEnabled) {
+        DailyThemesSheet(settingsRepo, highlight, onDismiss = { showDailyThemes = false })
     }
 
     SettingsPageScaffold(

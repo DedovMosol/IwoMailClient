@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail
 
+import com.dedovmosol.iwomail.util.MailtoLink
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -26,6 +27,7 @@ import com.dedovmosol.iwomail.ui.components.AppPermissionPrompt
 import androidx.lifecycle.lifecycleScope
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.LocalLanguage
@@ -73,6 +75,7 @@ class MainActivity : FragmentActivity() {
     private var notificationAskedThisProcess = false
     
     private var openInboxUnreadIntentId = mutableLongStateOf(0L)
+    private var rejectedInboxIntentId = mutableLongStateOf(-1L)
     private var openEmailId = mutableStateOf<String?>(null)
     private var openEmailIntentId = mutableLongStateOf(0L)
     private var switchToAccountId = mutableStateOf<Long?>(null)
@@ -83,6 +86,8 @@ class MainActivity : FragmentActivity() {
     
     // Данные из mailto: или SEND intent
     private var composeEmail = mutableStateOf<String?>(null)
+    private var composeCc = mutableStateOf<String?>(null)
+    private var composeBcc = mutableStateOf<String?>(null)
     private var composeSubject = mutableStateOf<String?>(null)
     private var composeBody = mutableStateOf<String?>(null)
     private var composeAttachments = mutableStateOf<List<android.net.Uri>>(emptyList())
@@ -190,19 +195,20 @@ class MainActivity : FragmentActivity() {
             // Гейт поверх всей навигации: пока заблокировано, контент не виден и не доступен.
             // Состояние сессии живёт в процесс-синглтоне AppLockManager — поворот экрана
             // его НЕ сбрасывает (в отличие от remember), fail-closed при смерти процесса.
-            val appLockEnabled by settingsRepo.appLockEnabled.collectAsStateWithLifecycle(
-                initialValue = settingsRepo.getAppLockEnabledSync()
-            )
+            // null — настройки ещё не прочитаны (первые миллисекунды холодного старта): см. AppLockManager.lockRequired
+            val appLockFlag by remember {
+                settingsRepo.appLockEnabled.map<Boolean, Boolean?> { it }
+            }.collectAsStateWithLifecycle(initialValue = settingsRepo.getAppLockEnabledOrNull())
             val appLockBiometricEnabled by settingsRepo.appLockBiometricEnabled.collectAsStateWithLifecycle(
                 initialValue = settingsRepo.getAppLockBiometricEnabledSync()
             )
             val appLocked by com.dedovmosol.iwomail.data.security.AppLockManager.locked.collectAsStateWithLifecycle() // UI-6: lifecycle-aware, единообразно с остальным экраном
-            // Единая чистая логика гейта (SOC + юнит-тестируемость): сессия заблокирована
-            // И блокировка включена И пароль реально задан (защита от soft-lock при рассинхроне).
-            // Синглтон хранит состояние переживающее поворот; кэш настроек — без «вспышки»
-            // контента на холодном старте (см. fail-closed getAppLockEnabledSync).
-            val isLocked = com.dedovmosol.iwomail.data.security.AppLockManager
-                .shouldShowLockScreen(appLocked, appLockEnabled)
+            // Единая чистая логика гейта (SOC + юнит-тестируемость): сессия заблокирована и блокировка нужна —
+            // экран пароля; включена, а пароля на устройстве нет (NAV-04) — сброс по паролю учётной записи.
+            // Синглтон хранит состояние, переживающее поворот.
+            val passwordSet = com.dedovmosol.iwomail.data.security.AppLockManager.isPasswordSet()
+            val lockGate = com.dedovmosol.iwomail.data.security.AppLockManager.gate(appLocked, appLockFlag, passwordSet)
+            val isLocked = lockGate != com.dedovmosol.iwomail.data.security.AppLockManager.Gate.OPEN
             
             // Доступность биометрии на устройстве — проверяется один раз на конфигурацию,
             // системный диалог не нужен для самой проверки.
@@ -212,11 +218,9 @@ class MainActivity : FragmentActivity() {
                     androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS
             }
             
-            // NAV-02: при включённой блокировке письма не видны в «Недавних» (см. LockWindowPolicy).
-            // Пароль задаётся и снимается вместе с флагом appLockEnabled — пересчёт по нему и по appLocked.
-            val lockActive = remember(appLockEnabled, appLocked) {
-                appLockEnabled && com.dedovmosol.iwomail.data.security.AppLockManager.isPasswordSet()
-            }
+            // NAV-02: при включённой блокировке письма не видны в «Недавних» (см. LockWindowPolicy); пропавший хеш
+            // этого не снимает (NAV-04)
+            val lockActive = com.dedovmosol.iwomail.data.security.AppLockManager.lockRequired(appLockFlag)
             DisposableEffect(lockActive, isLocked) {
                 val policy = com.dedovmosol.iwomail.data.security.LockWindowPolicy.of(lockActive, isLocked)
                 val secure = android.view.WindowManager.LayoutParams.FLAG_SECURE
@@ -237,6 +241,8 @@ class MainActivity : FragmentActivity() {
             val accountIdToSwitch by switchToAccountId
             val shouldOpenUpdates by openUpdates
             val emailToCompose by composeEmail
+            val ccToCompose by composeCc
+            val bccToCompose by composeBcc
             val subjectToCompose by composeSubject
             val bodyToCompose by composeBody
             val attachmentsToCompose by composeAttachments
@@ -280,34 +286,47 @@ class MainActivity : FragmentActivity() {
                             // Навигация всегда в композиции: после разблокировки тот же экран
                             // (файл-пикер и фон тоже ON_STOP — не уничтожаем back stack).
                             AppNavigation(
-                                openInboxUnreadIntentId = currentOpenInboxUnreadIntentId,
-                                openEmailId = emailIdToOpen,
-                                openEmailIntentId = currentOpenEmailIntentId,
-                                switchToAccountId = accountIdToSwitch,
+                                openInboxUnreadIntentId = if (isLocked || currentOpenInboxUnreadIntentId == rejectedInboxIntentId.longValue) 0L else currentOpenInboxUnreadIntentId,
+                                openEmailId = if (isLocked) null else emailIdToOpen,
+                                openEmailIntentId = if (isLocked) 0L else currentOpenEmailIntentId,
+                                switchToAccountId = if (isLocked) null else accountIdToSwitch,
                                 composeToEmail = emailToCompose,
+                                composeCc = ccToCompose,
+                                composeBcc = bccToCompose,
                                 composeSubject = subjectToCompose,
                                 composeBody = bodyToCompose,
                                 composeAttachments = attachmentsToCompose,
                                 composeIntentId = currentComposeIntentId,
                                 onComposeHandled = {
                                     composeEmail.value = null
+                                    composeCc.value = null
+                                    composeBcc.value = null
                                     composeSubject.value = null
                                     composeBody.value = null
                                     composeAttachments.value = emptyList()
                                 },
-                                onAccountSwitched = {
+                                onAccountSwitched = { switchToAccountId.value = null },
+                                onAccountSwitchFailed = {
+                                    // The target may have been removed since the launcher/notification was rendered.
+                                    // Consume mailbox-specific actions rather than opening them in a different account.
+                                    openEmailId.value = null
+                                    rejectedInboxIntentId.longValue = openInboxUnreadIntentId.longValue
+                                    shortcutCalendar.value = false
+                                    openCalendarEventId.value = null
+                                    shortcutTasks.value = false
+                                    openTaskId.value = null
                                     switchToAccountId.value = null
                                 },
-                                shortcutCompose = shouldShortcutCompose,
-                                shortcutInbox = shouldShortcutInbox,
-                                shortcutSearch = shouldShortcutSearch,
-                                shortcutCalendar = shortcutCalendar.value,
-                                openCalendarEventId = openCalendarEventId.value,
+                                shortcutCompose = !isLocked && shouldShortcutCompose,
+                                shortcutInbox = !isLocked && shouldShortcutInbox,
+                                shortcutSearch = !isLocked && shouldShortcutSearch,
+                                shortcutCalendar = !isLocked && shortcutCalendar.value,
+                                openCalendarEventId = if (isLocked) null else openCalendarEventId.value,
                                 onCalendarEventHandled = { openCalendarEventId.value = null },
-                                shortcutTasks = shortcutTasks.value,
-                                openTaskId = openTaskId.value,
+                                shortcutTasks = !isLocked && shortcutTasks.value,
+                                openTaskId = if (isLocked) null else openTaskId.value,
                                 onTaskHandled = { openTaskId.value = null },
-                                shortcutNotes = shortcutNotes.value,
+                                shortcutNotes = !isLocked && shortcutNotes.value,
                                 onShortcutHandled = {
                                     shortcutCompose.value = false
                                     shortcutInbox.value = false
@@ -331,16 +350,26 @@ class MainActivity : FragmentActivity() {
                             controller = sendController,
                             modifier = Modifier.align(Alignment.BottomCenter)
                         )
-                        if (isLocked) {
-                            Box(modifier = Modifier.fillMaxSize()) {
-                                com.dedovmosol.iwomail.ui.screens.LockScreen(
-                                    biometricAvailable = biometricAvailable,
-                                    biometricEnabled = appLockBiometricEnabled,
-                                    onBiometricRequest = {
-                                        showBiometricPrompt(appLockBiometricEnabled, biometricAvailable)
-                                    }
-                                )
+                        when (lockGate) {
+                            com.dedovmosol.iwomail.data.security.AppLockManager.Gate.WAITING -> {
+                                androidx.activity.compose.BackHandler { }
+                                Surface(modifier = Modifier.fillMaxSize()) { }
                             }
+                            com.dedovmosol.iwomail.data.security.AppLockManager.Gate.LOCKED ->
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    com.dedovmosol.iwomail.ui.screens.LockScreen(
+                                        biometricAvailable = biometricAvailable,
+                                        biometricEnabled = appLockBiometricEnabled,
+                                        onBiometricRequest = {
+                                            showBiometricPrompt(appLockBiometricEnabled, biometricAvailable)
+                                        }
+                                    )
+                                }
+                            com.dedovmosol.iwomail.data.security.AppLockManager.Gate.RECOVERY ->
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    com.dedovmosol.iwomail.ui.screens.LockRecoveryScreen()
+                                }
+                            com.dedovmosol.iwomail.data.security.AppLockManager.Gate.OPEN -> Unit
                         }
                     }
                     
@@ -421,6 +450,10 @@ class MainActivity : FragmentActivity() {
         }
         
         if (intent.getBooleanExtra(EXTRA_OPEN_INBOX_UNREAD, false)) {
+            if (intent.data?.let { it.scheme == "iwomail" && it.host == "private-inbox" } == true) {
+                com.dedovmosol.iwomail.data.security.AppLockManager.lock()
+                intent.data = null
+            }
             // Инкремент intent-id — повторные тапы (виджет/уведомление) навигируют каждый раз.
             openInboxUnreadIntentId.longValue++
             intent.removeExtra(EXTRA_OPEN_INBOX_UNREAD)
@@ -509,8 +542,8 @@ class MainActivity : FragmentActivity() {
             Intent.ACTION_SENDTO, Intent.ACTION_VIEW -> {
                 try {
                     intent.data?.let { uri ->
-                        if (uri.scheme == "mailto") {
-                            parseMailtoUri(uri)
+                        if (uri.scheme.equals("mailto", ignoreCase = true)) {
+                            parseMailtoUri(uri, intent)
                             composeIntentId.longValue++
                             // Очищаем intent чтобы не обрабатывать повторно при повороте экрана
                             intent.data = null
@@ -533,6 +566,8 @@ class MainActivity : FragmentActivity() {
                     
                     // Устанавливаем значения (null если не переданы)
                     composeEmail.value = email
+                    composeCc.value = null
+                    composeBcc.value = null
                     composeSubject.value = subj
                     composeBody.value = bodyText
                     composeAttachments.value = if (streamUri != null) listOf(streamUri) else emptyList()
@@ -553,6 +588,8 @@ class MainActivity : FragmentActivity() {
                     
                     // Устанавливаем значения
                     composeEmail.value = null
+                    composeCc.value = null
+                    composeBcc.value = null
                     composeSubject.value = subj
                     composeBody.value = bodyText
                     composeAttachments.value = streamUris ?: emptyList()
@@ -639,30 +676,24 @@ class MainActivity : FragmentActivity() {
         }
     }
     
-    private fun parseMailtoUri(uri: android.net.Uri) {
-        try {
-            // mailto:user@example.com?subject=Test&body=Hello
-            // schemeSpecificPart = "user@example.com?subject=Test&body=Hello"
-            val ssp = uri.schemeSpecificPart ?: ""
-            val email = ssp.substringBefore("?").trim()
-            composeEmail.value = email.ifBlank { null }
-            composeAttachments.value = emptyList() // mailto: не имеет вложений
-            
-            // Парсим query параметры безопасно
-            try {
-                composeSubject.value = uri.getQueryParameter("subject")
-                composeBody.value = uri.getQueryParameter("body")
-                uri.getQueryParameter("to")?.let { if (composeEmail.value == null) composeEmail.value = it }
-                uri.getQueryParameter("cc")?.let { /* можно добавить поддержку cc */ }
-                uri.getQueryParameter("bcc")?.let { /* можно добавить поддержку bcc */ }
-            } catch (_: Exception) {
-                // Если query параметры не парсятся - игнорируем
-                composeSubject.value = null
-                composeBody.value = null
-            }
-        } catch (_: Exception) {
-            // Если URI некорректный - просто открываем пустой compose
-        }
+    /**
+     * mailto: от другого приложения (RFC 6068, [MailtoLink]): адреса, копия, скрытая копия, тема и текст. Раньше
+     * тема и текст терялись: getQueryParameter у непрозрачного URI mailto: бросает исключение. Тему, текст и адреса
+     * приложения часто кладут не в ссылку, а в extras ACTION_SENDTO — они берутся, если в ссылке их нет.
+     */
+    private fun parseMailtoUri(uri: android.net.Uri, intent: Intent) {
+        val link = MailtoLink.parse(uri.toString()) ?: MailtoLink(emptyList())
+        fun extraList(name: String): List<String> =
+            intent.getStringArrayExtra(name)?.toList() ?: listOfNotNull(intent.getStringExtra(name))
+        fun recipients(fromLink: List<String>, extra: String): String? =
+            fromLink.ifEmpty { extraList(extra) }.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+                .joinToString(", ").ifEmpty { null }
+        composeEmail.value = recipients(link.to, Intent.EXTRA_EMAIL)
+        composeCc.value = recipients(link.cc, Intent.EXTRA_CC)
+        composeBcc.value = recipients(link.bcc, Intent.EXTRA_BCC)
+        composeSubject.value = link.subject ?: intent.getStringExtra(Intent.EXTRA_SUBJECT)
+        composeBody.value = link.body ?: intent.getStringExtra(Intent.EXTRA_TEXT)
+        composeAttachments.value = emptyList() // mailto: не имеет вложений
     }
     
     /** После онбординга и при обычном запуске. */

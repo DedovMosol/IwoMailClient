@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.ui.components
 
+import android.content.Context
 import android.view.ViewGroup
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebView
@@ -14,6 +15,24 @@ import com.dedovmosol.iwomail.R
  * только убрать из иерархии и уничтожить ([release]); на его месте можно создать новый.
  */
 internal object WebViewRenderer {
+
+    /** Создание WebView; тесты подменяют его, чтобы проверить экраны при недоступном системном WebView. */
+    @androidx.annotation.VisibleForTesting
+    @Volatile
+    var factory: (Context) -> WebView = ::WebView
+
+    /**
+     * Новый WebView или null, если системный WebView сейчас недоступен: не установлен, отключён или обновляется
+     * (WebViewFactory бросает AndroidRuntimeException с MissingWebViewPackageException внутри), либо его ресурсы
+     * не загрузились (Resources.NotFoundException на части прошивок). Без проверки такой сбой роняет всё
+     * приложение при открытии экрана с WebView; с ней экран показывает замену.
+     */
+    fun create(context: Context): WebView? = try {
+        factory(context)
+    } catch (e: RuntimeException) {
+        android.util.Log.e("WebViewRenderer", "WebView unavailable", e)
+        null
+    }
 
     /** Пометить WebView, у которого умер рендерер: [release] не вызовет на нём ничего, кроме destroy(). */
     fun markGone(view: WebView) {

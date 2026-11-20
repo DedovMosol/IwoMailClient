@@ -15,4 +15,4 @@ A clear and concise description of what you want to happen.
 Any alternative solutions or features you've considered.
 
 **Additional context**
-Server/protocol specifics (Exchange version, EAS/EWS), mockups, or references.
+Which account type would this affect (Exchange, IMAP, or POP3)? If relevant, include the server version, protocol, or a mockup with fictitious data.

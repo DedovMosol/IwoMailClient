@@ -5,16 +5,17 @@ import kotlinx.coroutines.flow.first
 
 /**
  * SET-01 / BG-08: скрывать ли содержимое писем, событий и задач вне приложения (виджет, уведомления).
- * Скрываем, пока блокировка включена и пароль задан: иначе блокировка обходится взглядом на виджет или шторку.
+ * Скрываем, пока блокировка включена: иначе она обходится взглядом на виджет или шторку. Пропавший хеш пароля
+ * содержимое не открывает (NAV-04, [AppLockManager.lockRequired]).
  */
 object LockPrivacy {
 
-    fun hides(lockEnabled: Boolean, passwordSet: Boolean): Boolean = lockEnabled && passwordSet
+    /** Until DataStore loads, a missing hash cannot distinguish recovery from lock disabled. */
+    fun hides(lockEnabled: Boolean?): Boolean = AppLockManager.lockRequired(lockEnabled)
 
-    /** Для несоставного кода без корутин. До первой загрузки настроек флаг считается включённым (fail-closed). */
     fun contentHiddenSync(settings: SettingsRepository): Boolean =
-        hides(settings.getAppLockEnabledSync(), AppLockManager.isPasswordSet())
+        hides(settings.getAppLockEnabledOrNull())
 
     suspend fun contentHidden(settings: SettingsRepository): Boolean =
-        hides(settings.appLockEnabled.first(), AppLockManager.isPasswordSet())
+        hides(settings.appLockEnabled.first())
 }

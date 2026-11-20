@@ -1,143 +1,29 @@
-# План миграции на XmlPullParser (v1.7.0)
+# Переход на XmlPullParser: состояние и оставшаяся работа
 
-> Обновлено: 15.11.2026 по коду `eas/` (не по старой смете regex)
+Этот план относится к исходникам 1.7.0. Единица миграции — конкретный ответ сервера, а не класс целиком: один и тот же сервис может получать EAS Sync и EWS SOAP и разбирать их разными способами.
 
-## Текущее состояние
+## Что уже использует pull-парсер
 
-`EasXmlParser` (`android.util.Xml.newPullParser`, DOCTYPE выключен, `FEATURE_PROCESS_NAMESPACES = false`) уже стоит на части EAS/EWS разбора. MIME, HTML и MDN по-прежнему regex, это не XML.
+| Ответ | Реализация |
+|---|---|
+| EAS Sync: календарь, задачи, заметки, контакты | [`EasSyncStream`](../app/src/main/java/com/dedovmosol/iwomail/eas/EasSyncStream.kt) обходит прямых детей `Commands`. Календарь, задачи и заметки читают `Add`/`Change`; парсер контактов запрашивает `Add`. `Responses/Add` — подтверждение команды клиента, а не новый элемент коллекции. |
+| Поиск в GAL | `EasContactsService.parseGalSearchResponse` читает `Status`, `Result` и `Properties` через `EasXmlParser`. |
+| Перенос писем | `EasEmailService.parseMoveItemsResponse` извлекает `SrcMsgId`, `DstMsgId` и `Status` из каждого `Response`. Это не означает, что `parseSyncResponse` для почты уже переведён. |
+| Provision | `EasProvisioning.parseResponse` читает общий статус, политику и `PolicyKey` через `EasXmlParser`. |
+| EWS: заметки и категории календаря | `EasNotesService` использует `EasXmlParser` для отдельных полей и категорий заметки. Для списка категорий `CalendarCategoryService` настраивает собственный pull-парсер. |
 
-### Сделано
-- Утилита `EasXmlParser.kt` + тесты `EasXmlParserTest`
-- Контакты: `EasContactsService` (GAL/Sync), `EasContactsServiceTest`
-- Заметки: `EasNotesService`, `EasNotesParserTest`
-- Почта XML: `EasEmailService` (Sync/MoveItems), `EasEmailMoveItemsParserTest`. MIME-части писем не трогали
-- Календарь: разбор событий в `CalendarXmlParser`, список категорий в `CalendarCategoryService` (тот же hardened parser)
-- Provision: `EasProvisioning` + `EasProvisioningTest`
-- Поток Sync: `EasSyncStream`
+**Граница потокового разбора:** `EasSyncStream.forEachCommand` принимает строку XML после декодирования WBXML, а не HTTP-поток. Парсер проходит её один раз; незакрытый элемент в конце документа — ошибка. Неполную страницу нельзя выдавать за полный снимок коллекции: по такому снимку репозиторий может удалить локальные записи. Потоковое скачивание вложения в файл — отдельный механизм.
 
-### Ещё regex XML (не закрыто)
-- `EasTasksService` (CRUD/синк задач, FindFolder, тела EWS)
-- `EasDraftsService` (черновики EWS MimeContent, GetItem)
-- `EasAttachmentService` (ItemOperations)
-- `EasClient` (FolderSync, Autodiscover, часть EWS fallback тел)
-- Календарь кроме `CalendarXmlParser`: CRUD, sync loop, вложения, exceptions, даты в `CalendarDateUtils`
+## Что ещё предстоит
 
-`EasPatterns.kt` и `XmlValueExtractor.kt` ещё живы, cleanup после полной миграции.
+- **Почта и папки:** почтовый Sync, поля писем и вложений, части ответов FolderSync и EWS всё ещё используют строковое извлечение. Для каждой операции сравнивать не только список элементов, но и статусы, удалённые идентификаторы, `SyncKey` и признак следующей страницы.
+- **Задачи, черновики и календарь:** EAS Sync задач уже переведён; отдельной работы требуют EWS FindItem/GetItem, извлечение данных черновиков, EWS-событий, участников и исключений повторяющихся встреч. В календаре не следует считать `parseEwsCalendarEvents` переведённым только потому, что `parseCalendarEvents` использует pull-парсер.
+- **Вложения:** различать структурный XML ответа, бинарный multipart и содержимое `Content` в base64. Переход на новый разбор метаданных не должен вновь загружать всё вложение в память.
 
-| Сервис | XML Regex | MIME (не мигрируем) | Сложность |
-|--------|-----------|---------------------|-----------|
-| Calendar (7 файлов) | ~77 | 0 | Очень высокая |
-| EasTasksService | ~68 | 4 | Очень высокая |
-| EasNotesService | ~47 | 0 | Высокая |
-| EasDraftsService | ~39 | 2 | Высокая |
-| EasClient | ~20 | 0 | Критическая |
-| EasContactsService | ~18 | 2 | Средняя |
-| EasEmailService | ~15 | ~12 | Средняя |
-| EasAttachmentService | ~3 | 3 | Низкая |
+## Как проверять изменение
 
-## Утилита (ГОТОВА)
-`EasXmlParser.kt` — обёртка над `android.util.Xml.newPullParser()`:
-- Drop-in замены: `extractValue`, `extractAttribute`, `extractAll`, `extractAllAttributes`
-- Обход: `forEachElement`, `collectElements`
-- Проверка: `hasElement`
-- DSL: `parse(xml) { onElement("Body") { text() } }`
-- Shorthand: `.email()`, `.email2()`, `.ews()`, `.note()`, `.task()`, `.calendar()`, `.contact()`, `.gal()`, `.airsync()`, `.composeMail()`, `.soap()`
+Сначала зафиксировать поведение выбранного ответа: успешная и пустая страницы, ошибка сервера, одинаковые имена тегов на разной глубине, обрыв документа. Для EAS нужны ответы после преобразования WBXML (в них могут отсутствовать префиксы); для EWS — SOAP с префиксами. Затем заменить разбор одного ответа и проверить соответствующий сервис и применение результата в репозитории. Не удалять `XmlValueExtractor` и `EasPatterns`, пока остаются их вызовы.
 
-## Ключевые решения
+Примеры в [тестах протокола](../app/src/test/java/com/dedovmosol/iwomail/eas): `EasSyncStreamTest`, `EasContactsSyncCompletenessTest`, `EasTasksSyncCompletenessTest`, `EasNotesSyncCompletenessTest`, `EasEmailMoveItemsParserTest`, `CalendarXmlParserTest`. [Инструкция по запуску](../app/src/test/README.md).
 
-### FEATURE_PROCESS_NAMESPACES = false
-- EAS XML после WBXML-декодирования не всегда содержит `xmlns` declarations
-- Exchange 2007 SP1 EWS — содержит, но проще работать с raw prefix:name
-- Метод `matchesTag("t:Subject", "Subject", ["t"])` обрабатывает оба случая
-
-### Что НЕ мигрируем (остаётся Regex)
-- MIME парсинг (Content-Type, boundary, Content-ID, MDN headers, Message-ID) — это НЕ XML
-- `EasPatterns.MDN_DISPOSITION`, `MDN_RETURN_RECEIPT`, `MDN_CONFIRM_READING`, `MIME_MESSAGE_ID`, `BOUNDARY`, `EMAIL_BRACKET` — оставляем
-- Inline image extraction из HTML (Content-ID, Content-Type, data:image patterns) — не XML
-- HTML-чистка regex (BR, P, DIV tags в removeDuplicateLines) — не XML
-
-## Порядок миграции (от простого к сложному)
-
-### Этап 1: EasContactsService — СДЕЛАНО
-- 4 inline pattern + 12 `deps.extractValue` + 2 `XmlValueExtractor`
-- GAL Search response, Sync Add/Change parsing
-- Проверить: GAL поиск, список контактов, синхронизация контактов
-
-### Этап 2: EasAttachmentService (~3 regex)
-- 3 `EasPatterns` (ItemOps status/data/props)
-- FileReference extraction, content download
-- Проверить: скачивание вложений email/calendar/tasks, отправка MDN
-
-### Этап 3: EasNotesService — СДЕЛАНО
-- ~15 inline patterns + 22 `deps.extractValue` + 8 `XmlValueExtractor` + 2 `EasPatterns`
-- Sync response парсинг (Add/Change/Delete)
-- EWS CreateItem/UpdateItem/GetItem для заметок
-- `parseNoteFromXml`, `parseEwsNotesResponse`
-- Проверить: CRUD заметок, синхронизация, Exchange 2007 SP1
-
-### Этап 4: EasTasksService (~68 regex)
-- ~30 companion patterns + 25 `XmlValueExtractor` + 12 `deps.extractValue` + 1 `EasPatterns`
-- `parseTaskFromXml`, `parseEwsTasksResponse`
-- `discoverTaskSubfolderIds` — FindFolder response парсинг
-- `getTaskBodiesEws` — GetItem для тел задач
-- Проверить: CRUD задач, синхронизация, Exchange 2007 SP1, задачи без дат
-
-### Этап 5: EasEmailService XML — СДЕЛАНО (MIME regex не трогали)
-- XML: AIRSYNC_DATA_REGEX, responsePattern, itemPattern, bodyPattern + `deps.extractValue`
-- MIME (НЕ ТРОГАТЬ): MDN_*, MIME_MESSAGE_ID, BOUNDARY, Content-ID/Type, htmlPartPattern, textPartPattern
-- Sync Add/Change/Delete, ItemOperations Data extraction
-- Проверить: полный цикл работы с почтой, MDN диалог
-
-### Этап 6: EasDraftsService (~39 regex)
-- 23 companion patterns + 12 `XmlValueExtractor` + 4 `EasPatterns`
-- EWS CreateItem MimeContent
-- GetItem для черновиков
-- Attachment download
-- Проверить: создание/редактирование/отправка черновиков
-
-### Этап 7: Calendar (~77 regex) — самый сложный, декомпозирован
-
-Календарь декомпозирован из монолита `EasCalendarService` в 8 файлов:
-
-| Файл | XML Regex | Описание |
-|------|-----------|----------|
-| EasCalendarService.kt | 0 | Facade (делегирует) |
-| CalendarXmlParser.kt | СДЕЛАНО (`EasXmlParser`) | Парсинг событий, attendees, EWS |
-| EasCalendarCrudService.kt | ~11 | CRUD + EWS paths |
-| EasCalendarSyncService.kt | ~10 | Sync loop + SyncKey |
-| CalendarAttachmentService.kt | ~10 | EWS attachment CRUD |
-| CalendarExceptionService.kt | ~7 | Recurring exceptions |
-| CalendarDateUtils.kt | ~4 | Date/timezone regex |
-| CalendarRecurrenceBuilder.kt | 0 | XML building (нет regex) |
-
-- Проверить: CRUD событий, повторяющиеся события, вложения, приглашения, Exchange 2007 SP1
-
-### Этап 8: EasClient (~20 regex)
-- СДЕЛАНО отдельно: `EasProvisioning` (Provision HTTP 449), `EasSyncStream` (поток Sync)
-- Осталось: FolderSync, Autodiscover, EWS fallback тел (`fetchEmailBodyViaEws`)
-- `EasPatterns` aliases + `deps.extractValue` в фасаде
-- FolderHierarchy парсинг
-- Проверить: авторизация, синхронизация папок, тело письма fallback
-
-## Стратегия миграции каждого сервиса
-
-1. **Заменить `deps.extractValue(xml, "Tag")` на `EasXmlParser.extractValue(xml, "Tag")`**
-   - Самая простая замена, 1:1
-2. **Заменить `XmlValueExtractor.extractEws(xml, "Tag")` на `EasXmlParser.ews(xml, "Tag")`**
-3. **Заменить `XmlValueExtractor.extractAttribute(xml, "El", "Attr")` на `EasXmlParser.extractAttribute(xml, "El", "Attr", listOf("t"))`**
-4. **Заменить inline `"<Tag>(.*?)</Tag>".toRegex().find(xml)` на `EasXmlParser.extractValue(xml, "Tag")`**
-5. **Заменить `pattern.findAll(xml).forEach` на `EasXmlParser.forEachElement(xml, "Tag") { ... }`**
-6. **Сложные вложенные парсинги → DSL `EasXmlParser.parse(xml) { ... }`**
-
-## После полной миграции (cleanup)
-- Удалить `EasPatterns.kt` (кроме MIME regex: `MDN_*`, `MIME_MESSAGE_ID`, `BOUNDARY`, `EMAIL_BRACKET`)
-- Удалить `XmlValueExtractor.kt`
-- Удалить `extractValue` из `EasClient` и deps
-- Удалить `extractValueCache` из `EasClient`
-- Удалить `getTagPattern` / `getTagPatternWithNs` из `EasPatterns`
-
-## Тестирование
-- Каждый этап = отдельный коммит
-- После каждого этапа: полный регрессионный тест соответствующей функциональности
-- Exchange 2007 SP1: обязательная проверка EWS fallback (этапы 3-8)
-- Проверка с разными типами Exchange серверов
+MIME-заголовки, границы MIME-частей, HTML и форматирование дат — не XML. Количество регулярных выражений в файле не показывает, какая часть миграции завершена.

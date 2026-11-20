@@ -31,15 +31,9 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit, highlight: String =
             .canAuthenticate(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK) ==
             androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS
     }
-    val passwordStorage = remember {
-        com.dedovmosol.iwomail.data.security.PasswordStorage.getInstance(context)
-    }
+    val storageDegraded = remember { usesFallbackStorage(context) }
     val telemetry = remember {
         com.dedovmosol.iwomail.data.security.SecurityTelemetry.getInstance(context)
-    }
-    val storageDegraded = remember {
-        passwordStorage.isUsingInsecureStorage() ||
-            com.dedovmosol.iwomail.data.security.AppLockManager.isUsingInsecureStorage()
     }
     var failClosed by remember { mutableStateOf(telemetry.isFailClosedEnabled()) }
 
@@ -163,6 +157,7 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit, highlight: String =
                     )
                     SettingsSwitchRow(
                         title = Strings.failClosedTitle,
+                        highlightId = "failClosed", highlight = rowHighlight,
                         description = Strings.failClosedDesc,
                         icon = { Icon(AppIcons.ErrorOutline, null) },
                         checked = failClosed,

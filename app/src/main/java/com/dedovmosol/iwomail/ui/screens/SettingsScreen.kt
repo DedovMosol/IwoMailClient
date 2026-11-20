@@ -42,6 +42,7 @@ fun SettingsScreen(
     onNavigateToAbout: (String) -> Unit = {},
     onNavigateToAccountSettings: (accountId: Long, focus: String) -> Unit = { _, _ -> },
     onNavigateToSyncCleanup: (accountId: Long, focus: String) -> Unit = { _, _ -> },
+    onAddAccount: () -> Unit = onNavigateToAccounts,
     onNoAccountsLeft: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -59,7 +60,12 @@ fun SettingsScreen(
     val settingsRepo = remember { RepositoryProvider.getSettingsRepository(context) }
     val appLockEnabled by settingsRepo.appLockEnabled.collectAsStateWithLifecycle(initialValue = false)
     val dailyThemesEnabled by settingsRepo.dailyThemesEnabled.collectAsStateWithLifecycle(initialValue = false)
-    val catalog = rememberSettingsCatalog(SettingsSearchState(appLockEnabled, dailyThemesEnabled, accounts))
+    val images by settingsRepo.remoteImagesPrefs.collectAsStateWithLifecycle(initialValue = null)
+    val alerts by settingsRepo.mailAlertPrefs.collectAsStateWithLifecycle(initialValue = null)
+    val degraded = remember { usesFallbackStorage(context) }
+    val catalog = rememberSettingsCatalog(SettingsSearchState(appLockEnabled, dailyThemesEnabled, accounts,
+        trustedSenderCount = images?.trustedSenders?.size ?: 0,
+        quietHoursEnabled = alerts?.quietHours?.enabled == true, storageDegraded = degraded))
     var query by rememberSaveable { mutableStateOf("") }
     val hits = remember(query, catalog) { filterSettingsEntries(query, catalog) }
     val searching = query.trim().isNotEmpty()
@@ -75,7 +81,7 @@ fun SettingsScreen(
             return
         }
         when (dest) {
-            SettingsSearchDest.Accounts -> onNavigateToAccounts()
+            SettingsSearchDest.Accounts -> if (focus == "addAccount") onAddAccount() else onNavigateToAccounts()
             SettingsSearchDest.Mail -> onNavigateToMail(focus)
             SettingsSearchDest.Alerts -> onNavigateToNotifications(focus)
             SettingsSearchDest.Appearance -> onNavigateToPersonalization(focus)
@@ -102,7 +108,7 @@ fun SettingsScreen(
                 trailingIcon = {
                     if (query.isNotEmpty()) {
                         IconButton(onClick = { query = "" }) {
-                            Icon(AppIcons.Clear, Strings.cancel)
+                            Icon(AppIcons.Clear, Strings.clear)
                         }
                     }
                 },

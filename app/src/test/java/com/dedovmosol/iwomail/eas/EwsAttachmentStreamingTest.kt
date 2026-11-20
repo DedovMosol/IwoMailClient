@@ -51,6 +51,21 @@ class EwsAttachmentStreamingTest {
     }
 
     @Test
+    fun `inline EWS bounds decoded content and data before Content separately`() {
+        val xml = getAttachmentResponse(file).toByteArray()
+        val output = EasAttachmentService.BoundedBuffer(2_000)
+        assertThat(runCatching {
+            EwsAttachmentContent.extract(Trickle(xml, 1234), output, maxResponseBytes = 100_000)
+        }.exceptionOrNull()).isInstanceOf(EasAttachmentService.BoundedBuffer.Overflow::class.java)
+        assertThat(output.size()).isAtMost(2_000)
+
+        val longPrefix = ("<s:Envelope><!--" + " ".repeat(10_000) + "-->").toByteArray()
+        assertThat(runCatching {
+            EwsAttachmentContent.extract(Trickle(longPrefix, 1234), ByteArrayOutputStream(), maxResponseBytes = 4_000)
+        }.exceptionOrNull()).isInstanceOf(EasAttachmentService.BoundedBuffer.Overflow::class.java)
+    }
+
+    @Test
     fun `an empty attachment is an empty file, not not-found`() {
         for (body in listOf("<t:Content></t:Content>", "<t:Content/>")) {
             val xml = getAttachmentResponse(ByteArray(0)).replace("<t:Content></t:Content>", body)

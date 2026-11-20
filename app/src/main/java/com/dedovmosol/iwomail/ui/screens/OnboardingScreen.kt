@@ -38,6 +38,8 @@ import com.dedovmosol.iwomail.ui.OnboardingStrings
 import com.dedovmosol.iwomail.ui.theme.AppColorTheme
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
+import com.dedovmosol.iwomail.ui.utils.animatedRotation
+import com.dedovmosol.iwomail.ui.utils.animatedScale
 import com.dedovmosol.iwomail.ui.utils.rememberPulseScale
 import com.dedovmosol.iwomail.ui.utils.rememberRotation
 import com.dedovmosol.iwomail.ui.utils.rememberShake
@@ -500,7 +502,7 @@ private fun AnimationsSelectionPage(
     onAnimationsChanged: (Boolean) -> Unit,
     colorTheme: AppColorTheme,
     isRussian: Boolean,
-    rotation: Float,
+    rotation: State<Float>,
     armed: Boolean
 ) {
     val visible = rememberOnboardingVisible(armed = armed, animationsEnabled = animationsEnabled)
@@ -554,7 +556,7 @@ private fun AnimationsSelectionPage(
                     contentDescription = null,
                     modifier = Modifier
                         .size(iconInnerSize)
-                        .graphicsLayer { rotationZ = if (animationsEnabled) rotation else 0f },
+                        .graphicsLayer { rotationZ = if (animationsEnabled) rotation.value else 0f },
                     tint = Color.White
                 )
             }
@@ -642,7 +644,7 @@ private fun ThemeSelectionPage(
     onScrollbarColorSelected: (String) -> Unit = {},
     isRussian: Boolean,
     animationsEnabled: Boolean,
-    pulse: Float,
+    pulse: State<Float>,
     armed: Boolean
 ) {
     val visible = rememberOnboardingVisible(armed = armed, animationsEnabled = animationsEnabled)
@@ -751,11 +753,12 @@ private fun ThemeSelectionPage(
                     val theme = AppColorTheme.entries[index]
                     val isSelected = theme.code == selectedTheme
                     val circleSize = if (isSelected) 48.dp else 40.dp
-                    val circleScale = if (isSelected && animationsEnabled) pulse else 1f
                     Box(
                         modifier = Modifier
                             .size(circleSize)
                             .graphicsLayer {
+                                // Пульс читается при отрисовке слоя: без перекомпоновки списка на кадр (ONB-19)
+                                val circleScale = if (isSelected && animationsEnabled) pulse.value else 1f
                                 scaleX = circleScale
                                 scaleY = circleScale
                                 clip = false
@@ -1094,9 +1097,9 @@ private fun FeaturePage(
     page: OnboardingPage,
     isRussian: Boolean,
     animationsEnabled: Boolean,
-    pulse: Float,
-    shake: Float,
-    rotation: Float,
+    pulse: State<Float>,
+    shake: State<Float>,
+    rotation: State<Float>,
     armed: Boolean
 ) {
     val visible = rememberOnboardingVisible(armed = armed, animationsEnabled = animationsEnabled)
@@ -1176,7 +1179,7 @@ private fun FeaturePage(
                     visible = visible,
                     delay = 200,
                     icon = AppIcons.Email,
-                    iconModifier = if (animationsEnabled) Modifier.scale(pulse) else Modifier,
+                    iconModifier = if (animationsEnabled) Modifier.animatedScale(pulse) else Modifier,
                     color = Color(0xFF1565C0),
                     title = OnboardingStrings.mailTitle(isRussian),
                     description = OnboardingStrings.mailDescription(isRussian)
@@ -1186,7 +1189,7 @@ private fun FeaturePage(
                     visible = visible,
                     delay = 350,
                     icon = AppIcons.Notifications,
-                    iconModifier = if (animationsEnabled) Modifier.graphicsLayer { rotationZ = shake } else Modifier,
+                    iconModifier = if (animationsEnabled) Modifier.animatedRotation(shake) else Modifier,
                     color = Color(0xFFD32F2F),
                     title = OnboardingStrings.notificationsTitle(isRussian),
                     description = OnboardingStrings.notificationsDescription(isRussian)
@@ -1207,7 +1210,7 @@ private fun FeaturePage(
                     visible = visible,
                     delay = 200,
                     icon = AppIcons.Contacts,
-                    iconModifier = if (animationsEnabled) Modifier.scale(pulse) else Modifier,
+                    iconModifier = if (animationsEnabled) Modifier.animatedScale(pulse) else Modifier,
                     color = Color(0xFF1565C0),
                     title = OnboardingStrings.contactsTitle(isRussian),
                     description = OnboardingStrings.contactsDescription(isRussian)
@@ -1217,7 +1220,7 @@ private fun FeaturePage(
                     visible = visible,
                     delay = 300,
                     icon = AppIcons.CalendarMonth,
-                    iconModifier = if (animationsEnabled) Modifier.scale(pulse) else Modifier,
+                    iconModifier = if (animationsEnabled) Modifier.animatedScale(pulse) else Modifier,
                     color = Color(0xFF2E7D32),
                     title = OnboardingStrings.calendarTitle(isRussian),
                     description = OnboardingStrings.calendarDescription(isRussian)
@@ -1227,7 +1230,7 @@ private fun FeaturePage(
                     visible = visible,
                     delay = 400,
                     icon = AppIcons.Task,
-                    iconModifier = if (animationsEnabled) Modifier.scale(pulse) else Modifier,
+                    iconModifier = if (animationsEnabled) Modifier.animatedScale(pulse) else Modifier,
                     color = Color(0xFF7B1FA2),
                     title = OnboardingStrings.tasksTitle(isRussian),
                     description = OnboardingStrings.tasksDescription(isRussian)
@@ -1237,7 +1240,7 @@ private fun FeaturePage(
                     visible = visible,
                     delay = 500,
                     icon = AppIcons.StickyNote,
-                    iconModifier = if (animationsEnabled) Modifier.scale(pulse) else Modifier,
+                    iconModifier = if (animationsEnabled) Modifier.animatedScale(pulse) else Modifier,
                     color = Color(0xFFE65100),
                     title = OnboardingStrings.notesTitle(isRussian),
                     description = OnboardingStrings.notesDescription(isRussian)
@@ -1248,7 +1251,7 @@ private fun FeaturePage(
                     visible = visible,
                     delay = 200,
                     icon = AppIcons.Settings,
-                    iconModifier = if (animationsEnabled) Modifier.graphicsLayer { rotationZ = rotation } else Modifier,
+                    iconModifier = if (animationsEnabled) Modifier.animatedRotation(rotation) else Modifier,
                     color = Color(0xFF455A64),
                     title = OnboardingStrings.personalizationTitle(isRussian),
                     description = OnboardingStrings.personalizationDescription(isRussian)
@@ -1258,7 +1261,7 @@ private fun FeaturePage(
                     visible = visible,
                     delay = 350,
                     icon = AppIcons.Update,
-                    iconModifier = if (animationsEnabled) Modifier.graphicsLayer { rotationZ = rotation } else Modifier,
+                    iconModifier = if (animationsEnabled) Modifier.animatedRotation(rotation) else Modifier,
                     color = Color(0xFF00796B),
                     title = OnboardingStrings.updatesTitle(isRussian),
                     description = OnboardingStrings.updatesDescription(isRussian)

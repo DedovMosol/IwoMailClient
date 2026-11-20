@@ -436,11 +436,29 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
     }
 
     /**
-     * Подписи аккаунта (для экрана создания письма). Обёртка над DAO для
-     * presentation-слоя (Этап 3, CS-16).
+     * NAV-04: пароль учётной записи для сброса блокировки приложения, когда пароля блокировки на устройстве нет.
+     * Сохранённый пароль есть — сравнение с ним (constant-time); нет (хранилище ключей сброшено вместе с ним) —
+     * чтение UserInformation из защищённого ящика Exchange (одного ответа OPTIONS недостаточно).
+     * true — верный, false — неверный, null — проверить нечем (нет связи, сервер ответил не об авторизации,
+     * у аккаунта не Exchange и пароль не сохранён).
      */
-    suspend fun getSignaturesForAccount(accountId: Long): List<com.dedovmosol.iwomail.data.database.SignatureEntity> {
-        return database.signatureDao().getSignaturesByAccountList(accountId)
+    suspend fun verifyAccountPassword(accountId: Long, candidate: String): Boolean? {
+        if (candidate.isEmpty()) return false
+        val account = accountDao.getAccount(accountId) ?: return null
+        val stored = getPassword(accountId)
+        if (!stored.isNullOrEmpty()) {
+            return java.security.MessageDigest.isEqual(stored.toByteArray(Charsets.UTF_8), candidate.toByteArray(Charsets.UTF_8))
+        }
+        // A client certificate can authenticate independently of the supplied password.
+        if (account.accountType != AccountType.EXCHANGE.name || !account.clientCertificatePath.isNullOrBlank()) return null
+        val client = buildEasClient(account, useAlternate = isUsingFallback(accountId), password = candidate) ?: return null
+        return when (val result = client.checkMailboxAccess()) {
+            is EasResult.Success -> result.data.takeIf { it }
+            is EasResult.Error ->
+                if (com.dedovmosol.iwomail.data.model.classifyError(result.message, null) ==
+                    com.dedovmosol.iwomail.data.model.ErrorKind.Auth
+                ) false else null
+        }
     }
 
     suspend fun getPassword(accountId: Long): String? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {

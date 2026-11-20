@@ -52,11 +52,25 @@ object MimeHtmlProcessor {
      * для одночастного MIME и нестандартных boundary.
      */
     fun extractHtmlFromMime(mimeData: String): String {
-        val decoded = decodeMimeWrapper(mimeData)
-
-        findTextPart(decoded, "text/html")?.let { return it }
+        // Never inflate an oversized base64 wrapper just to show a preview. Large raw multipart
+        // messages can still render their small text part without copying the neighbouring files.
+        val large = mimeData.length > MAX_INLINE_MIME_CHARS
+        val decoded = if (large) mimeData else decodeMimeWrapper(mimeData)
+        var plainText: String? = null
+        var html: String? = null
+        visitMimeParts(decoded, { html != null }) { headers, start, end ->
+            if (end - start > MAX_INLINE_MIME_CHARS) return@visitMimeParts
+            when {
+                headers.hasContentType("text/html") -> html = decodeMimePartContent(headers, decoded.substring(start, end).trim())
+                plainText == null && headers.hasContentType("text/plain") ->
+                    plainText = decodeMimePartContent(headers, decoded.substring(start, end).trim())
+            }
+        }
+        html?.let { return it }
+        if (!large) findTextPart(decoded, "text/html")?.let { return it }
+        plainText?.let { return it.replace("\n", "<br>") }
+        if (large) return ""
         findTextPart(decoded, "text/plain")?.let { return it.replace("\n", "<br>") }
-
         return decoded
     }
 
@@ -138,6 +152,77 @@ object MimeHtmlProcessor {
 
         extractImagesRecursive(decoded, images)
         return images
+    }
+
+    /** For message preview: decode only referenced image parts from the already cached, bounded MIME. */
+    internal fun forEachReferencedInlineImage(
+        mimeData: String, wanted: Set<String>, limit: () -> Long, consume: (String, ByteArray) -> Unit
+    ) {
+        if (wanted.isEmpty() || mimeData.length > MAX_INLINE_MIME_CHARS) return
+        val mime = decodeMimeWrapper(mimeData)
+        visitMimeParts(mime, { wanted.isEmpty() || limit() <= 0 }) { headers, dataStart, end ->
+            if (!headers.hasContentType("image/")) return@visitMimeParts
+            val cid = CID_HEADER.find(headers)?.groupValues?.get(1)?.let(::normalizeContentId)
+                ?.lowercase(java.util.Locale.ROOT) ?: return@visitMimeParts
+            if (cid !in wanted || !TRANSFER_ENCODING.find(headers)?.groupValues?.get(1).equals("base64", ignoreCase = true)) return@visitMimeParts
+            val max = limit()
+            // Size check before copying/compacting the payload or allocating decoded bytes.
+            if ((end - dataStart).toLong() > max * 3 / 2 + 1024) return@visitMimeParts
+            val bytes = try {
+                java.util.Base64.getDecoder().decode(buildString {
+                    for (i in dataStart until end) if (!mime[i].isWhitespace()) append(mime[i])
+                })
+            } catch (_: IllegalArgumentException) {
+                return@visitMimeParts
+            }
+            if (bytes.size.toLong() <= max) consume(cid, bytes)
+        }
+    }
+
+    /** Scan by ranges so visiting a large file part does not copy its payload. */
+    private fun visitMimeParts(
+        mime: String, done: () -> Boolean, consumePart: (headers: String, start: Int, end: Int) -> Unit
+    ) {
+        fun visit(start: Int, end: Int, depth: Int) {
+            if (depth > 10 || done()) return
+            val headerLimit = minOf(end, start + 64 * 1024)
+            // Limit header parsing even for a malformed part with no empty line.
+            var dataStart = start
+            var headerEnd = start
+            while (dataStart < headerLimit) {
+                val lineStart = dataStart
+                while (dataStart < headerLimit && mime[dataStart] != '\n') dataStart++
+                if (dataStart == headerLimit) return
+                val emptyLine = dataStart == lineStart || dataStart == lineStart + 1 && mime[lineStart] == '\r'
+                dataStart++
+                if (emptyLine) { headerEnd = lineStart; break }
+            }
+            if (headerEnd == start) return
+            val headers = mime.substring(start, headerEnd)
+            if (headers.hasContentType("multipart/")) {
+                val boundary = BOUNDARY.find(headers)?.groupValues?.get(1)?.trim()?.substringBefore(';') ?: return
+                val delimiter = "--$boundary"
+                var next = dataStart
+                var partStart = -1
+                while (next < end) {
+                    val at = mime.indexOf(delimiter, next)
+                    if (at < 0 || at + delimiter.length >= end) break
+                    next = at + delimiter.length
+                    if (at > dataStart && mime[at - 1] != '\n') continue
+                    val closing = mime.startsWith("--", next)
+                    var after = next + if (closing) 2 else 0
+                    while (after < end && (mime[after] == ' ' || mime[after] == '\t' || mime[after] == '\r')) after++
+                    if (after < end && mime[after] != '\n') continue
+                    if (partStart >= 0) visit(partStart, at, depth + 1)
+                    if (closing || done()) return
+                    partStart = after + 1
+                    next = partStart
+                }
+                return
+            }
+            consumePart(headers, dataStart, end)
+        }
+        visit(0, mime.length, 0)
     }
 
     /**

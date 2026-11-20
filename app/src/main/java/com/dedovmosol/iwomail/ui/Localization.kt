@@ -32,6 +32,7 @@ object Strings {
     val edit: String @Composable get() = if (isRussian()) "Редактировать" else "Edit"
     val close: String @Composable get() = if (isRussian()) "Закрыть" else "Close"
     val clear: String @Composable get() = if (isRussian()) "Очистить" else "Clear"
+    val showPassword: String @Composable get() = if (isRussian()) "Показать пароль" else "Show password"
     val yes: String @Composable get() = if (isRussian()) "Да" else "Yes"
     val no: String @Composable get() = if (isRussian()) "Нет" else "No"
     val back: String @Composable get() = if (isRussian()) "Назад" else "Back"
@@ -129,6 +130,10 @@ object Strings {
         else "Automatically delete old emails from trash"
 
     // Автоматическая очистка
+    val appOverviewLabel: String @Composable get() = if (isRussian()) "Обзор" else "Overview"
+    val softwareUpdateLabel: String @Composable get() = if (isRussian()) "Обновление ПО" else "Software update"
+    val quietStartLabel: String @Composable get() = if (isRussian()) "Начало тихих часов" else "Quiet hours start"
+    val quietEndLabel: String @Composable get() = if (isRussian()) "Конец тихих часов" else "Quiet hours end"
     val autoCleanup: String @Composable get() = if (isRussian()) "Автоматическая очистка" else "Auto cleanup"
     val autoCleanupDesc: String @Composable get() = if (isRussian())
         "Настройка автоматической очистки папок"
@@ -587,6 +592,9 @@ object Strings {
     val editorContentUnavailable: String @Composable get() = if (isRussian())
         "Не удалось показать текст в редакторе. Он не потерян: письмо можно отправить или сохранить."
         else "Could not show the text in the editor. It is not lost: the message can still be sent or saved."
+    val editorWebViewUnavailable: String @Composable get() = if (isRussian())
+        "Редактор недоступен: системный компонент Android System WebView обновляется или отключён. Повторите через минуту."
+        else "The editor is unavailable: Android System WebView is updating or disabled. Try again in a minute."
     val draftSavedOffline: String @Composable get() = if (isRussian())
         "Нет связи с сервером: черновик сохранён на устройстве и загрузится на сервер при подключении"
         else "No connection to the server: the draft is saved on the device and will be uploaded when online"
@@ -1352,6 +1360,9 @@ object Strings {
     val defaultLabel: String @Composable get() = if (isRussian()) "(по умолч.)" else "(default)"
     val addSignatureAction: String @Composable get() = if (isRussian()) "Добавить подпись" else "Add signature"
     val deleteSignatureTitle: String @Composable get() = if (isRussian()) "Удалить подпись?" else "Delete signature?"
+    /** Название кнопки удаления для TalkBack: подписей несколько — какую именно. */
+    @Composable fun deleteSignatureNamed(name: String): String =
+        if (isRussian()) "Удалить подпись «$name»" else "Delete signature \"$name\""
     val editTitle: String @Composable get() = if (isRussian()) "Редактировать" else "Edit"
     val newSignatureTitle: String @Composable get() = if (isRussian()) "Новая подпись" else "New signature"
     val nameLabel: String @Composable get() = if (isRussian()) "Название" else "Name"
@@ -1570,6 +1581,21 @@ object Strings {
     val appLockCurrentPassword: String @Composable get() = if (isRussian()) "Текущий пароль" else "Current password"
     val appLockNewPassword: String @Composable get() = if (isRussian()) "Новый пароль" else "New password"
     val appLockUnlock: String @Composable get() = if (isRussian()) "Разблокировать" else "Unlock"
+    // NAV-04: блокировка включена, а её пароля на устройстве нет
+    val appLockRecoveryTitle: String @Composable get() = if (isRussian()) "Пароль блокировки не найден" else "App lock password not found"
+    @Composable fun appLockRecoveryDesc(email: String): String = if (isRussian())
+        "Блокировка включена, но её пароль на устройстве не сохранился (например, после сброса хранилища ключей Android). " +
+            "Введите пароль учётной записи $email: блокировка выключится, и её можно будет включить заново в настройках."
+        else "The app lock is on, but its password is no longer on this device (for example, after the Android key store was reset). " +
+            "Enter the password of $email: the lock will be turned off, and you can turn it on again in settings."
+    val appLockRecoveryPassword: String @Composable get() = if (isRussian()) "Пароль учётной записи" else "Account password"
+    val appLockRecoveryAction: String @Composable get() = if (isRussian()) "Войти и выключить блокировку" else "Sign in and turn off the lock"
+    val appLockRecoveryUnavailable: String @Composable get() = if (isRussian())
+        "Не удалось проверить пароль: нет связи с сервером. Проверьте подключение и повторите."
+        else "Could not check the password: the server is unreachable. Check the connection and try again."
+    val appLockRecoveryDone: String @Composable get() = if (isRussian())
+        "Блокировка выключена. Новый пароль можно задать в настройках безопасности."
+        else "The app lock is off. You can set a new password in the security settings."
     val appLockDisable: String @Composable get() = if (isRussian()) "Отключить блокировку" else "Disable lock"
     val appLockWrongPassword: String @Composable get() = if (isRussian()) "Неверный пароль" else "Wrong password"
     val scrollbarColor: String @Composable get() = if (isRussian()) "Цвет скроллбара" else "Scrollbar color"

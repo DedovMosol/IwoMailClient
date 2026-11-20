@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import com.dedovmosol.iwomail.ui.utils.tryRequestFocus
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import com.dedovmosol.iwomail.ui.components.launchLeavingApp
@@ -50,6 +51,7 @@ import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import com.dedovmosol.iwomail.ui.theme.ThemeButton
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.utils.findActivity
+import com.dedovmosol.iwomail.ui.utils.animatedScale
 import com.dedovmosol.iwomail.ui.utils.rememberPulseScale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -121,19 +123,20 @@ fun SetupScreen(
     val passwordFocus = remember { FocusRequester() }
     val domainFocus = remember { FocusRequester() }
 
-    // Восстановление фокуса после поворота
-    LaunchedEffect(focusedFieldIndex) {
-        if (focusedFieldIndex >= 0) {
-            kotlinx.coroutines.delay(100)
-            when (focusedFieldIndex) {
-                0 -> displayNameFocus.requestFocus()
-                1 -> emailFocus.requestFocus()
-                2 -> serverUrlFocus.requestFocus()
-                3 -> usernameFocus.requestFocus()
-                4 -> passwordFocus.requestFocus()
-                5 -> domainFocus.requestFocus()
-            }
-        }
+    // Восстановление фокуса после поворота — один раз; поле, которого сейчас нет на экране, пропускается
+    LaunchedEffect(Unit) {
+        val index = focusedFieldIndex
+        if (index < 0) return@LaunchedEffect
+        kotlinx.coroutines.delay(100)
+        when (index) {
+            0 -> displayNameFocus
+            1 -> emailFocus
+            2 -> serverUrlFocus
+            3 -> usernameFocus
+            4 -> passwordFocus
+            5 -> domainFocus
+            else -> null
+        }?.tryRequestFocus()
     }
     var alternateServerUrl by rememberSaveable { mutableStateOf("") }
     var incomingPort by rememberSaveable { mutableStateOf("443") }
@@ -552,7 +555,7 @@ fun SetupScreen(
                         Box(
                             modifier = Modifier
                                 .size(80.dp)
-                                .scale(iconScale)
+                                .animatedScale(iconScale)
                                 .clip(CircleShape)
                                 .background(
                                     brush = Brush.linearGradient(
@@ -1036,13 +1039,7 @@ fun SetupScreen(
                     VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 trailingIcon = {
-                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                        Icon(
-                            imageVector = if (passwordVisible)
-                                AppIcons.VisibilityOff else AppIcons.Visibility,
-                            contentDescription = null
-                        )
-                    }
+                    com.dedovmosol.iwomail.ui.components.PasswordVisibilityToggle(passwordVisible) { passwordVisible = it }
                 }
             )
 
@@ -1254,12 +1251,8 @@ fun SetupScreen(
                                     VisualTransformation.None
                                     else PasswordVisualTransformation(),
                                 trailingIcon = {
-                                    IconButton(onClick = { clientCertPasswordVisible = !clientCertPasswordVisible }) {
-                                        Icon(
-                                            if (clientCertPasswordVisible) AppIcons.VisibilityOff
-                                            else AppIcons.Visibility,
-                                            contentDescription = null
-                                        )
+                                    com.dedovmosol.iwomail.ui.components.PasswordVisibilityToggle(clientCertPasswordVisible) {
+                                        clientCertPasswordVisible = it
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth(),

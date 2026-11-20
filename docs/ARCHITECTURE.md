@@ -27,11 +27,11 @@
 | Сеть и фон | OkHttp `4.12.0`, Conscrypt `2.5.2`, WorkManager `2.9.0`, DataStore `1.1.1`, Glance `1.1.1`, JavaMail (`android-mail`) `1.6.7` |
 | Безопасность | `security-crypto` `1.1.0-alpha06` (EncryptedSharedPreferences), `biometric` `1.1.0` |
 | Архитектуры APK | `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64` + универсальный APK |
-| Тесты | Unit-, Robolectric- и Compose UI-тесты в `app/src/test` (около 1 930 в прогоне `testDebugUnitTest`), live-тесты на Exchange 2007 по переменным окружения; каталога `androidTest` нет |
+| Тесты | [Тесты на JVM](../app/src/test/README.md): JUnit, Robolectric, Compose UI и имитация Exchange. Проверки на настоящем Exchange включаются отдельно через переменные окружения. |
 | Опубликованный релиз | GitHub Releases → `1.6.1` (`versionCode` 24); `1.7.0` готовится, бета-сборок между ними не публиковалось |
 | Модель работы | Offline-first: Room + Flow → UI, фоновая синхронизация обновляет БД |
 
-Основной production-сценарий — on-premise Exchange, особенно Exchange 2007 SP1/SP2. IMAP/POP3 реализованы как beta-клиенты для чтения (список папок и последние письма; IMAP дополнительно создаёт, переименовывает и удаляет папки) и не дают паритета с функциями Exchange.
+Основной production-сценарий — on-premise Exchange, особенно Exchange 2007 SP1/SP2. IMAP получает папки и письма, POP3 — входящие письма. `ImapClient` содержит методы управления папками, но `FolderSyncService` разрешает изменения из интерфейса только для Exchange. SMTP-транспорта нет.
 
 ---
 
@@ -154,7 +154,7 @@ Composable ──вызовы событий (vm.setX())───> ViewModel ─
 - `EmailDetailScreen` ↔ `EmailDetailViewModel`/`EmailDetailUiState` + `EmailDetailEvent` (в ViewModel вынесено **ядро** экрана) — письмо, вложения и папки одним потоком `collectLatest(activeAccount)` + `combine`, из которого выводятся признаки текущей папки (корзина, отправленные, черновики). Inline-картинки загружаются реактивно и хранятся в состоянии, поэтому поворот не запускает повторную загрузку. Операции (обновление, удаление в корзину, перенос, восстановление, «непрочитано», флаг, ответ на запрос отчёта о прочтении и его откладывание, отписка, сохранение `.eml`, окончательное удаление) работают в `viewModelScope`; бизнес-логика делегирована классу `EmailDetailActions` (`ui/screens/emaildetail/`). В Composable остаются WebView и отрисовка тела, launcher'ы и файловый ввод-вывод вложений, разбор iCal и приглашений на встречи. Тест: `EmailDetailViewModelTest`.
 - `ScheduledMailScreen` ↔ `ScheduledMailViewModel` + `ScheduledMailEvent` — список запланированных писем (`StateFlow`, строится из `ScheduledSend.pending` и обновляется по `ScheduledSend.changes`), «отправить сейчас», перенос и отмена в `viewModelScope`. Получает `Application` и `CoroutineDispatcher`. Тест: `ScheduledMailViewModelTest` (Robolectric).
 
-**Не подключено:** `ComposeViewModel` + `ComposeUiState`/`ComposeEvent` (`ui/screens/compose/`) существует и покрыт `ComposeViewModelTest`, но `ComposeScreen` его не использует (в `ComposeScreen.kt` и `AppNavigation.kt` обращений к нему нет): экран создания письма держит состояние в Composable.
+**Редактор письма устроен иначе.** Поля и состояние редактора принадлежат `ComposeScreen`. За восстановление большого тела отвечает `LargeStateSaver`; отправка и сохранение продолжаются при повороте в `RetainScopeViewModel`. Сохранение черновика делегируется `DraftSaver`. Тест `ComposeScreenOpenTest` проверяет открытие настоящего экрана через `MainActivity`.
 
 Зависимости: `lifecycle-viewmodel-ktx`, `lifecycle-viewmodel-compose`, `lifecycle-runtime-compose` (`2.7.0`).
 
@@ -185,7 +185,7 @@ com.dedovmosol.iwomail/
 │   │   ├── ScheduleSendDialog.kt / ScheduleSendTimes.kt / ScheduledMailScreen.kt / ScheduledEmailWorker.kt
 │   │   ├── *ViewModel.kt — EmailList, EmailDetail, Notes, Tasks, Search, SyncCleanup, UserFolders, ScheduledMail
 │   │   ├── calendar/ — AgendaView, MonthView, диалоги событий, вложения, UI цветов категорий, верхняя панель выделения
-│   │   ├── compose/ — ComposeViewModel/UiState/Event (не подключены к ComposeScreen), модели, текстовые/HTML-хелперы, встроенные вложения
+│   │   ├── compose/ — модели редактора, обработка текста/HTML и встроенных вложений
 │   │   ├── contacts/ — диалоги контактов, списки и утилиты
 │   │   ├── emaildetail/ — секция вложений, inline-вложения, EmailDetailActions
 │   │   └── emaillist/ — SwipeableEmailRow, SwipeRules, ThreadRows, имена в строках, превью изображений
@@ -212,7 +212,6 @@ com.dedovmosol.iwomail/
 ├── imap/ImapClient.kt
 ├── pop3/Pop3Client.kt
 ├── shared/ — общие интерфейсы, парсеры и конвертеры JavaMail (MailClient, MailMessageParser, MessageToEntityConverter)
-├── smtp/ — пустой каталог без исходников (SMTP-транспорта в коде нет)
 ├── network/ — HttpClientProvider, NetworkMonitor, ConnectionFailure, Rfc6125HostnameVerifier
 ├── sync/ — PushService, воркеры, ресиверы, уведомления, напоминания:
 │           AppForegroundTracker, BackgroundWork, InitialSyncController, PingFailurePolicy, PushRestartPolicy,
@@ -242,7 +241,7 @@ com.dedovmosol.iwomail/
 - **CalendarEventEntity:** события календаря, встречи, поля повторения, исключения, JSON вложений, онлайн-ссылки, идентификаторы запросов на встречу.
 - **TaskEntity:** поля задачи, сроки, приоритет, напоминания, владелец/исполнитель, локальный флаг корзины.
 - **CategoryColorEntity** (`category_colors`, первичный ключ `accountId` + `nameKey`): цвета категорий Outlook для каждого аккаунта (`serverColor` из Master Category List на Exchange 2010+, `userColor` задаётся в приложении).
-- **PendingPimChangeEntity** (`pending_pim_changes`, версия БД 52): правки задач и заметок без связи — `pendingCreate` / `pendingUpdate` / `pendingTrash`, `kind` (TASK/NOTE), `serverSubject`, `version`. Внешний ключ только на `accounts` (каскад), по той же причине, что и у очереди писем.
+- **PendingPimChangeEntity** (`pending_pim_changes`, таблица добавлена в версии БД 51): правки задач и заметок без связи — `pendingCreate` (добавлен в версии 52), `pendingUpdate` и `pendingTrash`, `kind` (TASK/NOTE), `serverSubject`, `version`. Внешний ключ только на `accounts` (каскад), по той же причине, что и у очереди писем.
 - **PendingEmailChangeEntity** (`pending_email_changes`, версия БД 50): изменения писем, сделанные без связи и ещё не принятые сервером, — `flag` и/или `read`. Само значение не хранится: отправляется текущее из `emails`, поэтому несколько правок без связи уходят одним итогом. Внешнего ключа на `emails` нет намеренно: часть путей перезаписывает письма через REPLACE (DELETE + INSERT), и каскад стёр бы ожидающую правку. Внешний ключ на `accounts` — с каскадным удалением. Вместо UPSERT используется `INSERT OR REPLACE … COALESCE`, потому что SQLite на Android 8 — версии 3.18 и UPSERT не знает.
 
 Текущая версия БД — **54**. Зарегистрированные миграции покрывают `23→54` (`MailDatabase.ALL_MIGRATIONS`, 31 миграция, по одной на версию). При отсутствии миграции для обновления БД пересоздаётся только в **debug**-сборках (`fallbackToDestructiveMigration()` под `BuildConfig.DEBUG`); в release это даёт явный сбой при открытии БД. Понижение версии (установка более старого APK) всегда пересоздаёт БД (`fallbackToDestructiveMigrationOnDowngrade()`), серверные данные синхронизируются заново.
@@ -414,7 +413,7 @@ Exchange 2007 (EAS 12.1) выдаёт ServerId по порядку выдачи 
 - **Корзина**: восстановление до отправки — только на устройстве, сервер не трогается. Окончательное удаление, очистка корзины и сброс («Сбросить и синхронизировать») сначала отправляют очередь; без связи — ошибка `PENDING_CHANGES_NOT_SENT`, данные не теряются.
 - Назначение задачи (письмо исполнителю) без связи не откладывается — это ошибка.
 - UI: событие `SavedOffline` закрывает диалог и показывает «Сохранено на устройстве. Отправится на сервер, когда появится связь».
-- Создание задач и заметок без связи пока не поддержано.
+- При создании задачи или заметки без сети репозиторий сохраняет локальную запись и помечает её `pendingCreate`. Когда сеть появляется, обработчик очереди создаёт объект на сервере. Это отличается от назначения задачи исполнителю, для которого нужна связь.
 
 ### Уведомления
 
@@ -463,7 +462,7 @@ Exchange 2007 (EAS 12.1) выдаёт ServerId по порядку выдачи 
 | `ScheduledEmailWorker` | Отправка отложенного письма (`ui/screens`, имя класса сохранено для уже поставленных задач); он же страховка WorkManager к точному будильнику; временные ошибки повторяются (до 8 попыток), иначе письмо попадает в «Черновики» с уведомлением |
 | `MarkEmailReadWorker` | Уникальная работа пометки письма прочитанным (до 3 повторов) |
 | `MarkTaskCompleteWorker` | Завершение задачи из уведомления; ошибка сервера повторяется (до 10 попыток, экспоненциальный backoff), а не проглатывается |
-| `PendingMailChangesWorker` | Отправка звёзд и «прочитано», сделанных без связи (`pending_email_changes`), когда появляется сеть |
+| `PendingMailChangesWorker` | При появлении сети отправляет правки писем (флаг, прочитано, перенос) из `pending_email_changes` и изменения задач и заметок из `pending_pim_changes`. Отправкой самих исходящих писем занимается `OutboxWorker`. |
 | `RescheduleRemindersWorker` | Перестроение будильников напоминаний календаря, задач и флагов после перезагрузки или обновления |
 | `MailWidgetReceiver` | Ресивер Glance-виджета (`widget/MailWidget.kt`) |
 
@@ -531,6 +530,8 @@ HTML тел писем очищается перед загрузкой в `WebV
 Пароль блокировки приложения (`AppLockManager`) хранится только как хеш PBKDF2-HMAC-SHA256 (600 000 итераций, случайная соль 16 байт, формат `v1:iterations:b64salt:b64hash`, сравнение за постоянное время) в том же `EncryptedStoreProvider`. `setPassword` уважает fail-closed. Разблокировка отпечатком использует `BiometricPrompt` (`BIOMETRIC_WEAK`), поэтому `MainActivity` наследует `FragmentActivity`.
 
 Защита от перебора (`AppLockManager.attempt`): 5 попыток, затем паузы 30 с, 1 мин, 5 мин, 15 мин. Попытка записывается `commit()` до PBKDF2, пауза отсчитывается по `elapsedRealtime` с номером загрузки (`Settings.Global.BOOT_COUNT`): после перезагрузки начинается заново. Успешный вход паролем или отпечатком, установка и удаление пароля сбрасывают счётчик. Тот же счётчик у диалогов смены и отключения пароля.
+
+Если блокировка включена, но хеш пароля утрачен, `AppLockManager.gate` выбирает `LockRecoveryScreen`. Проверяется пароль активного (либо первого) ящика: локально, а при отсутствии сохранённого пароля — по сети только для Exchange. См. [политику безопасности](SECURITY_RU.md).
 
 Приватность при включённой блокировке:
 
@@ -667,7 +668,7 @@ viewModelScope.launch {
 
 Шаблон применён в `EmailListViewModel`, `EmailDetailViewModel`, `SearchViewModel`, `NotesViewModel`, `TasksViewModel`, `UserFoldersViewModel`. `SyncCleanupViewModel` не имеет канала ошибок (операции `set*` — fire-and-forget), поэтому вместо дублирования `try/catch` использует один приватный помощник `launchSafe { }` с теми же ветками `catch(CancellationException){throw}` / `catch(Exception){ Log.e }`. `ScheduledMailViewModel` запускает операции в `viewModelScope` без этой обёртки. Перехват исключений в ViewModel покрыт unit-тестами `*ViewModelTest`.
 
-Долгоживущие реактивные запуски **наблюдения** (подписки на потоки Room по аккаунту, папкам и письмам) в `EmailListViewModel`, `EmailDetailViewModel`, `NotesViewModel`, `TasksViewModel`, `UserFoldersViewModel` и `ComposeViewModel` дополнительно передают `loggingExceptionHandler(tag)` в `viewModelScope.launch(handler) { … }`: ошибка потока Room в коллекторе логируется, а не роняет процесс.
+Долгоживущие реактивные запуски **наблюдения** (подписки на потоки Room по аккаунту, папкам и письмам) в `EmailListViewModel`, `EmailDetailViewModel`, `NotesViewModel`, `TasksViewModel` и `UserFoldersViewModel` дополнительно передают `loggingExceptionHandler(tag)` в `viewModelScope.launch(handler) { … }`: ошибка потока Room в коллекторе логируется, а не роняет процесс.
 
 **Экраны без MVVM**, которые запускают работу из `rememberCoroutineScope()`, используют `rememberSafeScope()` (`ui/components/ComposableUtils.kt`): безопасный по отношению к падениям scope на `SupervisorJob` (сбой одной операции не отменяет соседей) + `CoroutineExceptionHandler` (необработанное исключение логируется, а не уходит в процесс). Его жизненный цикл совпадает с `rememberCoroutineScope` (supervisor — дочерний `Job` базового scope). Помощник `rememberSyncScope()` получил такой же обработчик.
 

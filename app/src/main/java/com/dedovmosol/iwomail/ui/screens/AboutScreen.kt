@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import com.dedovmosol.iwomail.ui.utils.animatedRotation
 import com.dedovmosol.iwomail.ui.utils.findActivity
 import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.foundation.combinedClickable
@@ -68,15 +69,18 @@ fun AboutScreen(
                         .padding(horizontal = 16.dp, vertical = 16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    // Анимации выключены в настройках — гитара не качается (ONB-19)
                     val guitarRotation = com.dedovmosol.iwomail.ui.utils.rememberWobble(
-                        enabled = easterFound, amplitude = 8f, durationMs = 600
+                        enabled = easterFound && com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current,
+                        amplitude = 8f,
+                        durationMs = 600
                     )
                     if (easterFound) {
                         Text(
                             text = "🎸",
                             fontSize = 36.sp,
                             modifier = Modifier
-                                .rotate(guitarRotation)
+                                .animatedRotation(guitarRotation)
                                 .clickable { showEasterEgg = true }
                         )
                     } else {
@@ -101,13 +105,15 @@ fun AboutScreen(
     ) {
         SettingsGroup {
             SettingsNavRow(
-                title = if (isRu) "Обзор" else "Overview",
+                title = Strings.appOverviewLabel,
+                highlightId = "overview", highlight = highlight,
                 subtitle = if (isRu) "Краткий обзор приложения" else "Quick app overview",
                 icon = AppIcons.Lightbulb,
                 onClick = onNavigateToOnboarding
             )
             SettingsNavRow(
-                title = if (isRu) "Обновление ПО" else "Software update",
+                title = Strings.softwareUpdateLabel,
+                highlightId = "updates", highlight = highlight,
                 subtitle = "${Strings.version} ${BuildConfig.VERSION_NAME}",
                 icon = AppIcons.Update,
                 onClick = onNavigateToUpdates

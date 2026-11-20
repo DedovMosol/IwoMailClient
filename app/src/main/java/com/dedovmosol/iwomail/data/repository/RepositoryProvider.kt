@@ -71,6 +71,18 @@ object RepositoryProvider {
         }
     }
 
+    /** Для тестов вместе с MailDatabase.resetForTesting: репозитории держат прежнюю (закрытую) базу. */
+    @androidx.annotation.VisibleForTesting
+    internal fun resetForTesting() = synchronized(this) {
+        accountRepo = null
+        mailRepo = null
+        contactRepo = null
+        noteRepo = null
+        calendarRepo = null
+        taskRepo = null
+        categoryColorRepo = null
+    }
+
     fun getSettingsRepository(context: Context): SettingsRepository {
         return SettingsRepository.getInstance(context.applicationContext)
     }

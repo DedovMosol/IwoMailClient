@@ -471,7 +471,7 @@ internal fun SettingsHubRow(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun rememberSettingsHighlight(id: String, highlight: String): Pair<Modifier, ListItemColors> {
+internal fun rememberSettingsHighlight(id: String, highlight: String): Pair<Modifier, ListItemColors> {
     val on = highlight.isNotEmpty() && highlight == id
     val requester = remember { BringIntoViewRequester() }
     LaunchedEffect(on, id) {
@@ -486,6 +486,18 @@ private fun rememberSettingsHighlight(id: String, highlight: String): Pair<Modif
         }
     )
     return modifier to colors
+}
+
+/** Stable semantic accents for child rows; destructive/status icons keep their own colours. */
+@Composable
+private fun rowHue(id: String): ScrollbarColor = when (id) {
+    "signature", "compose", "overview", "vipSenders" -> ScrollbarColor.ORANGE
+    "remoteImages", "trustedSenders", "galPhotos", "colorTheme" -> ScrollbarColor.GREEN
+    "quietHours", "quietStart", "quietEnd", "nightMode", "undoSend" -> ScrollbarColor.PURPLE
+    "syncMode", "syncInterval", "autoUpdateCheck", "updates", "credentials" -> ScrollbarColor.BLUE
+    "fontSize", "animations", "conversations" -> ScrollbarColor.PINK
+    "failClosed", "changePassword", "fingerprint" -> ScrollbarColor.GREEN
+    else -> LocalSettingsHue.current
 }
 
 /** Переключатель на всю строку (M3 Settings); свитч справа без своего onClick — иначе двойное срабатывание. */
@@ -506,7 +518,7 @@ internal fun SettingsSwitchRow(
         supportingContent = if (description.isNullOrBlank()) null else ({
             Text(description, style = MaterialTheme.typography.bodyMedium)
         }),
-        leadingContent = icon?.let { { SettingsIconTile(content = it) } },
+        leadingContent = icon?.let { { SettingsIconTile(hue = rowHue(highlightId), content = it) } },
         trailingContent = {
             Switch(checked = checked, enabled = enabled, onCheckedChange = null)
         },
@@ -570,7 +582,7 @@ internal fun SettingsNavRow(
         }),
         leadingContent = when {
             icon != null -> {
-                { SettingsIconTile(icon) }
+                { SettingsIconTile(icon, rowHue(highlightId)) }
             }
             leading != null -> leading
             else -> null

@@ -29,7 +29,8 @@ class EmailPrinter internal constructor(private val activity: Activity) {
     fun print(jobName: String, html: String, remoteAllowed: Boolean): Boolean {
         val manager = activity.getSystemService(PrintManager::class.java) ?: return false
         release()
-        val webView = WebView(activity).apply {
+        // Системный WebView недоступен (обновляется, отключён) — печати нет, приложение не падает
+        val webView = WebViewRenderer.create(activity)?.apply {
             settings.javaScriptEnabled = false
             settings.allowFileAccess = false
             settings.allowContentAccess = false
@@ -38,7 +39,7 @@ class EmailPrinter internal constructor(private val activity: Activity) {
             settings.mixedContentMode =
                 if (remoteAllowed) android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                 else android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-        }
+        } ?: return false
         webView.webViewClient = object : WebViewClient() {
             // Ссылки на странице печати не открываем
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true

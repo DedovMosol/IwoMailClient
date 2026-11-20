@@ -44,7 +44,8 @@ import java.io.File
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UpdatesScreen(
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    highlight: String = ""
 ) {
     val context = LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
@@ -141,8 +142,6 @@ fun UpdatesScreen(
     Scaffold(
         topBar = { SettingsTopBar(title = OnboardingStrings.updatesTitle(isRu), onBackClick = onBackClick) }
     ) { padding ->
-        // Dropdown для автопроверки
-        var showIntervalMenu by rememberSaveable { mutableStateOf(false) }
         val scrollState = rememberScrollState()
 
         BoxWithConstraints(
@@ -259,74 +258,16 @@ fun UpdatesScreen(
                 }
             }
 
-            // Автопроверка — отдельная карточка с понятным dropdown
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                ),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        Strings.autoUpdateCheck,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-
-                    Box {
-                        OutlinedButton(
-                            onClick = { showIntervalMenu = true },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(updateCheckInterval.getDisplayName(isRu))
-                                Icon(
-                                    AppIcons.ArrowDropDown,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-
-                        DropdownMenu(
-                            expanded = showIntervalMenu,
-                            onDismissRequest = { showIntervalMenu = false }
-                        ) {
-                            SettingsRepository.UpdateCheckInterval.entries.forEach { interval ->
-                                DropdownMenuItem(
-                                    text = { Text(interval.getDisplayName(isRu)) },
-                                    onClick = {
-                                        scope.launch {
-                                            settingsRepo.setUpdateCheckInterval(interval)
-                                        }
-                                        showIntervalMenu = false
-                                    },
-                                    leadingIcon = {
-                                        if (updateCheckInterval == interval) {
-                                            Icon(
-                                                AppIcons.Check,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary
-                                            )
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
+            SettingsGroup {
+                SettingsChoiceRow(
+                    title = Strings.autoUpdateCheck,
+                    options = SettingsRepository.UpdateCheckInterval.entries,
+                    selected = updateCheckInterval,
+                    label = { it.getDisplayName(isRu) },
+                    icon = AppIcons.Update,
+                    highlightId = "autoUpdateCheck", highlight = highlight,
+                    onSelect = { interval -> scope.launch { settingsRepo.setUpdateCheckInterval(interval) } }
+                )
             }
 
             Spacer(modifier = Modifier.weight(1f))

@@ -37,8 +37,7 @@ Exchange ActiveSync (EAS, WBXML) and Exchange Web Services (EWS, SOAP).
 
 ## Credential storage
 
-Account passwords are stored on-device only; they are never sent anywhere
-except to the configured Exchange server over TLS.
+Mailbox credentials are stored on the device and used to authenticate to the configured Exchange, IMAP or POP3 server over TLS. An account can also specify an alternate Exchange endpoint.
 
 - **Primary:** `EncryptedSharedPreferences` (AES-256-SIV for keys, AES-256-GCM
   for values) with a master key in the **Android KeyStore** — hardware-backed
@@ -60,6 +59,12 @@ except to the configured Exchange server over TLS.
   guidance), salted; only the derived hash is stored. Cold start locks the app.
   The hash uses the same `EncryptedStoreProvider` as mailbox passwords.
 
+## What happens if the app-lock verifier is lost?
+
+`MainActivity` selects the recovery screen if the session is locked, the lock setting is enabled and `AppLockManager` has no usable verifier. This is **not** a reset for a forgotten password whose verifier still exists. Recovery asks for the active mailbox password (the first mailbox if none is active). `AccountRepository.verifyAccountPassword` checks the stored password locally, or, if none is stored, requires a mailbox access request to succeed at the Exchange endpoint in use. An OPTIONS response alone is not sufficient. Online password recovery is not used for accounts with a client certificate, IMAP or POP3. If verification is unavailable, the mailbox stays locked. Success disables both the app lock and biometric unlock; set the app password again in Settings. If there are no accounts, recovery turns the lock off without asking for a mailbox password.
+
+App lock restricts the UI, not the Room database or background synchronization. With the lock enabled, the widget and notifications hide mail details even when the verifier is missing. Android 13+ disables Recents snapshots; Android 8–12 uses `FLAG_SECURE` while the lock feature is enabled.
+
 ## Transport security
 
 - **No cleartext.** `network_security_config.xml` sets
@@ -77,9 +82,8 @@ except to the configured Exchange server over TLS.
   `MODERN_TLS` attempt) so that Exchange 2007 SP1 remains reachable; this
   applies to every Exchange server, the negotiated version is the highest both
   sides support. The update channel uses `MODERN_TLS` (TLS 1.2+).
-- **Certificate pinning** (per-account pinned certificate hash) and **client
-  certificates / mTLS** (`clientCertificatePath`) are supported for self-signed
-  or certificate-authenticated deployments.
+- **Explicit key trust:** confirming a fingerprint pins the SHA-256 hash of the server public key (SPKI). This mode checks the key rather than the certificate name or expiry, so verify the first fingerprint with your administrator over an independent channel. An alternate endpoint has its own pin. Importing a server certificate with hostname verification and presenting a client certificate for mTLS are separate mechanisms.
+- **IMAP/POP3:** JavaMail uses implicit TLS or requires STARTTLS/STLS before sign-in. Turning off implicit TLS does not allow a plaintext password.
 - **`acceptAllCerts` is opt-in and off by default.** It exists for dev/test and
   self-signed servers at the user's explicit choice; it uses a separate HTTP
   client, so it never weakens validation for other accounts.
@@ -117,12 +121,8 @@ except to the configured Exchange server over TLS.
 
 ## Untrusted input
 
-- `XmlPullParser` instances are created with DOCTYPE processing disabled:
-  the shared hardened factory `EasXmlParser.createParser`, and
-  `CalendarCategoryService.parseCategoryListXml` (category list, same
-  features set locally); the remaining EWS/SOAP handling reads values with
-  regular expressions, which never expand entities. Neither path can resolve
-  external entities (no XXE).
+- The HTML mail viewer sanitizes markup and uses CSP to forbid form submission and base URL changes. Only a user tap in the main frame can open a browser (`http`/`https`), the dialer (`tel`) or the composer (`mailto`). Automatic and subframe navigation are ignored.
+- `EasXmlParser.createParser` and `CalendarCategoryService.parseCategoryListXml` disable DOCTYPE processing. Not all EWS/SOAP paths use these parsers; see the [XML migration status](XMLPULLPARSER_MIGRATION_PLAN.md).
 - Sync paths that may delete local data (tasks, notes, contacts, calendar)
   delete only on a complete server snapshot. A truncated, failed or partial
   response is treated as incomplete, so a dropped connection cannot wipe local

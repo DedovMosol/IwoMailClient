@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens.contacts
 
+import com.dedovmosol.iwomail.ui.utils.tryRequestFocus
 import android.content.res.Configuration
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -52,24 +53,25 @@ internal fun ContactEditDialog(
     val jobTitleFocus = remember { FocusRequester() }
     val notesFocus = remember { FocusRequester() }
 
-    // Восстановление фокуса после поворота
-    LaunchedEffect(focusedFieldIndex) {
-        if (focusedFieldIndex >= 0) {
-            delay(100)
-            when (focusedFieldIndex) {
-                0 -> displayNameFocus.requestFocus()
-                1 -> emailFocus.requestFocus()
-                2 -> firstNameFocus.requestFocus()
-                3 -> lastNameFocus.requestFocus()
-                4 -> phoneFocus.requestFocus()
-                5 -> mobilePhoneFocus.requestFocus()
-                6 -> workPhoneFocus.requestFocus()
-                7 -> companyFocus.requestFocus()
-                8 -> departmentFocus.requestFocus()
-                9 -> jobTitleFocus.requestFocus()
-                10 -> notesFocus.requestFocus()
-            }
-        }
+    // Восстановление фокуса после поворота — один раз; поле, которого сейчас нет на экране, пропускается
+    LaunchedEffect(Unit) {
+        val index = focusedFieldIndex
+        if (index < 0) return@LaunchedEffect
+        delay(100)
+        when (index) {
+            0 -> displayNameFocus
+            1 -> emailFocus
+            2 -> firstNameFocus
+            3 -> lastNameFocus
+            4 -> phoneFocus
+            5 -> mobilePhoneFocus
+            6 -> workPhoneFocus
+            7 -> companyFocus
+            8 -> departmentFocus
+            9 -> jobTitleFocus
+            10 -> notesFocus
+            else -> null
+        }?.tryRequestFocus()
     }
 
     val currentConfig = LocalConfiguration.current

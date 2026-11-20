@@ -8,7 +8,7 @@ package com.dedovmosol.iwomail.util
  */
 
 /** Токен ссылки `cid:` до кавычки/пробела/`>`/`)` (последнее — `url(cid:…)` в CSS); схема — без учёта регистра. */
-private val CID_TOKEN_REGEX = Regex("cid:([^\"'\\s>)<]+)", RegexOption.IGNORE_CASE)
+private val CID_TOKEN_REGEX = Regex("cid:([^\"'\\s>,)<]+)", RegexOption.IGNORE_CASE)
 
 /** Content-ID без угловых скобок и пробелов по краям. */
 fun normalizeContentId(contentId: String): String = contentId.trim().removeSurrounding("<", ">").trim()

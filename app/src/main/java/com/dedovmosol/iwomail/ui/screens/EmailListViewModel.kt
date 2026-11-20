@@ -54,6 +54,7 @@ data class EmailListUiState(
     val mailFilter: MailFilter = MailFilter.ALL,
     val dateFilter: EmailDateFilter = EmailDateFilter.ALL,
     val showFilters: Boolean = false,
+    val onlyThreads: Boolean = false,
     val selectedIds: Set<String> = emptySet(),
     val isRefreshing: Boolean = false,
     val errorMessage: String? = null,
@@ -151,35 +152,35 @@ class EmailListViewModel(
                             selectedIds = emptySet(),
                             pendingRemovalIds = emptySet(),
                             folder = null,
-                            folders = emptyList()
+                            folders = emptyList(),
+                            emails = emptyList(),
+                            peerEmails = emptyList()
                         )
                     }
 
                     val emailsFlow = when {
                         isFavorites -> if (id > 0L) mailRepo.getFlaggedEmails(id) else flowOf(emptyList())
                         isTodayAll -> if (id > 0L) mailRepo.getTodayEmailsAcrossFolders(id) else flowOf(emptyList())
-                        else -> mailRepo.getEmails(folderId)
+                        else -> mailRepo.getEmails(folderId).map { emails -> emails.filter { it.accountId == id } }
                     }
                     val foldersFlow = if (id > 0L) mailRepo.getFolders(id) else flowOf(emptyList())
 
-                    combine(emailsFlow, foldersFlow, conversationView) { emails, folders, threaded ->
+                    val threadsEnabled = combine(conversationView, uiState.map { it.onlyThreads }.distinctUntilChanged()) { setting, only ->
+                        setting || only
+                    }.distinctUntilChanged()
+                    combine(emailsFlow, foldersFlow, threadsEnabled) { emails, folders, threaded ->
                         Triple(emails, folders, threaded)
                     }.flatMapLatest { (emails, folders, threaded) ->
                         val folder = if (isFavorites || isTodayAll) null else folders.find { it.id == folderId }
                         val peerId = if (threaded) peerMailboxId(folder, folders) else null
                         if (peerId == null) flowOf(Triple(emails, folders, emptyList()))
-                        else mailRepo.getEmails(peerId).map { peer -> Triple(emails, folders, peer) }
+                        else mailRepo.getEmails(peerId).map { peer -> Triple(emails, folders, peer.filter { it.accountId == id }) }
                     }
                         .collect { (emails, folders, peer) ->
                             val folder = if (isFavorites || isTodayAll) null else folders.find { it.id == folderId }
                             _uiState.update { s ->
-                                val existingIds = emails.mapTo(HashSet(emails.size)) { it.id }
-                                val cleanedSelection =
-                                    if (s.selectedIds.isEmpty() || s.selectedIds.all { it in existingIds }) s.selectedIds
-                                    else s.selectedIds.intersect(existingIds)
-                                val stillPending =
-                                    if (s.pendingRemovalIds.isEmpty()) s.pendingRemovalIds
-                                    else s.pendingRemovalIds.filterTo(HashSet()) { it in existingIds }
+                                val cleanedSelection = com.dedovmosol.iwomail.domain.retainSameMessages(s.selectedIds, s.emails, emails)
+                                val stillPending = com.dedovmosol.iwomail.domain.retainSameMessages(s.pendingRemovalIds, s.emails, emails)
                                 s.copy(
                                     emails = emails,
                                     peerEmails = peer,
@@ -263,12 +264,16 @@ class EmailListViewModel(
         _uiState.update { it.copy(dateFilter = filter) }
     }
 
+    fun setOnlyThreads(enabled: Boolean) {
+        _uiState.update { it.copy(onlyThreads = enabled) }
+    }
+
     fun toggleFilters() {
         _uiState.update { it.copy(showFilters = !it.showFilters) }
     }
 
     fun clearFilters() {
-        _uiState.update { it.copy(mailFilter = MailFilter.ALL, dateFilter = EmailDateFilter.ALL) }
+        _uiState.update { it.copy(mailFilter = MailFilter.ALL, dateFilter = EmailDateFilter.ALL, onlyThreads = false) }
     }
 
     // === Выделение ===

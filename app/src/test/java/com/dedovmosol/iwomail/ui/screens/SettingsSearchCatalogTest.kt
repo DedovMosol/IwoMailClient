@@ -26,10 +26,10 @@ class SettingsSearchCatalogTest {
     val rule = createComposeRule()
 
     /** Каталоги для нескольких состояний — одной композицией (setContent в тесте — один раз). */
-    private fun catalogs(vararg states: SettingsSearchState): List<List<SettingsSearchEntry>> {
+    private fun catalogs(vararg states: SettingsSearchState, language: AppLanguage = AppLanguage.ENGLISH): List<List<SettingsSearchEntry>> {
         val result = arrayOfNulls<List<SettingsSearchEntry>>(states.size)
         rule.setContent {
-            CompositionLocalProvider(LocalLanguage provides AppLanguage.ENGLISH) {
+            CompositionLocalProvider(LocalLanguage provides language) {
                 states.forEachIndexed { i, s -> result[i] = rememberSettingsCatalog(s) }
             }
         }
@@ -111,6 +111,25 @@ class SettingsSearchCatalogTest {
         assertThat(hits).isNotEmpty()
         assertThat(hits.all { it.account?.accountId == 2L || it.focus == accountNotificationsFocus(2) }).isTrue()
         assertThat(hits.map { it.focus }).contains(accountNotificationsFocus(2))
+    }
+
+    @Test
+    fun `nested settings have targets and respect visible options`() {
+        val (off, on) = catalogs(SettingsSearchState(), SettingsSearchState(trustedSenderCount = 2,
+            quietHoursEnabled = true, storageDegraded = true, dailyThemesEnabled = true))
+        assertThat(off.map { it.focus }).containsAtLeast("overview", "updates", "autoUpdateCheck", "addAccount")
+        assertThat(off.map { it.focus }).containsNoneOf("quietStart", "quietEnd", "failClosed", "trustedSenders")
+        assertThat(on.map { it.focus }).containsAtLeast("quietStart", "quietEnd", "failClosed", "trustedSenders")
+        assertThat(filterSettingsEntries("Monday", on)).hasSize(2)
+    }
+
+    @Test
+    fun `russian search leads to nested rows without executing the action`() {
+        val rows = catalogs(SettingsSearchState(dailyThemesEnabled = true, accounts = listOf(exchange(7, "work@example.test"))),
+            language = AppLanguage.RUSSIAN).single()
+        assertThat(filterSettingsEntries("понедельник", rows).map { it.focus }).containsExactly("dayTheme_2", "dayScroll_2")
+        assertThat(filterSettingsEntries("автопроверка", rows).single().focus).isEqualTo("autoUpdateCheck")
+        assertThat(filterSettingsEntries("автоматическая очистка", rows).map { it.focus }).containsAtLeast("autoCleanupTrash", "autoCleanupSpam")
     }
 
     @Test

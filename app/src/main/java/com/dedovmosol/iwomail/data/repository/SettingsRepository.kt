@@ -614,10 +614,17 @@ class SettingsRepository private constructor(
      *
      * Fail-closed: до первой эмиссии DataStore (холодный старт, кэш пуст) возвращаем
      * true — если пароль задан, гейт показывает экран блокировки сразу, без «вспышки»
-     * главного экрана на ~100 мс инициализации DataStore. Для пользователей БЕЗ пароля
-     * флаг безвреден: сессия разблокирована (evaluateInitialState), гейт закрыт.
+     * главного экрана на ~100 мс инициализации DataStore. Гейт экрана и приватность виджета берут
+     * [getAppLockEnabledOrNull]: им «не знаю» нужно отличать от «включено».
      */
     fun getAppLockEnabledSync(): Boolean = cachedAppLockEnabled.get() ?: true
+
+    /**
+     * Флаг блокировки как есть: null — настройки ещё не прочитаны. Для решений, где «не знаю» и «включено» —
+     * разное (NAV-04, [com.dedovmosol.iwomail.data.security.AppLockManager.lockRequired]): без флага защиту
+     * определяет хеш пароля.
+     */
+    fun getAppLockEnabledOrNull(): Boolean? = cachedAppLockEnabled.get()
     
     /** Разрешён ли вход по отпечатку пальца (действует только при включённой блокировке). */
     val appLockBiometricEnabled: Flow<Boolean> = dataStore.data.map { prefs ->

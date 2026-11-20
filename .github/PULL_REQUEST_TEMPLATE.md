@@ -13,7 +13,7 @@
 
 - [ ] `./gradlew testDebugUnitTest` passes locally
 - [ ] Tested on a real device / emulator
-- [ ] Verified against a real Exchange server (specify version/protocol):
+- [ ] Verified with a dedicated test account, if applicable (specify server version and protocol, not the host or account name):
 
 ## Checklist
 

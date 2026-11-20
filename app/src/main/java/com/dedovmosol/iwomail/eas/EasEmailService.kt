@@ -531,8 +531,18 @@ class EasEmailService internal constructor(
      * Получает свежие метаданные вложений конкретного письма через ItemOperations
      * Используется при forceReload чтобы обновить FileReference без полной синхронизации папки
      */
-    suspend fun fetchAttachmentMetadata(collectionId: String, serverId: String): EasResult<List<EasAttachment>> {
-        val xml = """<?xml version="1.0" encoding="UTF-8"?>
+    suspend fun fetchAttachmentMetadata(collectionId: String, serverId: String): EasResult<List<EasAttachment>> =
+        when (val result = deps.executeEasCommand("ItemOperations", attachmentMetadataRequest(collectionId, serverId), ::parseAttachmentMetadata)) {
+            is EasResult.Success -> when (val parsed = result.data) {
+                is EasResult.Success -> EasResult.Success(parsed.data.attachments)
+                is EasResult.Error -> parsed
+            }
+            is EasResult.Error -> result
+        }
+
+    internal data class AttachmentMetadata(val subject: String?, val dateReceived: String?, val attachments: List<EasAttachment>)
+
+    internal fun attachmentMetadataRequest(collectionId: String, serverId: String): String = """<?xml version="1.0" encoding="UTF-8"?>
 <ItemOperations xmlns="ItemOperations">
     <Fetch>
         <Store>Mailbox</Store>
@@ -547,22 +557,14 @@ class EasEmailService internal constructor(
     </Fetch>
 </ItemOperations>""".trimIndent()
 
-        val result = deps.executeEasCommand("ItemOperations", xml) { responseXml ->
-            val fetchStatus = EasPatterns.ITEM_OPS_FETCH_STATUS
-                .find(responseXml)?.groupValues?.get(1)?.toIntOrNull()
-            fetchStatus to parseAttachmentsFromXml(responseXml)
-        }
-        return when (result) {
-            is EasResult.Success -> {
-                val (status, atts) = result.data
-                when {
-                    status == 1 -> EasResult.Success(atts)
-                    status == null -> EasResult.Success(atts)
-                    else -> EasResult.Error("ItemOperations Fetch status=$status")
-                }
-            }
-            is EasResult.Error -> result
-        }
+    internal fun parseAttachmentMetadata(xml: String): EasResult<AttachmentMetadata> {
+        val status = EasPatterns.ITEM_OPS_FETCH_STATUS.find(xml)?.groupValues?.get(1)?.toIntOrNull()
+        if (status != null && status != 1) return EasResult.Error("ItemOperations Fetch status=$status")
+        return EasResult.Success(AttachmentMetadata(
+            subject = deps.extractValue(xml, "Subject")?.let(XmlUtils::unescape),
+            dateReceived = deps.extractValue(xml, "DateReceived"),
+            attachments = parseAttachmentsFromXml(xml)
+        ))
     }
 
     /** Адрес, на который просят отчёт о прочтении ([readReceiptRequestAddress]); null — не просят. */

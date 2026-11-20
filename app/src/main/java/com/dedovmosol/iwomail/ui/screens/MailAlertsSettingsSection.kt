@@ -1,9 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -62,10 +59,12 @@ internal fun MailAlertsSettingsSection(
             onChange = { enabled -> scope.launch { settingsRepo.setQuietHours(quiet.copy(enabled = enabled)) } }
         )
         if (quiet.enabled) {
-            Row(modifier = Modifier.fillMaxWidth().padding(start = 56.dp)) {
-                TextButton(onClick = { picking = "start" }) { Text(Strings.quietFrom(time(quiet.startMinutes))) }
-                TextButton(onClick = { picking = "end" }) { Text(Strings.quietUntil(time(quiet.endMinutes))) }
-            }
+            SettingsNavRow(title = Strings.quietStartLabel, icon = AppIcons.Notifications,
+                value = time(quiet.startMinutes), highlightId = "quietStart", highlight = highlight,
+                onClick = { picking = "start" })
+            SettingsNavRow(title = Strings.quietEndLabel, icon = AppIcons.Notifications,
+                value = time(quiet.endMinutes), highlightId = "quietEnd", highlight = highlight,
+                onClick = { picking = "end" })
         }
 
         val vip = prefs?.vipSenders.orEmpty().sorted()

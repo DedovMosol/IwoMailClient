@@ -27,11 +27,11 @@
 | Network and background | OkHttp `4.12.0`, Conscrypt `2.5.2`, WorkManager `2.9.0`, DataStore `1.1.1`, Glance `1.1.1`, JavaMail (`android-mail`) `1.6.7` |
 | Security | `security-crypto` `1.1.0-alpha06` (EncryptedSharedPreferences), `biometric` `1.1.0` |
 | APK architectures | `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64` + universal APK |
-| Tests | Unit, Robolectric and Compose UI tests in `app/src/test` (about 1,930 in a `testDebugUnitTest` run), live tests on Exchange 2007 via environment variables; there is no `androidTest` directory |
+| Tests | [Local JVM tests](../app/src/test/README.md) use JUnit, Robolectric, Compose UI and a fake Exchange. Tests against a real Exchange server are opt-in via environment variables. |
 | Published release | GitHub Releases → `1.6.1` (`versionCode` 24); `1.7.0` is in preparation, no beta builds were published in between |
 | Runtime model | Offline-first: Room + Flow → UI, background sync updates the DB |
 
-The main production scenario is on-premise Exchange, especially Exchange 2007 SP1/SP2. IMAP/POP3 are implemented as beta clients for reading (folder list and the latest messages; IMAP can also create, rename and delete folders) and do not reach parity with Exchange features.
+The main production scenario is on-premise Exchange, especially Exchange 2007 SP1/SP2. IMAP retrieves folders and mail; POP3 retrieves Inbox mail. `ImapClient` contains folder mutation methods, but `FolderSyncService` allows changes from the UI only for Exchange accounts. There is no SMTP transport.
 
 ---
 
@@ -154,7 +154,7 @@ Principles:
 - `EmailDetailScreen` ↔ `EmailDetailViewModel`/`EmailDetailUiState` + `EmailDetailEvent` (the screen **core** is in the ViewModel) — message, attachments and folders in one `collectLatest(activeAccount)` + `combine` stream, from which the current-folder attributes (trash, sent, drafts) are derived. Inline images are loaded reactively and kept in the state, so rotation does not trigger a reload. Operations (refresh, move to trash, move, restore, mark unread, flag, answering and postponing the read-receipt request, unsubscribe, saving `.eml`, permanent delete) run in `viewModelScope`; business logic is delegated to `EmailDetailActions` (`ui/screens/emaildetail/`). The Composable keeps the WebView and body rendering, attachment launchers and file I/O, iCal parsing and meeting invitations. Test: `EmailDetailViewModelTest`.
 - `ScheduledMailScreen` ↔ `ScheduledMailViewModel` + `ScheduledMailEvent` — the list of scheduled messages (a `StateFlow` built from `ScheduledSend.pending` and refreshed on `ScheduledSend.changes`), "send now", reschedule and cancel in `viewModelScope`. Receives `Application` and a `CoroutineDispatcher`. Test: `ScheduledMailViewModelTest` (Robolectric).
 
-**Not wired:** `ComposeViewModel` + `ComposeUiState`/`ComposeEvent` (`ui/screens/compose/`) exists and is covered by `ComposeViewModelTest`, but `ComposeScreen` does not use it (there are no references to it in `ComposeScreen.kt` or `AppNavigation.kt`): the compose screen keeps its state in the Composable.
+**The composer follows a different pattern.** `ComposeScreen` owns the fields and editor state. `LargeStateSaver` restores large bodies; `RetainScopeViewModel` keeps send and save operations running across rotation. `DraftSaver` handles draft persistence. `ComposeScreenOpenTest` opens the actual screen through `MainActivity`.
 
 Dependencies: `lifecycle-viewmodel-ktx`, `lifecycle-viewmodel-compose`, `lifecycle-runtime-compose` (`2.7.0`).
 
@@ -185,7 +185,7 @@ com.dedovmosol.iwomail/
 │   │   ├── ScheduleSendDialog.kt / ScheduleSendTimes.kt / ScheduledMailScreen.kt / ScheduledEmailWorker.kt
 │   │   ├── *ViewModel.kt — EmailList, EmailDetail, Notes, Tasks, Search, SyncCleanup, UserFolders, ScheduledMail
 │   │   ├── calendar/ — AgendaView, MonthView, event dialogs, attachments, category colors UI, selection top bar
-│   │   ├── compose/ — ComposeViewModel/UiState/Event (not wired to ComposeScreen), models, text/HTML helpers, embedded attachments
+│   │   ├── compose/ — editor models, text/HTML helpers and inline attachments
 │   │   ├── contacts/ — contact dialogs, list views and utilities
 │   │   ├── emaildetail/ — attachments section, inline attachments, EmailDetailActions
 │   │   └── emaillist/ — SwipeableEmailRow, SwipeRules, ThreadRows, row names, image previews
@@ -211,7 +211,6 @@ com.dedovmosol.iwomail/
 ├── imap/ImapClient.kt
 ├── pop3/Pop3Client.kt
 ├── shared/ — shared JavaMail interfaces, parsers and converters (MailClient, MailMessageParser, MessageToEntityConverter)
-├── smtp/ — empty directory without sources (there is no SMTP transport in the code)
 ├── network/ — HttpClientProvider, NetworkMonitor, ConnectionFailure, Rfc6125HostnameVerifier
 ├── sync/ — PushService, workers, receivers, notifications, reminders:
 │           AppForegroundTracker, BackgroundWork, InitialSyncController, PingFailurePolicy, PushRestartPolicy,
@@ -241,7 +240,7 @@ com.dedovmosol.iwomail/
 - **CalendarEventEntity:** calendar events, meetings, recurrence fields, exceptions, attachments JSON, online links, meeting request IDs.
 - **TaskEntity:** task fields, deadlines, priority, reminders, owner/assignee, local trash flag.
 - **CategoryColorEntity** (`category_colors`, primary key `accountId` + `nameKey`): per-account Outlook category colors (`serverColor` from the Master Category List on Exchange 2010+, `userColor` set in the app).
-- **PendingPimChangeEntity** (`pending_pim_changes`, DB version 51): offline task and note changes — `pendingUpdate` and/or `pendingTrash`, `kind` (TASK/NOTE), `serverSubject`, `version`. The only foreign key is to `accounts` (cascade), for the same reason as the email queue.
+- **PendingPimChangeEntity** (`pending_pim_changes`, introduced in DB version 51): offline task and note changes — `pendingCreate` (added in 52), `pendingUpdate` and `pendingTrash`, `kind` (TASK/NOTE), `serverSubject`, `version`. The only foreign key is to `accounts` (cascade), for the same reason as the email queue.
 - **PendingEmailChangeEntity** (`pending_email_changes`, DB version 50): email changes made without a connection that the server has not accepted yet — `flag` and/or `read`. The value itself is not stored: the current one from `emails` is sent, so several offline edits go out as one result. There is deliberately no foreign key to `emails`: some paths rewrite messages with REPLACE (DELETE + INSERT), and a cascade would drop the pending edit. The foreign key to `accounts` uses CASCADE. `INSERT OR REPLACE … COALESCE` is used instead of UPSERT because SQLite on Android 8 is version 3.18 and has no UPSERT.
 
 The current DB version is **54**. The registered migrations cover `23→54` (`MailDatabase.ALL_MIGRATIONS`, 31 migrations, one per version). A missing upgrade migration recreates the DB only in **debug** builds (`fallbackToDestructiveMigration()` under `BuildConfig.DEBUG`); in release it fails explicitly when the DB is opened. A downgrade (installing an older APK) always recreates the DB (`fallbackToDestructiveMigrationOnDowngrade()`), and server data is resynced.
@@ -413,7 +412,7 @@ An edit of a task (done, subject, dates) or note and a move to trash made withou
 - **Trash**: restoring before the send is device-only; the server is not touched. Permanent delete, empty trash and reset ("Reset and resync") send the queue first; without a connection they fail with `PENDING_CHANGES_NOT_SENT` and no data is lost.
 - Task assignment (an email to the assignee) is not deferred offline; it is an error.
 - UI: the `SavedOffline` event closes the dialog and shows "Saved on the device. It will be sent to the server when the connection is back".
-- Creating tasks and notes offline is not supported yet.
+- Creating a task or note offline saves a local item marked `pendingCreate`. The queue handler creates it on the server when connectivity returns. This differs from assigning a task to someone, which requires a connection.
 
 ### Notifications
 
@@ -462,7 +461,7 @@ An edit of a task (done, subject, dates) or note and a move to trash made withou
 | `ScheduledEmailWorker` | Sends a scheduled message (`ui/screens`, class name kept for already enqueued work); also the WorkManager backup for the exact alarm; temporary errors are retried (up to 8 attempts), otherwise the message goes to Drafts with a notification |
 | `MarkEmailReadWorker` | Unique work that marks a message as read (up to 3 retries) |
 | `MarkTaskCompleteWorker` | Completes tasks from notifications; a server error is retried (up to 10 attempts with exponential backoff) instead of being swallowed |
-| `PendingMailChangesWorker` | Sends stars and read state changed without a connection (`pending_email_changes`) when the network is back |
+| `PendingMailChangesWorker` | On reconnection, sends mail edits (flag, read state, move) from `pending_email_changes` and task/note changes from `pending_pim_changes`. `OutboxWorker` handles outgoing messages themselves. |
 | `RescheduleRemindersWorker` | Rebuilds calendar, task and flag reminder alarms after reboot or update |
 | `MailWidgetReceiver` | Glance widget receiver (`widget/MailWidget.kt`) |
 
@@ -530,6 +529,8 @@ Passwords are persisted by `data/security/PasswordStorage` through `EncryptedSha
 The app-lock password (`AppLockManager`) is stored only as a PBKDF2-HMAC-SHA256 hash (600 000 iterations, 16-byte random salt, format `v1:iterations:b64salt:b64hash`, constant-time comparison) in the same `EncryptedStoreProvider`. `setPassword` honours fail-closed. Fingerprint unlock uses `BiometricPrompt` (`BIOMETRIC_WEAK`), which is why `MainActivity` extends `FragmentActivity`.
 
 Brute-force protection (`AppLockManager.attempt`): 5 attempts, then pauses of 30 s, 1 min, 5 min, 15 min. The attempt is written with `commit()` before PBKDF2, and the pause is counted on `elapsedRealtime` with the boot number (`Settings.Global.BOOT_COUNT`): after a reboot it starts over. A successful password or fingerprint unlock, setting and removing the password reset the counter. The change and disable password dialogs share the counter.
+
+If the lock is enabled but its verifier is missing, `AppLockManager.gate` selects `LockRecoveryScreen`. The app checks the password for the active (or first) mailbox locally; only Exchange has a network check if no password is stored. See the [security policy](SECURITY_EN.md).
 
 Privacy while the lock is on:
 
@@ -666,7 +667,7 @@ Rules:
 
 The pattern is applied in `EmailListViewModel`, `EmailDetailViewModel`, `SearchViewModel`, `NotesViewModel`, `TasksViewModel` and `UserFoldersViewModel`. `SyncCleanupViewModel` has no error channel (its `set*` operations are fire-and-forget), so instead of duplicating `try/catch` it uses a single private `launchSafe { }` helper with the same `catch(CancellationException){throw}` / `catch(Exception){ Log.e }` branches. `ScheduledMailViewModel` launches its operations in `viewModelScope` without this wrapper. Exception handling in the ViewModels is covered by the `*ViewModelTest` unit tests.
 
-The long-lived reactive **observe** launches (subscriptions to Room flows by account, folders and messages) in `EmailListViewModel`, `EmailDetailViewModel`, `NotesViewModel`, `TasksViewModel`, `UserFoldersViewModel` and `ComposeViewModel` additionally pass `loggingExceptionHandler(tag)` to `viewModelScope.launch(handler) { … }`, so a Room-flow error in the collector is logged instead of crashing the process.
+The long-lived reactive **observe** launches (subscriptions to Room flows by account, folders and messages) in `EmailListViewModel`, `EmailDetailViewModel`, `NotesViewModel`, `TasksViewModel` and `UserFoldersViewModel` additionally pass `loggingExceptionHandler(tag)` to `viewModelScope.launch(handler) { … }`, so a Room-flow error in the collector is logged instead of crashing the process.
 
 **Screens without MVVM** that launch work from `rememberCoroutineScope()` use `rememberSafeScope()` (`ui/components/ComposableUtils.kt`): a crash-safe scope built on `SupervisorJob` (a failing operation does not cancel siblings) + a `CoroutineExceptionHandler` (an uncaught exception is logged instead of propagating to the process). Its lifecycle matches `rememberCoroutineScope` (the supervisor is a child of the base scope's `Job`). The `rememberSyncScope()` helper has the same handler.
 

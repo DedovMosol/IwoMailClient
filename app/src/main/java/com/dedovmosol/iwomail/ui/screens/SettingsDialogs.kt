@@ -273,7 +273,7 @@ fun SignaturesManagementDialog(
                             IconButton(onClick = { signatureToDeleteId = signature.id }) {
                                 Icon(
                                     AppIcons.Delete,
-                                    null,
+                                    Strings.deleteSignatureNamed(signature.name),
                                     tint = MaterialTheme.colorScheme.error,
                                     modifier = Modifier.size(20.dp)
                                 )

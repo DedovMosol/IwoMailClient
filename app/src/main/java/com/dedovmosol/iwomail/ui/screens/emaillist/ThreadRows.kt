@@ -17,8 +17,8 @@ sealed interface MailRow {
     }
 
     /** Цепочка: самое новое письмо, число писем, сводка непрочитанных, флагов и вложений. */
-    data class Header(val thread: EmailThread, val expanded: Boolean) : MailRow {
-        override val key: String get() = headerKey(thread.key)
+    data class Header(val thread: EmailThread, val expanded: Boolean, val selectableIds: List<String>) : MailRow {
+        override val key: String = headerKey(thread.key)
 
         /** Как самое новое письмо, но прочитано, только если прочитаны все, и со скрепкой, если вложения есть в любом. */
         override val email: EmailEntity =
@@ -42,14 +42,14 @@ sealed interface MailRow {
         /** Цепочки: одно письмо — обычной строкой; раскрытая — шапка (свернуть) и все письма.
          * EAS 14+: порядок ConversationIndex (корень, затем ответы). 2007: новые сверху по дате.
          * Latest нельзя выкинуть из детей: шапка не открывает письмо. */
-        fun threaded(threads: List<EmailThread>, expanded: Set<String>): List<MailRow> = buildList {
+        fun threaded(threads: List<EmailThread>, expanded: Set<String>, allowed: Set<String>? = null): List<MailRow> = buildList {
             for (thread in threads) {
                 if (!thread.isThread) {
                     add(Single(thread.emails.single()))
                     continue
                 }
                 val open = thread.key in expanded
-                add(Header(thread, open))
+                add(Header(thread, open, if (allowed == null) thread.ids else thread.ids.filter { it in allowed }))
                 if (open) thread.emails.sortedWith(::compareChildren).forEach { add(Child(it)) }
             }
         }
@@ -62,9 +62,10 @@ sealed interface MailRow {
             return a.id.compareTo(b.id)
         }
 
-        /** Что выделяет строка (выбор протягиванием): строка цепочки — все её письма. */
-        fun selectionOf(rows: List<MailRow>): Map<String, List<String>> =
-            rows.filterIsInstance<Header>().associate { it.key to it.thread.ids }
+        /** Для drag selection: шапка выбирает только письма, допустимые в текущем списке. */
+        fun selectionOf(rows: List<MailRow>): Map<String, List<String>> = buildMap {
+            for (row in rows) if (row is Header) put(row.key, row.selectableIds)
+        }
 
         /** Нажатие на цепочку в режиме выбора: выбраны все её письма — снять все, иначе выбрать все. */
         fun toggleThread(selected: Set<String>, ids: List<String>): Set<String> =

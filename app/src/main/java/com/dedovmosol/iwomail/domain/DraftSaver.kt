@@ -19,7 +19,7 @@ import com.dedovmosol.iwomail.util.normalizeContentId
 import com.dedovmosol.iwomail.util.referencedContentIds
 
 /**
- * Сохранение черновика Exchange — одно место для экрана письма и ComposeViewModel (DRY, SRP).
+ * Сохранение черновика Exchange в одном месте (SRP): экран письма передаёт поля, способ сохранения выбирается здесь.
  *
  * - Изменены только текст, тема, получатели или важность — EWS UpdateItem: вложения на сервере не
  *   трогаются (в том числе те, что редактор не смог загрузить), черновик сохраняет свой id. Картинки тела,

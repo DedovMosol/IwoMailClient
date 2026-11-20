@@ -107,9 +107,11 @@ class AppLockManagerTest {
     // ─── Полный цикл с хранилищем ───
 
     @Test
-    fun `password not set initially`() {
+    fun `password not set initially, the session starts locked but nothing is shown without the lock`() {
         assertThat(AppLockManager.isPasswordSet()).isFalse()
-        assertThat(AppLockManager.isLocked()).isFalse() // evaluateInitialState: нет пароля → разблокировано
+        // NAV-04: старт всегда fail-closed; без блокировки гейт открыт
+        assertThat(AppLockManager.isLocked()).isTrue()
+        assertThat(AppLockManager.gate(AppLockManager.isLocked(), lockFlag = false)).isEqualTo(AppLockManager.Gate.OPEN)
     }
 
     @Test
@@ -192,20 +194,57 @@ class AppLockManagerTest {
     // ─── Чистые гейты (таблицы истинности) ───
 
     @Test
-    fun `shouldShowLockScreen truth table`() {
-        // Без пароля экран никогда не показывается (защита от soft-lock) —
-        // независимо от остальных членов.
-        assertThat(AppLockManager.shouldShowLockScreen(true, true)).isFalse()
-        assertThat(AppLockManager.shouldShowLockScreen(true, false)).isFalse()
-        assertThat(AppLockManager.shouldShowLockScreen(false, true)).isFalse()
-        assertThat(AppLockManager.shouldShowLockScreen(false, false)).isFalse()
+    fun `gate truth table`() {
+        val open = AppLockManager.Gate.OPEN
+        // Без пароля: флаг включён — сброс по паролю учётной записи, а не вход без пароля (NAV-04, было fail-open)
+        assertThat(AppLockManager.gate(true, lockFlag = true, passwordSet = false)).isEqualTo(AppLockManager.Gate.RECOVERY)
+        assertThat(AppLockManager.gate(true, lockFlag = false, passwordSet = false)).isEqualTo(open)
+        // A cold start after key loss must not briefly reveal the mailbox.
+        assertThat(AppLockManager.gate(true, lockFlag = null, passwordSet = false)).isEqualTo(AppLockManager.Gate.WAITING)
+        assertThat(AppLockManager.gate(false, lockFlag = true, passwordSet = false)).isEqualTo(open)
 
-        // С паролем: экран только когда сессия заблокирована И флаг включён.
+        // С паролем: экран, пока сессия заблокирована и флаг не выключен (до чтения настроек — тоже, fail-closed)
+        assertThat(AppLockManager.gate(true, lockFlag = true, passwordSet = true)).isEqualTo(AppLockManager.Gate.LOCKED)
+        assertThat(AppLockManager.gate(true, lockFlag = null, passwordSet = true)).isEqualTo(AppLockManager.Gate.LOCKED)
+        assertThat(AppLockManager.gate(true, lockFlag = false, passwordSet = true)).isEqualTo(open) // флаг выключен
+        assertThat(AppLockManager.gate(false, lockFlag = true, passwordSet = true)).isEqualTo(open) // сессия открыта
+
+        // По умолчанию — хеш из хранилища
         AppLockManager.setPassword("gate-pass")
-        assertThat(AppLockManager.shouldShowLockScreen(true, true)).isTrue()
-        assertThat(AppLockManager.shouldShowLockScreen(true, false)).isFalse() // флаг выключен
-        assertThat(AppLockManager.shouldShowLockScreen(false, true)).isFalse() // сессия открыта
-        assertThat(AppLockManager.shouldShowLockScreen(false, false)).isFalse()
+        AppLockManager.lock()
+        assertThat(AppLockManager.gate(true, lockFlag = true)).isEqualTo(AppLockManager.Gate.LOCKED)
+    }
+
+    @Test
+    fun `a lost hash with the lock on is recovery, not an open app (NAV-04)`() {
+        AppLockManager.setPassword("lost-pass")
+        // Хранилище ключей сброшено: хеш пропал, флаг в настройках остался
+        prefs.edit().clear().commit()
+        AppLockManager.resetForTesting()
+        AppLockManager.setStorageForTesting(prefs)
+
+        assertThat(AppLockManager.isLocked()).isTrue()
+        assertThat(AppLockManager.gate(AppLockManager.isLocked(), lockFlag = true)).isEqualTo(AppLockManager.Gate.RECOVERY)
+        assertThat(AppLockManager.lockRequired(lockFlag = true)).isTrue()
+    }
+
+    @Test
+    fun `recovery attempts are counted and paused like the lock password`() = kotlinx.coroutines.runBlocking {
+        AppLockManager.elapsedRealtimeMs = { clock }
+        AppLockManager.bootCount = { boot }
+        repeat(4) { assertThat(AppLockManager.recoveryAttempt { false }).isInstanceOf(AppLockManager.Attempt.Wrong::class.java) }
+        assertThat(AppLockManager.recoveryAttempt { false }).isEqualTo(AppLockManager.Attempt.Wrong(0, 30_000L))
+        // Во время паузы проверка не выполняется
+        var checked = false
+        assertThat(AppLockManager.recoveryAttempt { checked = true; true }).isEqualTo(AppLockManager.Attempt.LockedOut(30_000L))
+        assertThat(checked).isFalse()
+        // Проверить нечем (нет связи) — не неудача
+        clock += 30_000L
+        assertThat(AppLockManager.recoveryAttempt { null }).isNull()
+        assertThat(AppLockManager.failedAttempts()).isEqualTo(5)
+        // Верный пароль учётной записи обнуляет счётчик
+        assertThat(AppLockManager.recoveryAttempt { true }).isEqualTo(AppLockManager.Attempt.Success)
+        assertThat(AppLockManager.failedAttempts()).isEqualTo(0)
     }
 
     @Test

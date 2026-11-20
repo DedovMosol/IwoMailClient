@@ -62,6 +62,8 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository, highlight: St
         if (trusted.isNotEmpty()) {
             SettingsNavRow(
                 title = Strings.trustedImageSenders(trusted.size),
+                icon = AppIcons.Person,
+                highlightId = "trustedSenders", highlight = highlight,
                 trailingIcon = null,
                 trailing = {
                     TextButton(onClick = { scope.launch { settingsRepo.clearTrustedImageSenders() } }) {

@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import com.dedovmosol.iwomail.ui.theme.AppColorTheme
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -17,6 +18,8 @@ import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.action.actionSendBroadcast
 import androidx.glance.appwidget.provideContent
 import androidx.glance.layout.*
+import androidx.glance.semantics.contentDescription
+import androidx.glance.semantics.semantics
 import androidx.glance.text.*
 import androidx.glance.unit.ColorProvider
 import com.dedovmosol.iwomail.MainActivity
@@ -214,6 +217,13 @@ class MailWidget : GlanceAppWidget() {
         val dayMonth = java.text.SimpleDateFormat("d MMMM", locale).format(cal.time)
         return "$dayOfWeek, $dayMonth"
     }
+}
+
+internal fun privateInboxIntent(context: Context, accountId: Long) = Intent(context, MainActivity::class.java).apply {
+    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+    data = android.net.Uri.parse("iwomail://private-inbox/$accountId")
+    putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, accountId)
+    putExtra(MainActivity.EXTRA_OPEN_INBOX_UNREAD, true)
 }
 
 data class AccountUnread(val id: Long, val name: String, val color: Int, val unreadCount: Int)
@@ -624,11 +634,26 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     }
                 }
                 Spacer(modifier = GlanceModifier.height(6.dp))
+            } else if (isLarge && data.contentHidden && data.totalUnread > 0) {
+                // Only counts leave the app. Each row goes to its own mailbox, never to a guessed message.
+                data.accounts.filter { it.unreadCount > 0 }.sortedByDescending { it.unreadCount }.take(3).forEach { account ->
+                    Box(
+                        modifier = GlanceModifier.fillMaxWidth().cornerRadius(12.dp)
+                            .background(ColorProvider(Color(0x1AFFFFFF)))
+                            .clickable(actionStartActivity(privateInboxIntent(context, account.id)))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = context.getString(R.string.widget_account_unread, account.name, account.unreadCount),
+                            style = TextStyle(color = ColorProvider(textLight), fontSize = secondaryFontSize),
+                            maxLines = 1
+                        )
+                    }
+                }
+                Spacer(modifier = GlanceModifier.height(6.dp))
             } else if (isLarge) {
                 Text(
-                    text = context.getString(
-                        if (data.contentHidden) R.string.widget_content_hidden else R.string.widget_no_new_mail
-                    ),
+                    text = context.getString(R.string.widget_no_new_mail),
                     style = TextStyle(color = ColorProvider(textLightAlpha), fontSize = secondaryFontSize)
                 )
                 Spacer(modifier = GlanceModifier.height(6.dp))
@@ -668,53 +693,97 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     Spacer(modifier = GlanceModifier.defaultWeight())
                 }
 
-                // Кнопка "Написать письмо" (иконка)
+                // Кнопки-иконки: круг прежнего размера, область нажатия — до 48 dp, сколько оставляют аватары
+                // (SET-12); у кнопки — название для TalkBack
                 val iconBtnSize = (32 * scale).dp
-                Box(
-                    modifier = GlanceModifier
-                        .size(iconBtnSize)
-                        .background(ColorProvider(btnColor))
-                        .cornerRadius(iconBtnSize / 2)
-                        .clickable(actionStartActivity(
-                            Intent(context, MainActivity::class.java).apply {
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                                setData(android.net.Uri.parse("iwomail://widget/compose"))
-                                putExtra("compose", true)
-                            }
-                        )),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Image(
-                        provider = ImageProvider(R.drawable.ic_edit),
-                        contentDescription = null,
-                        modifier = GlanceModifier.size(iconSize),
-                        colorFilter = ColorFilter.tint(ColorProvider(Color.White))
+                val shownAvatars = data.accounts.size.coerceAtMost(maxAvatars)
+                val touchSize = widgetButtonTouchSize(
+                    rowWidth = size.width - 32.dp,
+                    avatarsWidth = (40 * scale).dp * shownAvatars + 4.dp * shownAvatars,
+                    visualSize = iconBtnSize
+                )
+                WidgetIconButton(
+                    touchSize = touchSize,
+                    circleSize = iconBtnSize,
+                    iconSize = iconSize,
+                    color = btnColor,
+                    icon = R.drawable.ic_edit,
+                    description = context.getString(R.string.widget_compose),
+                    onClick = actionStartActivity(
+                        Intent(context, MainActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                            setData(android.net.Uri.parse("iwomail://widget/compose"))
+                            putExtra("compose", true)
+                        }
                     )
-                }
-                
-                Spacer(modifier = GlanceModifier.width(8.dp))
-                
-                // Кнопка синхронизации (иконка)
-                Box(
-                    modifier = GlanceModifier
-                        .size(iconBtnSize)
-                        .background(ColorProvider(btnColor))
-                        .cornerRadius(iconBtnSize / 2)
-                        .clickable(actionSendBroadcast(
-                            Intent(SyncAlarmReceiver.ACTION_SYNC_NOW).apply {
-                                setClass(context, SyncAlarmReceiver::class.java)
-                            }
-                        )),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Image(
-                        provider = ImageProvider(R.drawable.ic_sync),
-                        contentDescription = null,
-                        modifier = GlanceModifier.size(iconSize),
-                        colorFilter = ColorFilter.tint(ColorProvider(Color.White))
+                )
+
+                Spacer(modifier = GlanceModifier.width(WIDGET_BUTTON_GAP))
+
+                WidgetIconButton(
+                    touchSize = touchSize,
+                    circleSize = iconBtnSize,
+                    iconSize = iconSize,
+                    color = btnColor,
+                    icon = R.drawable.ic_sync,
+                    description = context.getString(R.string.widget_sync_now),
+                    onClick = actionSendBroadcast(
+                        Intent(SyncAlarmReceiver.ACTION_SYNC_NOW).apply {
+                            setClass(context, SyncAlarmReceiver::class.java)
+                        }
                     )
-                }
+                )
             }
+        }
+    }
+}
+
+private val WIDGET_BUTTON_GAP = 8.dp
+private val WIDGET_MIN_TOUCH = 48.dp
+
+/**
+ * Область нажатия кнопки виджета (SET-12): 48 dp (минимум Android для касания), если в строке есть место; иначе —
+ * поровну всё, что остаётся после аватаров и промежутка, но не меньше видимого круга [visualSize]. Узкий виджет
+ * (180 dp) с двумя аватарами даёт около 34 dp вместо прежних 26 dp.
+ */
+internal fun widgetButtonTouchSize(rowWidth: Dp, avatarsWidth: Dp, visualSize: Dp): Dp {
+    val perButton = (rowWidth - avatarsWidth - WIDGET_BUTTON_GAP) / 2
+    return perButton.coerceIn(visualSize, maxOf(visualSize, WIDGET_MIN_TOUCH))
+}
+
+/** Круглая кнопка-иконка: прозрачная область нажатия [touchSize] вокруг круга [circleSize], с названием для TalkBack. */
+@Composable
+private fun WidgetIconButton(
+    touchSize: Dp,
+    circleSize: Dp,
+    iconSize: Dp,
+    color: Color,
+    @androidx.annotation.DrawableRes icon: Int,
+    description: String,
+    onClick: androidx.glance.action.Action
+) {
+    Box(
+        modifier = GlanceModifier
+            .size(touchSize)
+            .cornerRadius(touchSize / 2)
+            .clickable(onClick)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = GlanceModifier
+                .size(circleSize)
+                .background(ColorProvider(color))
+                .cornerRadius(circleSize / 2),
+            contentAlignment = Alignment.Center
+        ) {
+            // Название — у области нажатия: TalkBack читает его один раз
+            Image(
+                provider = ImageProvider(icon),
+                contentDescription = null,
+                modifier = GlanceModifier.size(iconSize),
+                colorFilter = ColorFilter.tint(ColorProvider(Color.White))
+            )
         }
     }
 }
@@ -732,6 +801,13 @@ private fun AccountAvatar(account: AccountUnread, context: Context, scale: Float
     val circleSize = (34 * scale).dp
     val letterSize = (15 * scale).sp
 
+    // Для TalkBack: на круге видна только первая буква (SET-12)
+    val description = if (account.unreadCount > 0) {
+        context.getString(R.string.widget_account_unread, account.name, account.unreadCount)
+    } else {
+        context.getString(R.string.widget_account, account.name)
+    }
+
     Box(
         modifier = GlanceModifier
             .size(boxSize)
@@ -745,7 +821,8 @@ private fun AccountAvatar(account: AccountUnread, context: Context, scale: Float
                         putExtra(MainActivity.EXTRA_OPEN_INBOX_UNREAD, true)
                     }
                 }
-            )),
+            ))
+            .semantics { contentDescription = description },
         contentAlignment = Alignment.TopStart
     ) {
         // Аватар (круг) — размер масштабируется вместе с виджетом

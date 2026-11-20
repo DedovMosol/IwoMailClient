@@ -51,6 +51,7 @@ import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.network.NetworkMonitor
 import com.dedovmosol.iwomail.ui.components.NetworkBanner
+import com.dedovmosol.iwomail.ui.utils.animatedScale
 import com.dedovmosol.iwomail.ui.utils.rememberPulseScale
 import com.dedovmosol.iwomail.data.repository.FoldersCache
 import com.dedovmosol.iwomail.sync.InitialSyncController
@@ -1479,7 +1480,7 @@ private fun HomeContent(
                             onClick = { uriHandler.openUri("https://t.me/I_wantout") },
                             modifier = Modifier
                                 .weight(1f)
-                                .scale(tgPulse),
+                                .animatedScale(tgPulse),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = Color(0xFF0088CC)
                             ),
@@ -1498,7 +1499,7 @@ private fun HomeContent(
                             },
                             modifier = Modifier
                                 .weight(1f)
-                                .scale(emailPulse),
+                                .animatedScale(emailPulse),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = Color(0xFF0078D4)
                             ),
@@ -1517,7 +1518,7 @@ private fun HomeContent(
                     ) {
                         Button(
                             onClick = { showFinancialSupport = true },
-                            modifier = Modifier.scale(supportPulse),
+                            modifier = Modifier.animatedScale(supportPulse),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = Color(0xFFE91E63)
                             ),

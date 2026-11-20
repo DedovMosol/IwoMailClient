@@ -25,8 +25,10 @@ internal object EwsAttachmentContent {
     private const val MAX_TEXT = 4 * 1024
     private const val LT = '<'.code.toByte()
 
-    fun extract(input: InputStream, out: OutputStream, onChunk: () -> Unit = {}): Result {
-        val source = Source(input)
+    fun extract(
+        input: InputStream, out: OutputStream, maxResponseBytes: Long = Long.MAX_VALUE, onChunk: () -> Unit = {}
+    ): Result {
+        val source = Source(input, maxResponseBytes, onChunk)
         var error = false
         while (true) {
             if (!source.skipPast(LT)) return Result.NoContent
@@ -67,7 +69,9 @@ internal object EwsAttachmentContent {
     }
 
     /** Буфер без синхронизации (BufferedInputStream.read() синхронизирован — 40 млн вызовов на файл 30 МБ). */
-    private class Source(private val input: InputStream) {
+    private class Source(
+        private val input: InputStream, private var remaining: Long, private val checkActive: () -> Unit
+    ) {
         private val buf = ByteArray(64 * 1024)
         private var pos = 0
         private var lim = 0
@@ -75,8 +79,11 @@ internal object EwsAttachmentContent {
 
         private fun fill(): Boolean {
             if (pos < lim) return true
-            val n = input.read(buf)
+            checkActive()
+            if (remaining <= 0) throw EasAttachmentService.BoundedBuffer.Overflow()
+            val n = input.read(buf, 0, minOf(buf.size.toLong(), remaining).toInt())
             if (n <= 0) return false
+            remaining -= n
             pos = 0
             lim = n
             return true

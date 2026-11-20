@@ -123,6 +123,8 @@ private fun buildRecurringOccurrenceSelectionId(
 fun CalendarScreen(
     onBackClick: () -> Unit,
     onComposeClick: (String) -> Unit = {},
+    /** Ссылка mailto: в описании события — письмо со всеми её полями. */
+    onComposeMailto: (com.dedovmosol.iwomail.util.MailtoLink) -> Unit = { onComposeClick(it.to.joinToString(", ")) },
     initialDateFilter: CalendarDateFilter = CalendarDateFilter.ALL,
     initialEventId: String? = null,
     onInitialEventConsumed: () -> Unit = {}
@@ -551,6 +553,7 @@ fun CalendarScreen(
                 calendarRepo = calendarRepo,
                 onDismiss = { selectedEventId = null },
                 onComposeClick = onComposeClick,
+                onComposeMailto = onComposeMailto,
                 onEditClick = {
                     val sid = selectedEventId ?: ""
                     val isOccurrence = event.id.contains("_occ_") || sid.contains("_occ_")

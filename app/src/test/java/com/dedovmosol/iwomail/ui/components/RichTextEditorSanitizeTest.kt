@@ -7,8 +7,8 @@ import org.junit.Test
  * Юнит-тесты Kotlin-санитайзера редактора (L-3).
  *
  * После DRY-рефактора `stripDangerousTags` делегирует в `sanitizeEmailHtml`
- * (script/iframe/object/embed/applet + **inline-обработчики `on*=`** + `javascript:`/`data:text/html`)
- * и дополнительно вырезает `<base>`/`<link>`. Комплексное покрытие самого `sanitizeEmailHtml` —
+ * (script/iframe/object/embed/applet + **inline-обработчики `on*=`** + `javascript:`/`data:text/html`
+ * + формы, поля ввода, `<base>`/`<link>`, фреймы — MAIL-09). Комплексное покрытие самого `sanitizeEmailHtml` —
  * в `HtmlUtilsTest`; здесь проверяем именно интеграцию в редакторе (раньше обработчики НЕ резались).
  *
  * `RichTextEditorController` — обычный держатель Compose-состояния, конструируется в JVM-тесте.

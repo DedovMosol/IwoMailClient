@@ -139,6 +139,35 @@ class EmailDetailActionsAttachmentTest {
         assertThat(result).isInstanceOf(EasResult.Success::class.java)
     }
 
+    @Test
+    fun `partial MIME contributes one logo and requests only the other logo even with a huge PDF`() = runTest {
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 1)
+        val b64 = java.util.Base64.getEncoder().encodeToString(png)
+        val mime = """
+            Content-Type: multipart/related; boundary="rel"
+
+            --rel
+            Content-Type: text/html
+
+            <img src="cid:First"><img src="cid:Second">
+            --rel
+            Content-Type: image/png
+            Content-ID: <FIRST>
+            Content-Transfer-Encoding: base64
+
+            $b64
+            --rel--
+        """.trimIndent()
+        val pdf = attachment(STALE_REF).copy(estimatedSize = 40_000_000)
+        val ownerId = ACCOUNT_ID + 1
+        coEvery { mailRepo.loadInlineAttachmentBytes(EMAIL_ID, ownerId, setOf("second"), listOf(pdf), any(), any(), any()) } coAnswers {
+            arg<(String, ByteArray) -> Unit>(6)("second", png) // suspend calls also have a trailing Continuation
+        }
+        val images = actions.loadInlineImages(EMAIL_ID, ownerId, setOf("First", "Second"), mime, listOf(pdf))
+        assertThat(images).containsExactly("first", "data:image/png;base64,$b64", "second", "data:image/png;base64,$b64")
+        coVerify(exactly = 0) { accountRepo.getActiveAccountSync() }
+    }
+
     companion object {
         private const val ACCOUNT_ID = 1L
         private const val EMAIL_ID = "email-1"

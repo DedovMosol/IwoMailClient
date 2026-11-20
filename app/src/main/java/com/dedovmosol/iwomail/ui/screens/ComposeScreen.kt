@@ -92,8 +92,10 @@ import com.dedovmosol.iwomail.util.deletePickedAttachmentIfOwned
 import com.dedovmosol.iwomail.util.escapeHtml
 import com.dedovmosol.iwomail.util.queryOpenableFileMeta
 import com.dedovmosol.iwomail.util.stripContentIdImages
+import com.dedovmosol.iwomail.util.plainTextToHtml
 import com.dedovmosol.iwomail.util.readUriBytesLimited
 import com.dedovmosol.iwomail.util.uniquePickedFileName
+import com.dedovmosol.iwomail.ui.utils.tryRequestFocus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -161,6 +163,8 @@ fun ComposeScreen(
     replyToEmailId: String? = null,
     forwardEmailId: String? = null,
     initialToEmail: String? = null,
+    initialCc: String? = null,
+    initialBcc: String? = null,
     editDraftId: String? = null,
     initialSubject: String? = null,
     initialBody: String? = null,
@@ -306,11 +310,15 @@ fun ComposeScreen(
 
     // Инициализация из mailto: параметров
     var initialDataApplied by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(initialSubject, initialBody) {
-        if (!initialDataApplied && (initialSubject != null || initialBody != null)) {
+    LaunchedEffect(initialSubject, initialBody, initialCc, initialBcc) {
+        if (!initialDataApplied && (initialSubject != null || initialBody != null || initialCc != null || initialBcc != null)) {
             initialDataApplied = true
             if (initialSubject != null && subject.isBlank()) subject = initialSubject
-            if (initialBody != null && body.isBlank()) body = initialBody
+            // Текст mailto: и «Поделиться» — обычный текст: в HTML-редактор — экранированным, с переводами строк
+            if (initialBody != null && body.isBlank()) body = plainTextToHtml(initialBody)
+            if (initialCc != null && cc.isBlank()) cc = initialCc
+            if (initialBcc != null && bcc.isBlank()) bcc = initialBcc
+            if (cc.isNotBlank() || bcc.isNotBlank()) showCcBcc = true
         }
     }
 
@@ -327,23 +335,25 @@ fun ComposeScreen(
     val ccFocusRequester = remember { FocusRequester() }
     val bccFocusRequester = remember { FocusRequester() }
     val subjectFocusRequester = remember { FocusRequester() }
-    val bodyFocusRequester = remember { FocusRequester() }
 
     // Сохранение фокуса при повороте экрана
     var focusedFieldIndex by rememberSaveable { mutableIntStateOf(-1) }
 
-    // Восстановление фокуса после поворота
-    LaunchedEffect(focusedFieldIndex) {
-        if (focusedFieldIndex >= 0) {
-            kotlinx.coroutines.delay(100)
-            when (focusedFieldIndex) {
-                0 -> toFocusRequester.requestFocus()
-                1 -> ccFocusRequester.requestFocus()
-                2 -> bccFocusRequester.requestFocus()
-                3 -> subjectFocusRequester.requestFocus()
-                4 -> bodyFocusRequester.requestFocus()
-            }
+    // Восстановление фокуса после поворота — один раз, когда экран создан заново (а не на каждую смену фокуса).
+    // requestFocus на FocusRequester, чьё поле не в композиции (копия/скрытая копия свёрнуты), бросает
+    // IllegalStateException — такое поле пропускается, приложение не падает.
+    LaunchedEffect(Unit) {
+        val index = focusedFieldIndex
+        if (index < 0) return@LaunchedEffect
+        delay(100)
+        val requester = when (index) {
+            0 -> toFocusRequester
+            1 -> ccFocusRequester.takeIf { showCcBcc }
+            2 -> bccFocusRequester.takeIf { showCcBcc }
+            3 -> subjectFocusRequester
+            else -> null
         }
+        requester?.tryRequestFocus()
     }
 
     // Меню и диалоги
@@ -2427,7 +2437,7 @@ fun ComposeScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { toFocusRequester.requestFocus() }
+                        .clickable { toFocusRequester.tryRequestFocus() }
                         .padding(horizontal = 16.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -2618,7 +2628,7 @@ fun ComposeScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { ccFocusRequester.requestFocus() }
+                        .clickable { ccFocusRequester.tryRequestFocus() }
                         .padding(horizontal = 16.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -2662,7 +2672,7 @@ fun ComposeScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { bccFocusRequester.requestFocus() }
+                        .clickable { bccFocusRequester.tryRequestFocus() }
                         .padding(horizontal = 16.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

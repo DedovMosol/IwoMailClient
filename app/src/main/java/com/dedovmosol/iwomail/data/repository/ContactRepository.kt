@@ -16,6 +16,11 @@ import java.util.UUID
 private val vcardFieldCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
 private val vcardAllFieldsCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
 
+/** Первый символ, с которого таблица начинает формулу (PIM-14). */
+private const val CSV_FORMULA_START = "=+-@\t\r"
+/** Телефон или число: со знаком в начале, но формулой не станет (нет имён функций, ссылок и `|`). */
+private val CSV_PLAIN_NUMBER = Regex("""[+-]?[\d\s().\-]*\d[\d\s().\-]*""")
+
 private val BRACKET_EMAIL_RE = Regex("<([^>]+@[^>]+)>")
 private val SIMPLE_EMAIL_RE = Regex("[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}")
 
@@ -121,26 +126,6 @@ class ContactRepository internal constructor(
     suspend fun searchLocalContacts(accountId: Long, query: String): List<ContactEntity> {
         if (query.isBlank()) return emptyList()
         return contactDao.searchContacts(accountId, query)
-    }
-    
-    suspend fun searchForAutocomplete(accountId: Long, query: String, ownEmail: String, limit: Int = 10): List<ContactEntity> {
-        if (query.isBlank()) return emptyList()
-        return contactDao.searchForAutocomplete(accountId, query, ownEmail, limit)
-    }
-
-    /**
-     * Контакты группы одним списком (для автодополнения по группам, Этап 3 / CS-16).
-     */
-    suspend fun getContactsByGroupList(accountId: Long, groupId: String): List<ContactEntity> {
-        return contactDao.getContactsByGroupList(accountId, groupId)
-    }
-
-    /**
-     * Инкремент счётчика использования контакта по email (для сортировки автодополнения).
-     * Обёртка над DAO для presentation-слоя (Этап 3, CS-16).
-     */
-    suspend fun incrementUseCountByEmail(accountId: Long, email: String) {
-        contactDao.incrementUseCountByEmail(accountId, email)
     }
     
     /**
@@ -439,10 +424,6 @@ class ContactRepository internal constructor(
         return groupDao.getGroupsByAccount(accountId)
     }
     
-    suspend fun getGroupsList(accountId: Long): List<ContactGroupEntity> {
-        return groupDao.getGroupsByAccountList(accountId)
-    }
-    
     fun getContactsByGroup(accountId: Long, groupId: String): Flow<List<ContactEntity>> {
         return contactDao.getContactsByGroup(accountId, groupId)
     }
@@ -604,8 +585,8 @@ class ContactRepository internal constructor(
         if (lastName.isNotBlank() || firstName.isNotBlank()) {
             append("N:${escapeVCard(lastName)};${escapeVCard(firstName)};;;\r\n")
         }
-        emails.forEach { email -> if (email.isNotBlank()) append("EMAIL:$email\r\n") }
-        phones.forEach { (type, number) -> if (number.isNotBlank()) append("TEL;TYPE=$type:$number\r\n") }
+        emails.forEach { email -> if (email.isNotBlank()) append("EMAIL:${escapeVCard(email)}\r\n") }
+        phones.forEach { (type, number) -> if (number.isNotBlank()) append("TEL;TYPE=$type:${escapeVCard(number)}\r\n") }
         if (company.isNotBlank()) append("ORG:${escapeVCard(company)}\r\n")
         if (jobTitle.isNotBlank()) append("TITLE:${escapeVCard(jobTitle)}\r\n")
         if (notes.isNotBlank()) append("NOTE:${escapeVCard(notes)}\r\n")
@@ -721,19 +702,37 @@ class ContactRepository internal constructor(
     
     // === Вспомогательные методы ===
     
+    /**
+     * Значение vCard 3.0 (RFC 2426 §4): «\», «,», «;» экранируются, любой перевод строки (CRLF, CR, LF) — `\n`.
+     * Без этого CR/LF в поле (имя или адрес из GAL) начинал бы в файле новое свойство или новую карточку.
+     */
     private fun escapeVCard(value: String): String {
         return value
             .replace("\\", "\\\\")
             .replace(",", "\\,")
             .replace(";", "\\;")
+            .replace("\r\n", "\n")
+            .replace('\r', '\n')
             .replace("\n", "\\n")
     }
-    
+
+    /**
+     * Поле CSV (RFC 4180) без CSV-инъекции (PIM-14, OWASP «CSV Injection»): значение, которое начинается с `=`, `+`,
+     * `-`, `@`, табуляции или CR, таблица (Excel, LibreOffice) выполнила бы как формулу — например `=HYPERLINK(…)`
+     * в имени контакта из GAL. Такое значение начинается с апострофа (таблица показывает текст как есть). Номер
+     * телефона или число (`+7 (999) 123-45-67`, `-5`) формулой не станут и остаются без изменений. В кавычки
+     * значение берётся при `,`, `"`, CR или LF.
+     */
     private fun escapeCSV(value: String): String {
-        return if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
-            "\"${value.replace("\"", "\"\"")}\""
+        val neutral = if (value.isNotEmpty() && value[0] in CSV_FORMULA_START && !CSV_PLAIN_NUMBER.matches(value)) {
+            "'$value"
         } else {
             value
+        }
+        return if (neutral.contains(",") || neutral.contains("\"") || neutral.contains("\n") || neutral.contains("\r")) {
+            "\"${neutral.replace("\"", "\"\"")}\""
+        } else {
+            neutral
         }
     }
     

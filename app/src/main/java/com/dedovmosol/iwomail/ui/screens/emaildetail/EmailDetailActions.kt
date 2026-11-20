@@ -11,11 +11,15 @@ import com.dedovmosol.iwomail.util.ICalParser
 import com.dedovmosol.iwomail.util.MimeHtmlProcessor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.supervisorScope
+import com.dedovmosol.iwomail.util.detectImageMimeType
+import com.dedovmosol.iwomail.util.normalizeContentId
+import com.dedovmosol.iwomail.util.readStreamLimited
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.util.Base64
+import java.util.Locale
 
 private fun <T> EasResult<T>.toUnit(): EasResult<Unit> = when (this) {
     is EasResult.Success -> EasResult.Success(Unit)
@@ -191,118 +195,55 @@ class EmailDetailActions(
     suspend fun setFlag(emailId: String, flag: com.dedovmosol.iwomail.eas.MailFlag): EasResult<Unit> =
         mailRepo.setFlag(emailId, flag).toUnit()
 
-    /**
-     * Loads inline images for an email.
-     * Handles MIME extraction (bodyType=4) and CID-referenced attachment download.
-     *
-     * EAS 12.1: GetAttachment for individual CID images,
-     * fetchInlineImages for batch (uses ItemOperations if available).
-     */
+    /** Maps the decoded HTML's CIDs to display data only; the saved body stays unchanged. */
     suspend fun loadInlineImages(
-        emailBody: String,
-        bodyType: Int,
-        emailServerId: String,
-        folderId: String,
+        emailId: String,
+        accountId: Long,
+        cids: Set<String>,
+        mimeBody: String?,
         attachments: List<AttachmentEntity>
-    ): Map<String, String> {
-        if (emailBody.isEmpty()) return emptyMap()
-
-        val bodyLooksMime = emailBody.contains("Content-Type:", ignoreCase = true) &&
-                emailBody.contains("boundary", ignoreCase = true)
-        if (bodyType == 4 && bodyLooksMime) {
-            val mimeImages = withContext(Dispatchers.IO) {
-                MimeHtmlProcessor.extractInlineImagesFromMime(emailBody)
-            }
-            if (mimeImages.isNotEmpty()) return mimeImages
+    ): Map<String, String> = withContext(Dispatchers.IO) {
+        if (cids.isEmpty()) return@withContext emptyMap()
+        fun key(cid: String) = normalizeContentId(cid).lowercase(Locale.ROOT)
+        val missing = cids.mapTo(linkedSetOf(), ::key)
+        val images = linkedMapOf<String, String>()
+        var remaining = MAX_AUTO_INLINE_TOTAL_BYTES
+        fun limit() = minOf(MAX_AUTO_INLINE_IMAGE_BYTES, remaining)
+        fun add(id: String, bytes: ByteArray) {
+            if (id !in missing || bytes.size.toLong() > limit()) return
+            val mimeType = detectImageMimeType(bytes) ?: return
+            images[id] = "data:$mimeType;base64,${Base64.getEncoder().encodeToString(bytes)}"
+            missing.remove(id)
+            remaining -= bytes.size
         }
-
-        // Ссылки cid: — нормализованные и без учёта регистра (Content-ID в теле и у вложения расходятся по регистру)
-        val cidRefs = com.dedovmosol.iwomail.util.referencedContentIds(emailBody)
-        if (cidRefs.isEmpty()) return emptyMap()
-
-        val inlineAttachments = attachments.filter { att ->
-            if (att.contentId == null) return@filter false
-            if (!att.contentType.startsWith("image/", ignoreCase = true)) return@filter false
-            if (att.estimatedSize <= 0L || att.estimatedSize > MAX_AUTO_INLINE_IMAGE_BYTES) return@filter false
-            com.dedovmosol.iwomail.util.containsContentId(cidRefs, att.contentId) ||
-                com.dedovmosol.iwomail.util.containsContentId(cidRefs, att.displayName)
-        }
-
-        val account = accountRepo.getActiveAccountSync() ?: return emptyMap()
-        val newImages = mutableMapOf<String, String>()
-
-        withContext(Dispatchers.IO) {
-            var totalInlineBytes = 0L
-            // Сначала — сохранённые на устройстве (черновики приложения: тело с cid:, картинки — файлы).
-            for (att in inlineAttachments) {
-                val file = att.localPath?.let { File(it) }?.takeIf { it.exists() } ?: continue
-                if (totalInlineBytes + att.estimatedSize > MAX_AUTO_INLINE_TOTAL_BYTES) continue
-                totalInlineBytes += att.estimatedSize
-                val dataUrl = "data:${att.contentType};base64," +
-                    android.util.Base64.encodeToString(file.readBytes(), android.util.Base64.NO_WRAP)
-                att.contentId?.let { newImages[it] = dataUrl }
-                newImages[att.displayName] = dataUrl
-            }
-            val attachmentsWithRef = inlineAttachments
-                .filter { it.fileReference.isNotBlank() && !newImages.containsKey(it.displayName) }
-                .filter { att ->
-                    val nextTotal = totalInlineBytes + att.estimatedSize
-                    if (nextTotal <= MAX_AUTO_INLINE_TOTAL_BYTES) {
-                        totalInlineBytes = nextTotal
-                        true
-                    } else {
-                        false
-                    }
-                }
-            if (attachmentsWithRef.isNotEmpty()) {
-                supervisorScope {
-                    attachmentsWithRef.map { att ->
-                        async {
-                            try {
-                                val easClient = accountRepo.createEasClient(account.id) ?: return@async null
-                                when (val result = easClient.downloadAttachment(att.fileReference)) {
-                                    is EasResult.Success -> {
-                                        val base64 = android.util.Base64.encodeToString(result.data, android.util.Base64.NO_WRAP)
-                                        Pair(att, "data:${att.contentType};base64,$base64")
-                                    }
-                                    is EasResult.Error -> null
-                                }
-                            } catch (e: Exception) {
-                                if (e is CancellationException) throw e
-                                null
-                            }
-                        }
-                    }.awaitAll().filterNotNull().forEach { pair ->
-                        pair.first.contentId?.let { newImages[it] = pair.second }
-                        newImages[pair.first.displayName] = pair.second
-                    }
-                }
-            }
-
-            val loadedIds = newImages.keys.mapTo(HashSet()) { com.dedovmosol.iwomail.util.normalizeContentId(it) }
-            val missingCids = cidRefs.filter { cid -> !com.dedovmosol.iwomail.util.containsContentId(loadedIds, cid) }
-            val canUseMimeFallback = attachments.isNotEmpty() &&
-                attachments.all { it.estimatedSize > 0L && it.estimatedSize <= MAX_AUTO_INLINE_IMAGE_BYTES } &&
-                attachments.sumOf { it.estimatedSize } <= MAX_AUTO_INLINE_TOTAL_BYTES
-            if (missingCids.isNotEmpty() && canUseMimeFallback) {
-                try {
-                    val easClient = accountRepo.createEasClient(account.id)
-                    if (easClient != null) {
-                        val folderServerId = folderId.substringAfter("_")
-                        when (val result = easClient.fetchInlineImages(folderServerId, emailServerId)) {
-                            is EasResult.Success -> result.data.forEach { (cid, dataUrl) ->
-                                newImages[cid] = dataUrl
-                            }
-                            is EasResult.Error -> { }
-                        }
-                    }
-                } catch (e: Exception) {
-                    if (e is CancellationException) throw e
-                }
+        if (mimeBody != null) {
+            val ioContext = coroutineContext
+            MimeHtmlProcessor.forEachReferencedInlineImage(mimeBody, missing, ::limit) { cid, bytes ->
+                ioContext.ensureActive()
+                add(cid, bytes)
             }
         }
-
-        return newImages
+        // Locally saved draft images can have a CID without a server FileReference.
+        for (cid in missing.toList()) {
+            coroutineContext.ensureActive()
+            if (limit() <= 0) break
+            val att = attachments.singleOrNull { it.emailId == emailId && it.contentId?.let(::key) == cid } ?: continue
+            val file = att.localPath?.let(::File)?.takeIf { it.isFile && it.length() <= limit() } ?: continue
+            val bytes = try {
+                file.inputStream().use { readStreamLimited(it, limit()) }
+            } catch (_: java.io.IOException) {
+                null
+            }
+            if (bytes != null) add(cid, bytes)
+        }
+        if (missing.isNotEmpty() && remaining > 0) {
+            // Retain images already read if a later fetch times out; parent cancellation still propagates.
+            withTimeoutOrNull(20_000L) {
+                mailRepo.loadInlineAttachmentBytes(emailId, accountId, missing.toSet(), attachments,
+                    MAX_AUTO_INLINE_IMAGE_BYTES, remaining, ::add)
+            }
+        }
+        images
     }
 
     /**

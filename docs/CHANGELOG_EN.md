@@ -6,6 +6,9 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 ## v1.7.0 (unreleased)
 
 ### Mail and threads
+- HTML mail checks every `srcset` image candidate, even if the first image is embedded. After consent, network-path URLs such as `//cdn.example/...` use HTTPS, plain HTTP stays blocked. Missing CID images are fetched separately using the message owner’s mailbox, with a 256 KiB per-image and 512 KiB total budget. A large adjacent PDF is not downloaded to display a logo, substitution leaves the stored message body unchanged.
+- “Threads only” hides single messages in mail lists and search. An exact reply-header link can attach a message without a `ConversationId` to one unambiguous server conversation. An entry from the other folder may be visible as context in Unread, selecting the thread header or Select all does not add that context to delete or move actions.
+- Mail lists and search share a tonal “To start / To end of list” button that uses displayed rows, including expanded threads. It hides during selection and when the list fits, its touch target is 48 dp.
 - On EAS 14+ messages in a thread are ordered by `ConversationIndex`: the original first, then the replies. On Exchange 2007, which has no such field, the order is by date, newest first.
 - Without a ConversationId (EAS 12.x) a reply joins by subject only if it has a reply prefix with a colon and exactly one original message has that subject. SV, VS, Enc, Od, YNT, Doorst, RES and REF are also recognized, and single-letter R: and I: are not treated as replies.
 - A Message-ID link wins over the subject, and all ids from In-Reply-To and References are used. In-Reply-To comes from MIME when the body is loaded, on Exchange 2007 from EWS GetItem (`item:InReplyTo`), and is stored in `emails.inReplyTo`.
@@ -14,7 +17,7 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 - In Sent and Drafts the row and avatar show the recipient from To, with an empty To the first one from Cc, then from Bcc. Search shows the same recipients instead of the sender.
 - Multi-select works by dragging across the list, and selected messages are processed in batches.
 - With fast taps on the star only the last one goes to the server, and on a rejection the star returns to the last server-confirmed value, also after a restart. A sync response requested before the tap does not overwrite it, and a server rejection is shown as a toast.
-- Move and delete to trash send MoveItems at once, and a folder Sync runs only on Status=1 (stale ServerId on EAS 12.1). Rows disappear from the list at once and come back if the server refused or moved nothing; after a ServerId change messages are matched by the snapshot contents, so a move does not hit another message.
+- Move and delete to trash send MoveItems at once, and a folder Sync runs only on Status=1 (stale ServerId on EAS 12.1). Rows disappear from the list at once and come back if the server refused or moved nothing, after a ServerId change messages are matched by the snapshot contents, so a move does not hit another message.
 - Permanent delete first processes folder changes with a regular sync, then deletes the messages in a batch with the current SyncKey. Messages moved to Deleted Items from Outlook are no longer lost, and a failed delete on Exchange 2007 does not reset the sync state on the server. Deleting from the message screen closes it once, after the toast.
 - If the server answers Status 6 when the body is loaded, the message is not deleted or hidden. The screen syncs the folder once and closes only if the message is really gone from the server (Exchange 2007 answers this way during a full resync).
 - The EAS body is requested as HTML or text without the full MIME, and Sent on Exchange 2007 skips the preliminary MIME header load, so messages with large attachments open without endless loading. The body is not reloaded on rotation.
@@ -22,13 +25,15 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 - HTML is extracted from MIME by splitting parts on the boundary (RFC 2046), so a message is no longer cut at the first `--` in Outlook conditional comments or in `-----Original Message-----`.
 - In the message viewer the gesture owner is decided once after the system touch slop (`TouchDirectionLock`): horizontal scrolling and zoom belong to the WebView, vertical scrolling to the screen. The WebView height counts `documentElement`, and there is no edge effect.
 - The HTML sanitizer runs in linear time, so a poison message does not hang the screen. It strips `<iframe>`, `<object>`, `<embed>`, `<applet>`, `<meta http-equiv="refresh">`, `data:text/html` and `javascript:` in `xlink:href`, and links in the body are found in the background with a bounded regular expression.
+- HTML mail opens links only on a user tap: `http`/`https` in an external web-link handler, `tel:` in the dialer, and `mailto:` in the composer. Automatic navigation and frame navigation are ignored. Forms and input fields are removed from the HTML.
 
 ### Drafts and sending
-- One `DraftSaver` saves drafts for the screen and `ComposeViewModel`. An edit of only text, subject, recipients or importance goes through EWS UpdateItem, and the draft keeps its id and server attachments, while any other change creates a new version and then deletes the previous ones by id.
+- `mailto:` links from a message or another app populate To, Cc, Bcc, subject and body, `+` in an address stays a plus. Attachments received via Android Share must use external `content://` URIs, file names are sanitized before copying.
+- The compose screen saves drafts through `DraftSaver`. An edit of only text, subject, recipients or importance goes through EWS UpdateItem, and the draft keeps its id and server attachments, while any other change creates a new version and then deletes the previous ones by id.
 - Offline, a draft edit is saved on the device (`local_draft_d_`) with the list of server versions it replaces. Sync first uploads it and only then deletes the old versions, and if the server refuses the new version, the old one stays. A setting turns on a mode in which drafts are saved only on the device.
 - Drafts sync without `TruncationSize`, and a truncated or plain-text EAS body is not used as the draft body. Opening a server draft refreshes the body by exact id, and an empty draft is not saved while the editor prepares HTML.
 - Closing a draft without edits no longer asks "Save changes?". The body used to be compared as a string with the HTML the editor returns re-serialized, so an Exchange body (`<html>`/`<head>` wrappers, unquoted attributes, CRLF, `&#39;`) "changed" just by opening it (verified in Chromium 157). Body edits are now marked by the editor itself (typing, paste, formatting, image, signature change), and the mark survives rotation. A load interrupted by rotation starts over instead of leaving fields half filled. A calendar event description is likewise not sent re-encoded when it was not edited.
-- Bcc is stored locally. The app reads an unknown Bcc of an Outlook draft (EAS before 16.0 does not send it) over EWS from the previous version, and if that fails the previous version is not deleted; emptied To, Cc and Bcc are cleared with `DeleteItemField`, and importance is kept.
+- Bcc is stored locally. The app reads an unknown Bcc of an Outlook draft (EAS before 16.0 does not send it) over EWS from the previous version, and if that fails the previous version is not deleted, emptied To, Cc and Bcc are cleared with `DeleteItemField`, and importance is kept.
 - Attachments the editor did not load are downloaded at save time. If a download fails while the server is reachable, the save fails instead of losing the attachment, and offline the attachment is carried by reference.
 - An attachment counts as inline if it has `isInline` or a Content-ID, and the rule is the same in sync and reconcile, so a picture is not duplicated in the body and the file list. Pictures of a reopened draft are mapped back to their `cid:`, and text edits go through UpdateItem again.
 - A draft lookup by subject acts only on a unique match, so update and delete do not hit another draft with the same or an empty subject. A draft with an EWS id is deleted over EWS on every Exchange version, a draft whose attachments were all removed is recreated, and after sending a server draft is deleted on the server too.
@@ -41,7 +46,7 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 - The reply and forward quote is labeled in the UI language ("From", "Date", "Subject", "To"). A signature with `$` and `\` is inserted intact, and mailto keeps the signature below the passed text. Recipient suggestions search groups, contacts, address history and the GAL after a typing pause.
 
 ### Attachments
-- Attachments are streamed to a file instead of memory: ItemOperations Fetch with `MS-ASAcceptMultiPart: T`, on EAS 12.x GetAttachment as POST, then EWS GetAttachment with streamed base64 decoding. Open, save, share and drag work with the file; 30 MB was verified over EWS, and Exchange 2007 serves attachments over EAS up to its limit (Status 11 above it).
+- Attachments are streamed to a file instead of memory: ItemOperations Fetch with `MS-ASAcceptMultiPart: T`, on EAS 12.x GetAttachment as POST, then EWS GetAttachment with streamed base64 decoding. Open, save, share and drag work with the file, 30 MB was verified over EWS, and Exchange 2007 serves attachments over EAS up to its limit (Status 11 above it).
 - The EAS streaming response is read and closed in the same coroutine context, so leaving the screen during a download leaves no open connection. Cancelling stops the download and deletes the temporary `.part` files.
 - A response cut inside EWS `Content` is an error, not a shorter file. An empty attachment confirmed by EWS is saved as an empty file instead of a "not found" error.
 - Save and Save as… are available for every attachment, and the file choice survives rotation. On Android 10+ Save writes to Downloads through MediaStore, on Android 8–9 it opens the system dialog, and if the write fails the empty document in the chosen folder is deleted.
@@ -58,6 +63,7 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 - A time with an offset instead of UTC is parsed with `Instant.parse` without a shift. The date and time in the new event dialog are not reset on rotation.
 
 ### Tasks, notes, contacts
+- In GAL CSV exports, values that look like spreadsheet formulas are marked as text, ordinary phone numbers are preserved. In vCard exports, line breaks in fields are escaped rather than starting a new entry.
 - Tasks and notes can be created, edited and moved to trash offline: the change is saved on the device, queued in `pending_pim_changes`, and a toast says it will be sent when the connection is back. It is sent the same way as online (EAS on Exchange 2010+, EWS on 2007), and assigning a task offline is an error.
 - Several edits of one item go out as one result, an edit made during the send is not lost, and sync does not overwrite a queued edit. Restoring from trash before the send happens only on the device, and permanent delete, empty trash and reset send the queue first.
 - An incomplete server response (HTTP error, dropped connection, truncated WBXML or SOAP, page limit) does not delete local tasks, notes and contacts. Contact pages are parsed whole, and a failure before the first contact is returned as an error.
@@ -68,11 +74,11 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 ### Sync and offline
 - Star, read state and moves made offline apply on the device at once, are queued in `pending_email_changes` and sent by `PendingMailChangesWorker` when the network is back, also after a restart. They are rolled back only on an explicit server rejection, and a stale SyncKey, server errors and timeouts are retried later.
 - After a SyncKey reset Exchange 2007 numbers the messages of a folder again, and a new message shifts the numbers of the others (verified on the server). Because of this a message could open with another message's body, a message with an attachment could close with "Email deleted on server", and the star could be rejected. Fixed as follows:
-  - a full resync runs only when the sync state is broken (Status 3/12), not on "sync already running" or a server error;
-  - the star and read state wait for a sync when there is no key and do not reset the key themselves;
-  - Status 8 on a flag is no longer treated as a rejection;
-  - a row whose number the server gave to another message is rewritten with that message, and the body moves to its own message;
-  - a body is written only if the subject and date in the server's answer match the message; otherwise the folder gets a full resync;
+  - a full resync runs only when the sync state is broken (Status 3/12), not on "sync already running" or a server error,
+  - the star and read state wait for a sync when there is no key and do not reset the key themselves,
+  - Status 8 on a flag is no longer treated as a rejection,
+  - a row whose number the server gave to another message is rewritten with that message, and the body moves to its own message,
+  - a body is written only if the subject and date in the server's answer match the message, otherwise the folder gets a full resync,
   - the message screen whose row disappeared or changed opens the same message under its new number and shows "deleted on server" only if the message is gone.
 - A full resync (SyncKey=0) does not delete a message with a pending move and does not duplicate it in Inbox. The move is sent from the original folder, and if the message is already in the target folder the queue is cleared.
 - `FolderSyncGate` lets only one Sync request per folder run at a time, and the SyncKey is re-read from the database inside the gate. There is no separate full sync of Sent: the regular sync fixes a stale key, and the key is not reset while offline.
@@ -100,6 +106,7 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 - IMAP and POP3 without SSL require STARTTLS/STLS and check the host name, pinning works there too, and `socketFactory.fallback=false` keeps JavaMail from bypassing it. TLS 1.0 and 3DES are allowed last in the list for Exchange 2007 on ports 993/995, and errors are read along the whole cause chain.
 
 ### App lock and privacy
+- If the app lock is enabled but its stored password hash is lost, recovery asks for the mail account password. The check is local if the account password is still stored, otherwise server verification is available only for Exchange. A successful check turns off the lock, set a new app password in Settings.
 - The app can be locked with a password and fingerprint. The password is stored as PBKDF2-HMAC-SHA256 with 600 000 iterations and a random salt in `EncryptedSharedPreferences`, the app locks when it goes to the background and on cold start, and typed passwords are not put into the screen's saved state.
 - After 5 wrong passwords there are pauses of 30 s, 1 min, 5 min and 15 min counted on `elapsedRealtime`, so changing the clock does not shorten them. The attempt is counted before the check, the lock screen shows a countdown and attempts left, and a successful unlock resets the counter.
 - With the lock on, Android 13+ keeps no window snapshot in Recents (`setRecentsScreenshotEnabled`), while screenshots inside the unlocked app still work. Android 8–12 uses FLAG_SECURE during that time.
@@ -109,6 +116,7 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 - `data_extraction_rules.xml` excludes all private storage from device-to-device transfer on Android 12+, including client certificates, attachments and the outbox queue.
 
 ### Notifications and widget
+- When app lock is enabled, the large widget replaces the hidden-content notice with unread Inbox counts for up to three accounts. These rows contain no message subjects, senders or previews. Tapping a row requires unlocking and opens that account’s unread Inbox, zero unread shows “No new mail”.
 - While the app is open, no new mail notifications are shown, and the message appears in the list at once. These messages do not pop up as notifications after the app goes to the background either.
 - A tap on an event, task or flag reminder switches to the right mailbox and opens that item, even if another account was on screen.
 - Permission requests are shown one at a time after onboarding (notifications, background work, exact alarms) in the common dialog style, each with its own icon.
@@ -117,12 +125,13 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 - Widget text on the theme color is solid white. Before, it was white at 50–80% opacity with a contrast of 1.8–2.8:1.
 
 ### UI and settings
+- Settings search opens the specific account or control: automatic update interval, start and end of quiet hours, trusted image senders, refusal of insecure writes, or the theme and scrollbar colours for a selected weekday. Conditional rows appear only when available. Add account opens the form, searching for the update interval does not run a network check. The interval uses the shared choice sheet and child rows use colour accents.
 - HyperOS-style settings: a large title on the theme gradient collapses on scroll, white cards without dividers sit on a light gray page (dark gray on black in dark theme), and the value is on the right with an arrow. About ten radio button dialogs are replaced by a shared `SettingsChoiceRow`, auto-cleanup is one row per folder, and settings search finds scrollbar color, animations, password change and account settings.
 - Every value choice in settings (color theme, theme mode, language, font size, mail, account and sync options) opens a bottom sheet with a sample, name and radio button, like the scrollbar color. A choice inside a bottom sheet (Daily themes) opens a list at the row instead of a second sheet.
-- The title of settings and their sections, including account settings, sits right under the back arrow with no empty band above it; the gradient header is a third lower (108 dp instead of 152 dp) and collapses into a bar with the title on scroll.
+- The title of settings and their sections, including account settings, sits right under the back arrow with no empty band above it, the gradient header is a third lower (108 dp instead of 152 dp) and collapses into a bar with the title on scroll.
 - Settings cards are larger and almost full width. Section icons are new (Material Symbols Rounded) in filled tiles of their own scrollbar-palette color, row icons inside sections are in tonal tiles of the section color. The colors do not depend on the theme or wallpaper.
 - The bottom of settings explains that signature, drafts, sync, auto-cleanup and certificates are set per account and where to set them.
-- Settings search finds only rows that are on screen now: Change password and fingerprint while the app lock is on, Configure daily themes while daily themes are on. It also finds each account's settings (credentials, signature, draft mode, sync and cleanup, certificates, delete, notification sound) according to the account type and opens the account's screen at that row; searching by an account address shows its settings.
+- Settings search finds only rows that are on screen now: Change password and fingerprint while the app lock is on, Configure daily themes while daily themes are on. It also finds each account's settings (credentials, signature, draft mode, sync and cleanup, certificates, delete, notification sound) according to the account type and opens the account's screen at that row, searching by an account address shows its settings.
 - About is removed from the navigation drawer: it is in settings.
 - In the Background work and Exact notifications dialogs, Later is on the left and Continue on the right.
 - Without dynamic color, containers and surfaces follow the chosen theme instead of the M3 purple scheme. The "Server impersonation protection" card uses theme colors and localized strings, with no emoji.
@@ -135,9 +144,9 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 - The star and the attachment icon have TalkBack labels, and small buttons are enlarged to 48 dp. About 50 repository and EAS error messages, compose screen errors and the calendar empty-trash dialog are shown in the UI language.
 
 ### Stability and performance
-- Mail, the message screen, search, tasks, notes, folders, compose and sync settings run on ViewModels: state and started operations survive rotation. The update available dialog survives rotation too.
+- The mail list, message viewer, search, tasks, notes, folders and sync settings use screen ViewModels. The composer has no separate `ComposeViewModel`: the screen restores its fields, while `RetainScopeViewModel` keeps sending or saving in progress across rotation. The update available dialog survives rotation too.
 - Screen operations, background work, push, alarms and receivers run in guarded scopes: a database or I/O error is logged and does not crash the process.
-- When the WebView renderer dies in the message viewer or printing, the WebView is recreated, and after a second crash the message text is shown. The viewer WebView is released when it is recreated.
+- If the system WebView is unavailable, the viewer shows plain text, the editor offers Retry, and printing is unavailable. If a running renderer fails, the viewer recreates the WebView once before falling back to text, printing does not retry automatically.
 - When memory is short, a heavy message opens without inline pictures, and inline pictures are not built from oversized messages.
 - Body processing, invitation detection and iCal parsing are cached and not repeated on every recomposition, and an invisible animation in the message list no longer redraws every frame. Screens collect flows with lifecycle awareness.
 - Star, permanent delete, move, the widget and the reconcile after a full resync read light projections without message bodies, and widget queries got indexes.
@@ -150,7 +159,7 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 - The license changed from MIT to GNU GPL v3.0, and releases published before the change remain under MIT.
 - The security policy with the threat model (`docs/SECURITY_RU.md`, `docs/SECURITY_EN.md`, index `docs/SECURITY.md`) and the privacy policy are kept in Russian and English, and About opens the policy in the UI language.
 - The changelog and the architecture description are kept as separate Russian and English files, outdated documents are removed, and `docs/XMLPULLPARSER_MIGRATION_PLAN.md` describes the move of parsers to `EasXmlParser`. The README states the published version 1.6.1, EAS versions 12.0–14.1 and the recommended OS, Android 13+ (minimum 8.0).
-- CI on GitHub Actions runs the unit tests and the Kover coverage report. There are unit tests, Robolectric and Compose UI tests, tests against an HTTP-level fake Exchange, and live `LiveExchangeTest` tests on Exchange 2007 that run only when the environment variables are set.
+- GitHub Actions runs the debug tests, generates the Kover report, checks Android Lint and builds the R8 release. The [local tests](../app/src/test/README.md) include Robolectric, Compose UI and an HTTP-level fake Exchange. Live Exchange, ServerId renumbering and lock-recovery checks are [opt-in](../CONTRIBUTING.md#live-tests-against-a-real-exchange-server).
 
 ## v1.6.1 (09.02.2026) — Package rename → "com.dedovmosol.iwomail", reinstall required
 

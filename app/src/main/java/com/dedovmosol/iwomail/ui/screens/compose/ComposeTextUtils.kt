@@ -110,9 +110,7 @@ internal fun extractInlineImageAttachments(
  * Нормализует строку получателей: разбивает по запятым/точкам с запятой, извлекает валидные
  * email-адреса (в т.ч. из формата "Name <email>"), убирает дубликаты. Токены групп [GroupName]
  * сохраняются как есть (раскрываются в адреса при отправке через expandGroupTokens).
- *
- * Перенесено из локальной функции ComposeScreen в общий слой (Этап 3, CS-16):
- * используется и старым экраном, и [ComposeViewModel] — единая логика без дублей (DRY).
+ * Вне экрана — чтобы покрыть юнит-тестом.
  */
 internal fun normalizeRecipients(value: String): String {
     val tokens = value.split(",", ";")

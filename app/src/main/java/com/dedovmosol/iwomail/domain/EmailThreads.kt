@@ -19,9 +19,9 @@ data class EmailThread(val key: String, val emails: List<EmailEntity>) {
  * Группировка писем в цепочки.
  *
  * - Exchange 2010 и новее (EAS 14.0+) присылают у письма email2:ConversationId — по нему, как в Outlook.
- * - Exchange 2007 его не присылает, а заголовков References/In-Reply-To в синхронизации нет (только в MIME каждого
- *   письма) — по теме без «Re:», «Fwd:», «SV:», «VS:», «Enc:», «Od:» и подобных. Чтобы не склеить несвязанные письма с одинаковой темой
- *   («Отчёт», «Вопрос»), цепочка по теме — только если в ней есть ответ или пересылка.
+ * - Exchange 2007 его не присылает. Если уже известны Message-ID и In-Reply-To, точная связь важнее темы:
+ *   компонент без конфликта наследует единственный ConversationId. Если заголовков нет, используем тему
+ *   без «Re:», «Fwd:», «SV:» и подобных, когда есть ответ/пересылка и нет неоднозначности.
  * - Письма, полученные до появления цепочек в приложении, ConversationId не знают: они присоединяются по теме к
  *   переписке с ConversationId (если такая тема у одной переписки и есть ответ — в ней или в самом письме).
  *
@@ -73,101 +73,81 @@ object EmailThreads {
     }
 
     fun group(emails: List<EmailEntity>): List<EmailThread> {
-        val keys = keysOf(emails)
-        val members = LinkedHashMap<String, MutableList<EmailEntity>>()
-        emails.forEachIndexed { index, email -> keys[index]?.let { members.getOrPut(it) { ArrayList(2) } += email } }
-        val valid = members.filter { (key, group) ->
-            group.size > 1 && (
-                key.startsWith(BY_CONVERSATION) ||
-                    key.startsWith(BY_MESSAGE) ||
-                    (key.startsWith(BY_SUBJECT) && group.any { isReply(it.subject) } && group.any { !isReply(it.subject) })
-                )
-        }
-        val result = ArrayList<EmailThread>(emails.size)
-        val placed = HashSet<String>()
-        emails.forEachIndexed { index, email ->
-            val key = keys[index]
-            val group = key?.let(valid::get)
-            if (key == null || group == null) result += EmailThread(email.id, listOf(email))
-            else if (placed.add(key)) result += EmailThread(key, group)
+        val unique = emails.distinctBy { it.id }
+        val keys = keysOf(unique)
+        val members = HashMap<String, MutableList<EmailEntity>>()
+        unique.forEachIndexed { i, email -> keys[i]?.let { members.getOrPut(it) { ArrayList(2) } += email } }
+        val result = ArrayList<EmailThread>(unique.size)
+        unique.forEachIndexed { i, email ->
+            val key = keys[i]
+            val group = key?.let(members::get)
+            if (group == null || group.size < 2) result += EmailThread(email.id, listOf(email))
+            else if (group.first() === email) result += EmailThread(checkNotNull(key), group)
         }
         return result
     }
 
-    /** Ключ цепочки каждого письма; null — тема пустая, письмо само по себе. */
-    private fun keysOf(emails: List<EmailEntity>): List<String?> {
-        val graph = messageGraphKeys(emails)
-        val subjects = emails.map(::subjectKey)
-        // Тема → переписка с ConversationId; у темы несколько переписок — присоединять не к чему
-        val conversationBySubject = HashMap<String, String>()
+    private data class Subject(val account: Long, val text: String)
+    private data class FolderSubject(val subject: Subject, val folder: String)
+    private data class MessageId(val account: Long, val header: String)
+
+    private fun keysOf(emails: List<EmailEntity>): Array<String?> {
+        val conversationKeys = emails.map { email ->
+            email.conversationId?.takeIf { it.isNotBlank() }?.let { "$BY_CONVERSATION${email.accountId}:$it" }
+        }
+        val exact = messageGraphKeys(emails, conversationKeys)
+        val reply = BooleanArray(emails.size)
+        val subjects = emails.mapIndexed { i, email ->
+            val prefix = REPLY_PREFIX.find(email.subject)
+            reply[i] = prefix != null
+            val name = email.subject.substring((prefix?.range?.last ?: -1) + 1)
+                .replace(SPACES, " ").trim().lowercase()
+            name.takeIf { it.isNotEmpty() }?.let { Subject(email.accountId, it) }
+        }
+        val byConversation = HashMap<Subject, String>()
         val conversationsWithReply = HashSet<String>()
-        emails.forEachIndexed { index, email ->
-            val conversation = conversationKey(email) ?: return@forEachIndexed
-            if (isReply(email.subject)) conversationsWithReply += conversation
-            subjects[index]?.let { subject ->
-                conversationBySubject.merge(subject, conversation) { old, new -> if (old == new) old else AMBIGUOUS }
+        val originals = HashMap<Subject, Int>()
+        val folderOriginals = HashMap<FolderSubject, Int>()
+        subjects.forEachIndexed { i, subject ->
+            subject ?: return@forEachIndexed
+            val conversation = conversationKeys[i] ?: exact[i]?.takeIf { it.startsWith(BY_CONVERSATION) }
+            if (conversation != null) {
+                if (reply[i]) conversationsWithReply += conversation
+                byConversation.merge(subject, conversation) { old, new -> if (old == new) old else AMBIGUOUS }
+            } else if (exact[i] == null && !reply[i]) {
+                originals.merge(subject, i) { _, _ -> -1 }
+                folderOriginals.merge(FolderSubject(subject, emails[i].folderId), i) { _, _ -> -1 }
             }
         }
-        // Корни без ConversationId: по всем папкам и по каждой папке отдельно.
-        // Один корень в Inbox+Sent — ответ из другой папки к нему. Два корня (Входящие и Отправленные
-        // с одной темой) — не склеивать всё; ответ только к корню своей папки.
-        val taken = { i: Int -> conversationKey(emails[i]) != null || graph[i] != null }
-        val byAccount = uniqueOriginal(emails, taken) { "${it.accountId}\t${normalizeSubject(it.subject)}" }
-        val byFolder = uniqueOriginal(emails, taken) { "${it.accountId}\t${it.folderId}\t${normalizeSubject(it.subject)}" }
-        return emails.mapIndexed { index, email ->
-            conversationKey(email) ?: graph[index] ?: subjects[index]?.let { subject ->
-                conversationBySubject[subject]
-                    ?.takeIf { it != AMBIGUOUS && (isReply(email.subject) || it in conversationsWithReply) }
-                    ?: subjectFallbackKey(email, index, byAccount, byFolder)
+        // Use the same destination for the original and its subject-only replies. If a root was
+        // taken by a server conversation, a fallback reply must not form a group without it.
+        fun subjectConversation(i: Int, subject: Subject): String? = byConversation[subject]
+            ?.takeIf { it != AMBIGUOUS && (reply[i] || it in conversationsWithReply) }
+        return Array(emails.size) { i ->
+            val strong = conversationKeys[i] ?: exact[i]
+            if (strong != null) strong.takeUnless { it == AMBIGUOUS }
+            else subjects[i]?.let { subject ->
+                subjectConversation(i, subject) ?: run {
+                    val global = originals[subject] ?: -1
+                    val folder = emails[i].folderId
+                    val root = if (global >= 0) global else folderOriginals[FolderSubject(subject, folder)] ?: -1
+                    if (root < 0 || (root != i && !reply[i]) || subjectConversation(root, subject) != null) null
+                    else if (global >= 0) "$BY_SUBJECT${subject.account}:a:${subject.text}"
+                    else "$BY_SUBJECT${subject.account}:f:${folder.length}:$folder:${subject.text}"
+                }
             }
         }
     }
 
-    /** Индекс единственного письма без Re: с этим ключом; несколько — −1. */
-    private fun uniqueOriginal(
-        emails: List<EmailEntity>,
-        taken: (Int) -> Boolean,
-        key: (EmailEntity) -> String
-    ): Map<String, Int> {
-        val map = HashMap<String, Int>()
-        emails.forEachIndexed { index, email ->
-            if (taken(index) || isReply(email.subject) || normalizeSubject(email.subject).isEmpty()) return@forEachIndexed
-            map.merge(key(email), index) { _, _ -> -1 }
+    /** Exact links only, in the same account. AMBIGUOUS blocks the weaker subject fallback. */
+    private fun messageGraphKeys(emails: List<EmailEntity>, conversations: List<String?>): Array<String?> {
+        val headers = emails.map { normalizeMessageId(it.internetMessageId) }
+        val byId = HashMap<MessageId, Int>()
+        headers.forEachIndexed { i, header ->
+            if (header != null) byId.merge(MessageId(emails[i].accountId, header), i) { _, _ -> -1 }
         }
-        return map
-    }
-
-    private fun subjectFallbackKey(
-        email: EmailEntity,
-        index: Int,
-        byAccount: Map<String, Int>,
-        byFolder: Map<String, Int>
-    ): String? {
-        val norm = normalizeSubject(email.subject).takeIf { it.isNotEmpty() } ?: return null
-        val global = byAccount["${email.accountId}\t$norm"] ?: -1
-        val local = byFolder["${email.accountId}\t${email.folderId}\t$norm"] ?: -1
-        val root = if (global >= 0) global else local
-        if (root < 0 || (index != root && !isReply(email.subject))) return null
-        return if (global >= 0) {
-            "$BY_SUBJECT${email.accountId}:$norm"
-        } else {
-            "$BY_SUBJECT${email.accountId}:${email.folderId}:$norm"
-        }
-    }
-
-    private fun conversationKey(email: EmailEntity): String? =
-        email.conversationId?.takeIf { it.isNotBlank() }?.let { "$BY_CONVERSATION${email.accountId}:$it" }
-
-    private fun subjectKey(email: EmailEntity): String? =
-        normalizeSubject(email.subject).takeIf { it.isNotEmpty() }?.let { "$BY_SUBJECT${email.accountId}:$it" }
-
-    /**
-     * Связь по RFC 5322 In-Reply-To ↔ Message-ID. На Exchange 2007 нет ConversationId;
-     * заголовки появляются после загрузки MIME/EWS. Компонента из одного письма — не цепочка.
-     */
-    private fun messageGraphKeys(emails: List<EmailEntity>): List<String?> {
-        val n = emails.size
-        val parent = IntArray(n) { it }
+        val parent = IntArray(emails.size) { it }
+        val size = IntArray(emails.size) { 1 }
         fun find(i: Int): Int {
             var x = i
             while (parent[x] != x) {
@@ -176,27 +156,37 @@ object EmailThreads {
             }
             return x
         }
-        fun union(a: Int, b: Int) {
-            val pa = find(a)
-            val pb = find(b)
-            if (pa != pb) parent[pa] = pb
-        }
-        val byId = HashMap<String, Int>(n)
-        emails.forEachIndexed { i, email ->
-            normalizeMessageId(email.internetMessageId)?.let { byId.putIfAbsent(it, i) }
-        }
         emails.forEachIndexed { i, email ->
             for (reply in referencedIds(email.inReplyTo)) {
-                val parentIndex = byId[reply] ?: continue
-                if (emails[i].accountId == emails[parentIndex].accountId) union(i, parentIndex)
+                val target = byId[MessageId(email.accountId, reply)] ?: continue
+                if (target < 0) continue // two possible parents in this account
+                var a = find(i)
+                var b = find(target)
+                if (a == b) continue
+                if (size[a] < size[b]) { val tmp = a; a = b; b = tmp }
+                parent[b] = a
+                size[a] += size[b]
             }
         }
-        val members = Array(n) { ArrayList<String>(1) }
-        emails.indices.forEach { i -> members[find(i)].add(emails[i].id) }
-        return emails.indices.map { i ->
+        val serverKey = arrayOfNulls<String>(emails.size)
+        val messageKey = arrayOfNulls<String>(emails.size)
+        emails.indices.forEach { i ->
             val root = find(i)
-            val ids = members[root]
-            if (ids.size > 1) "$BY_MESSAGE${emails[i].accountId}:${ids.minOrNull()}" else null
+            if (size[root] < 2) return@forEach
+            conversations[i]?.let { key ->
+                val old = serverKey[root]
+                serverKey[root] = if (old == null || old == key) key else AMBIGUOUS
+            }
+            // Use a unique RFC ID for the local key, not a ServerId that can be renumbered.
+            val header = headers[i]
+            if (header != null && byId[MessageId(emails[i].accountId, header)] == i) {
+                val old = messageKey[root]
+                if (old == null || header < old) messageKey[root] = header
+            }
+        }
+        return Array(emails.size) { i ->
+            val root = find(i)
+            serverKey[root] ?: messageKey[root]?.let { "$BY_MESSAGE${emails[i].accountId}:$it" }
         }
     }
 

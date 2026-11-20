@@ -118,6 +118,15 @@ class MimeHtmlProcessorExtractHtmlTest {
         assertThat(result).contains("строка 1<br>строка 2")
     }
 
+    @Test
+    fun `mail with a large raw PDF section still yields the small decoded HTML part`() {
+        val mime = multipart(
+            "application/pdf" to "A".repeat(9 * 1024 * 1024),
+            "text/html; charset=utf-8" to "<img src='cid:Logo'>"
+        )
+        assertThat(MimeHtmlProcessor.extractHtmlFromMime(mime)).isEqualTo("<img src='cid:Logo'>")
+    }
+
     // ===================== fallback без boundary =====================
 
     @Test

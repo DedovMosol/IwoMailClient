@@ -27,7 +27,8 @@ import javax.crypto.spec.PBEKeySpec
  *  - Сравнение хешей через [MessageDigest.isEqual] (constant-time, защита от timing-атак).
  *
  * Сессия (KISS, практика банковских приложений):
- *  - Fail-closed: холодный старт и смерть процесса = заблокировано, если пароль задан.
+ *  - Fail-closed: холодный старт и смерть процесса = заблокировано; при включённой блокировке без хеша —
+ *    сброс по паролю учётной записи ([Gate.RECOVERY]), а не вход без пароля.
  *  - Разблокировка снимается при уходе всего процесса в фон (см. подписку в
  *    MailApplication на [com.dedovmosol.iwomail.sync.AppForegroundTracker]).
  *  - Поворот экрана НЕ перекрывает: состояние в процесс-синглтоне, а
@@ -75,9 +76,8 @@ object AppLockManager {
     private var usingInsecureStorage: Boolean = false
 
     /**
-     * Состояние сессии: true = приложение заблокировано (показывать экран ввода пароля).
-     * Стартует как true (fail-closed); фактическое значение определяется [evaluateInitialState]
-     * при инициализации: если пароль не задан — сразу разблокировано.
+     * Состояние сессии: true = пользователь в этой сессии не входил. Стартует как true (fail-closed, см.
+     * [evaluateInitialState]); показывать ли экран — решает [gate] по флагу настроек и хешу.
      */
     private val _locked = MutableStateFlow(true)
 
@@ -86,8 +86,7 @@ object AppLockManager {
 
     /**
      * Инициализация из Application.onCreate: создаёт хранилище и вычисляет стартовое
-     * состояние сессии. Идемпотентна. Холодный старт с заданным паролем = заблокировано
-     * (fail-closed); без пароля = разблокировано.
+     * состояние сессии. Идемпотентна. Холодный старт = сессия заблокирована (fail-closed).
      */
     fun init(context: Context) {
         if (storage != null) return
@@ -241,15 +240,7 @@ object AppLockManager {
             if (unlockOnSuccess) unlock()
             return Attempt.Success
         }
-        val lockout = lockoutForFailures(failures)
-        if (lockout > 0L) synchronized(attemptLock) {
-            prefs.edit()
-                .putLong(KEY_LOCKOUT_MS, lockout)
-                .putLong(KEY_LOCKOUT_UNTIL, elapsedRealtimeMs() + lockout)
-                .putInt(KEY_LOCKOUT_BOOT, bootCount())
-                .commit()
-        }
-        return Attempt.Wrong((FREE_ATTEMPTS - failures).coerceAtLeast(0), lockout)
+        return recordFailure(prefs, failures)
     }
 
     /**
@@ -354,21 +345,82 @@ object AppLockManager {
         awayMs >= maxUnlockedMs
 
     /**
-     * Стартовое состояние: заблокировано только если пароль реально задан.
+     * Стартовое состояние сессии: заблокировано всегда (fail-closed). Показывать ли что-то — решает [gate] по флагу
+     * настроек и хешу: без блокировки сессия «заблокирована» ни на что не влияет. Раньше без хеша сессия начиналась
+     * открытой — при потерянном хеше (сброс Keystore) приложение открывалось без пароля (NAV-04).
      * Вызывается из [init] под synchronized.
      */
     private fun evaluateInitialState() {
-        _locked.value = isPasswordSet()
+        _locked.value = true
+    }
+
+    /** Что показать поверх приложения. */
+    enum class Gate {
+        /** Ничего: блокировки нет или сессия открыта. */
+        OPEN,
+        /** Don't expose content or start recovery until the persisted setting arrives. */
+        WAITING,
+        /** Экран ввода пароля блокировки. */
+        LOCKED,
+        /**
+         * Блокировка включена, а пароля на устройстве нет (хранилище ключей сброшено, хеш повреждён): войти можно
+         * только сбросом блокировки по паролю учётной записи ([recoveryAttempt]). Раньше — приложение без пароля.
+         */
+        RECOVERY
     }
 
     /**
-     * Единая чистая логика гейта «показывать ли экран блокировки» (SOC + тестируемость):
-     * сессия заблокирована И блокировка включена в настройках И пароль реально задан.
-     * Третий член — защита от soft-lock: при рассинхроне настроек и хранилища
-     * (флаг включён, хеш отсутствует) экран невозможно пройти вводом.
+     * Нужна ли защита (NAV-04): флаг «блокировка включена» из настроек — источник истины, хеш — только способ
+     * проверки. До чтения настроек содержимое остаётся скрытым, даже если хеш потерян.
      */
-    fun shouldShowLockScreen(sessionLocked: Boolean, lockSettingEnabled: Boolean): Boolean =
-        sessionLocked && lockSettingEnabled && isPasswordSet()
+    fun lockRequired(lockFlag: Boolean?): Boolean = lockFlag != false
+
+    /**
+     * Единая чистая логика гейта (SOC + тестируемость): пока сессия заблокирована и защита нужна — экран пароля,
+     * а если проверить пароль нечем — экран сброса по паролю учётной записи. Флаг включён без хеша больше не
+     * открывает приложение (было fail-open: хеш пропал — экран блокировки не показывался).
+     */
+    fun gate(sessionLocked: Boolean, lockFlag: Boolean?, passwordSet: Boolean = isPasswordSet()): Gate = when {
+        !sessionLocked || !lockRequired(lockFlag) -> Gate.OPEN
+        lockFlag == null && !passwordSet -> Gate.WAITING
+        passwordSet -> Gate.LOCKED
+        else -> Gate.RECOVERY
+    }
+
+    /**
+     * NAV-04: попытка сброса блокировки по паролю учётной записи — с тем же счётчиком неудач и паузами, что и пароль
+     * блокировки (подбор пароля учётной записи на устройстве не быстрее подбора пароля блокировки). [verify]: true —
+     * пароль верный, false — неверный, null — проверить нечем (нет сохранённого пароля и связи с сервером); null не
+     * считается неудачей. Успех обнуляет счётчик; сам сброс (флаг, хеш) — у вызывающего: настройки пишет не менеджер.
+     */
+    suspend fun recoveryAttempt(verify: suspend () -> Boolean?): Attempt? {
+        val prefs = storage ?: return Attempt.Wrong(0, 0L)
+        lockoutRemainingMs().takeIf { it > 0L }?.let { return Attempt.LockedOut(it) }
+        val ok = verify() ?: return null
+        if (ok) {
+            resetAttempts()
+            return Attempt.Success
+        }
+        val failures = synchronized(attemptLock) {
+            val next = prefs.getInt(KEY_FAILED, 0) + 1
+            prefs.edit().putInt(KEY_FAILED, next).commit()
+            next
+        }
+        return recordFailure(prefs, failures)
+    }
+
+    /** Пауза после [failures] неудач подряд и итог неверной попытки (общий для пароля блокировки и сброса). */
+    private fun recordFailure(prefs: android.content.SharedPreferences, failures: Int): Attempt.Wrong {
+        val lockout = lockoutForFailures(failures)
+        if (lockout > 0L) synchronized(attemptLock) {
+            prefs.edit()
+                .putLong(KEY_LOCKOUT_MS, lockout)
+                .putLong(KEY_LOCKOUT_UNTIL, elapsedRealtimeMs() + lockout)
+                .putInt(KEY_LOCKOUT_BOOT, bootCount())
+                .commit()
+        }
+        return Attempt.Wrong((FREE_ATTEMPTS - failures).coerceAtLeast(0), lockout)
+    }
 
     /**
      * Чистый гейт запроса биометрической разблокировки (SOC + юнит-тестируемость):

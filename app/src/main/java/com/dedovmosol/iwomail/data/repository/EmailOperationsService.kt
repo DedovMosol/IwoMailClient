@@ -5,7 +5,14 @@ import androidx.room.withTransaction
 import com.dedovmosol.iwomail.data.database.*
 import com.dedovmosol.iwomail.domain.ReadReceipts
 import com.dedovmosol.iwomail.eas.EasResult
+import com.dedovmosol.iwomail.eas.AttachmentErrors
+import com.dedovmosol.iwomail.eas.EasAttachment
+import com.dedovmosol.iwomail.eas.EasClient
+import com.dedovmosol.iwomail.eas.EwsAttachments
 import com.dedovmosol.iwomail.eas.EwsMailFolder
+import com.dedovmosol.iwomail.eas.isEasFileReference
+import com.dedovmosol.iwomail.util.detectImageMimeType
+import com.dedovmosol.iwomail.util.normalizeContentId
 import com.dedovmosol.iwomail.eas.MailFlag
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.onSuccessResult
@@ -571,6 +578,92 @@ class EmailOperationsService(
             client.policyKey?.takeIf { it != account.policyKey }?.let { accountRepo.savePolicyKey(account.id, it) }
         }
         return result
+    }
+
+    /** Resolve only requested CIDs on the message owner's account. No body or attachment cache writes. */
+    internal suspend fun loadInlineAttachmentBytes(
+        emailId: String,
+        accountId: Long,
+        cids: Set<String>,
+        attachments: List<AttachmentEntity>,
+        maxPerImage: Long,
+        maxTotal: Long,
+        onImage: (String, ByteArray) -> Unit
+    ) {
+        val email = emailDao.getInlineAttachmentTarget(emailId)?.takeIf { it.accountId == accountId } ?: return
+        if (email.serverId.isBlank() || email.serverId.startsWith("local_draft_")) return
+        val account = accountRepo.getAccount(accountId) ?: return
+        if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) return
+        val client = accountRepo.createEasClient(accountId) ?: return
+        val folder = folderDao.getFolder(email.folderId)
+        // Base64 ItemIds need not end in padding (e.g. when the input length is divisible by three).
+        val nativeEwsId = email.serverId.takeIf(com.dedovmosol.iwomail.eas.DraftIds::isEwsItemId)
+        val locator = ewsFolderOf(folder)?.let {
+            EasClient.EwsMailLocator(email.subject, it, email.dateReceived, email.internetMessageId)
+        }
+        var refreshed: List<EasAttachment>? = null
+        var ewsEntries: List<EwsAttachments.FileAttachment>? = null
+        var remaining = maxTotal
+        val local = attachments.filter { it.emailId == emailId }
+        fun matches(id: String?, wanted: String) = id?.let { normalizeContentId(it).equals(wanted, ignoreCase = true) } == true
+        fun isCandidate(type: String, estimate: Long) =
+            (type.startsWith("image/", ignoreCase = true) || type == "application/octet-stream" || type.isBlank()) &&
+                estimate <= maxPerImage
+        suspend fun fetch(ref: String, limit: Long): EasResult<ByteArray> = when {
+            ref.isBlank() -> EasResult.Error(AttachmentErrors.NOT_FOUND)
+            isEasFileReference(ref) -> client.downloadSmallEasAttachment(ref, limit)
+            else -> client.downloadSmallEwsAttachment(ref, limit)
+        }
+        fun EasResult<ByteArray>.imageOrNull(): ByteArray? =
+            (this as? EasResult.Success)?.data?.takeIf { detectImageMimeType(it) != null }
+        for (cid in cids.take(12)) {
+            val limit = minOf(remaining, maxPerImage)
+            if (limit <= 0) break
+            val cached = local.singleOrNull { matches(it.contentId, cid) }
+            // A known PDF/oversized image cannot become an inline image by changing protocols.
+            if (cached != null && !isCandidate(cached.contentType, cached.estimatedSize)) continue
+            // Positional EAS refs can still succeed after a renumbering, with unrelated bytes.
+            // Only opaque EWS attachment IDs are safe to try without checking current metadata.
+            val oldRef = cached?.fileReference.orEmpty().takeUnless(::isEasFileReference).orEmpty()
+            val tried = fetch(oldRef, limit)
+            // A stale ref can now point at a different (even oversized) file. Refresh metadata,
+            // but do not retry the same ref; connection/auth failures still stop this candidate.
+            if (tried is EasResult.Error && AttachmentErrors.isFinal(tried.message) &&
+                tried.message != AttachmentErrors.TOO_LARGE_FOR_MEMORY) continue
+            var image = tried.imageOrNull()
+            if (image == null && nativeEwsId == null) {
+                // Read fresh refs once, without reconciling Room or requesting MIME. Reject renumbered items.
+                val entries = refreshed ?: FolderSyncGate.withFolder(email.folderId) {
+                    val result = client.fetchInlineAttachmentMetadata(folder?.serverId ?: email.folderId.substringAfter('_'), email.serverId)
+                    (result as? EasResult.Success)?.data?.takeIf { meta ->
+                        meta.subject != null && meta.dateReceived != null && bodyBelongsTo(
+                            email.subject, email.dateReceived, meta.subject, EmailSyncService.parseDate(meta.dateReceived)
+                        )
+                    }?.attachments.orEmpty()
+                }.also { refreshed = it }
+                val fresh = entries.singleOrNull { matches(it.contentId, cid) }
+                if (fresh != null && !isCandidate(fresh.contentType, fresh.estimatedSize)) continue
+                val ref = fresh?.fileReference?.takeIf { it.isNotBlank() && it != oldRef }
+                if (ref != null) {
+                    val retry = fetch(ref, limit)
+                    if (retry is EasResult.Error && AttachmentErrors.isFinal(retry.message)) continue
+                    image = retry.imageOrNull()
+                }
+            }
+            if (image == null) {
+                val entries = ewsEntries ?: client.listInlineAttachmentCandidates(nativeEwsId, locator).also { ewsEntries = it }
+                val candidate = EwsAttachments.matchInline(entries, cid)
+                if (candidate != null && candidate.id != oldRef) {
+                    image = client.downloadSmallEwsAttachment(candidate.id, limit).imageOrNull()
+                }
+            }
+            if (image != null) {
+                if (emailDao.countSameItem(emailId, email.subject, email.from, email.dateReceived) == 0) return
+                remaining -= image.size
+                onImage(cid, image)
+            }
+        }
+        client.policyKey?.takeIf { it != account.policyKey }?.let { accountRepo.savePolicyKey(accountId, it) }
     }
 
     /**

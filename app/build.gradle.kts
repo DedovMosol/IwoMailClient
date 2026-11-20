@@ -95,7 +95,19 @@ android {
         // Robolectric парсит реальные ресурсы/манифест приложения: нужно для тестов,
         // завязанных на ресурсы (напр. FileProvider + @xml/file_paths в AttachmentLoader).
         unitTests.isIncludeAndroidResources = true
-        unitTests.all { }
+        // Bound the lifetime of shared Robolectric SDK sandboxes and native Compose renderers
+        // in the large suite. This affects the test JVM only, not the Android app.
+        unitTests.all { it.forkEvery = 30 }
+    }
+}
+
+// Robolectric can load different SDK implementations of JSONObject in the same test JVM.
+// They are platform code, not our coverage targets. Do not attach Kover's shared probe array.
+kover {
+    excludeInstrumentation {
+        // SDK/framework and Compose internals are not application code. In particular, the
+        // composer and Android runtime must not share coverage probes across test sandboxes.
+        classes("org.json.*", "android.*", "androidx.*", "org.robolectric.*")
     }
 }
 

@@ -100,6 +100,21 @@ class EasAttachmentDownloadTest {
     }
 
     @Test
+    fun `inline fetch stops at its actual decoded byte budget even without a declared estimate`() = runBlocking<Unit> {
+        val small = content.copyOf(5_000)
+        val b64 = java.util.Base64.getEncoder().encodeToString(small)
+        val replies = listOf(multipartReply(fetchXml(1), small), Reply.Wbxml(
+            """<ItemOperations xmlns="ItemOperations"><Status>1</Status><Response><Fetch><Status>1</Status><Properties><Data>$b64</Data></Properties></Fetch></Response></ItemOperations>"""
+        ))
+        for (reply in replies) {
+            val exchange = FakeExchange { reply }
+            assertThat(service(exchange).downloadSmallAttachment(ref, 4_999)).isEqualTo(EasResult.Error(AttachmentErrors.TOO_LARGE_FOR_MEMORY))
+            assertThat(exchange.calls).hasSize(1)
+            assertThat((service(exchange).downloadSmallAttachment(ref, 5_000) as EasResult.Success).data).isEqualTo(small)
+        }
+    }
+
+    @Test
     fun `Status 11 is TOO_LARGE at once - no other Fetch variants and no GetAttachment`() = runBlocking<Unit> {
         lateinit var exchange: FakeExchange
         exchange = FakeExchange { multipartReply(fetchXml(11, part = null)) }

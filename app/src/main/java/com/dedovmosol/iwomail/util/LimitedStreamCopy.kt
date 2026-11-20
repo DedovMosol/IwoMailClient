@@ -116,12 +116,44 @@ internal fun readUriBytesLimited(resolver: ContentResolver, uri: Uri, maxBytes: 
 internal const val COMPOSE_ATTACHMENTS_DIR = "compose_attachments"
 internal const val SHARE_ATTACHMENTS_DIR = "share_attachments"
 
-private val UNSAFE_PICKED_FILENAME = Regex("[\\/:*?\"<>|]")
+private val UNSAFE_PICKED_FILENAME = Regex("[\\\\/:*?\"<>|\\x00-\\x1F\\x7F]")
+
+/** Предел длины имени копии: имя файла в ext4/f2fs — до 255 байт UTF-8. */
+private const val MAX_SAFE_NAME_CHARS = 120
+
+/**
+ * Имя файла от чужого провайдера (DISPLAY_NAME) для копии в каталоге приложения: без разделителей пути,
+ * управляющих символов, «.» и «..» (path traversal), не длиннее [MAX_SAFE_NAME_CHARS] с сохранением расширения.
+ */
+internal fun safeAttachmentFileName(displayName: String?): String {
+    val safe = openableDisplayName(displayName).replace(UNSAFE_PICKED_FILENAME, "_").trim()
+    if (safe.isEmpty() || safe.all { it == '.' }) return "file"
+    if (safe.length <= MAX_SAFE_NAME_CHARS) return safe
+    val dot = safe.lastIndexOf('.')
+    val ext = if (dot > 0 && safe.length - dot <= 16) safe.substring(dot) else ""
+    return safe.take(MAX_SAFE_NAME_CHARS - ext.length) + ext
+}
 
 /** Имя копии в каталоге приложения: UUID + безопасное имя, без коллизий и path traversal. */
-internal fun uniquePickedFileName(displayName: String): String {
-    val safe = openableDisplayName(displayName).replace(UNSAFE_PICKED_FILENAME, "_")
-    return "${java.util.UUID.randomUUID().toString().replace("-", "")}_$safe"
+internal fun uniquePickedFileName(displayName: String): String =
+    "${java.util.UUID.randomUUID().toString().replace("-", "")}_${safeAttachmentFileName(displayName)}"
+
+/**
+ * NAV-11: URI из «Поделиться» другого приложения можно читать, только если это чужой content://. file:// и
+ * content:// провайдеров самого приложения отклоняются: приложение открыло бы их своими правами, и чужое приложение
+ * получило бы в письме нашу базу или настройки (confused deputy).
+ */
+internal fun isForeignContentUri(context: android.content.Context, uri: Uri): Boolean {
+    if (!ContentResolver.SCHEME_CONTENT.equals(uri.scheme, ignoreCase = true)) return false
+    // ContentResolver strips the Android user/profile prefix before looking up a provider.
+    val authority = uri.authority?.substringAfterLast('@')?.takeIf { it.isNotBlank() } ?: return false
+    if (authority.equals("${context.packageName}.fileprovider", ignoreCase = true)) return false
+    val owner = try {
+        context.packageManager.resolveContentProvider(authority, 0)?.packageName
+    } catch (_: Exception) {
+        null
+    }
+    return owner != context.packageName
 }
 
 /**

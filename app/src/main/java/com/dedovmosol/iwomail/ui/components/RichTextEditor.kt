@@ -49,11 +49,6 @@ internal fun htmlToEditorChunks(html: String, chunkChars: Int = EDITOR_HTML_CHUN
     }
 }
 
-// L-3: `<base>`/`<link>` не покрываются `sanitizeEmailHtml`, но опасны в contenteditable-редакторе
-// (перебазирование относительных URL / внешние стили). Предкомпилированы для производительности.
-private val EDITOR_BASE_TAG_REGEX = Regex("<base[^>]*/?>", RegexOption.IGNORE_CASE)
-private val EDITOR_LINK_TAG_REGEX = Regex("<link[^>]*/?>", RegexOption.IGNORE_CASE)
-
 /**
  * Парсит цвет из разных форматов (hex, rgb(), rgba(), название)
  * @param colorString строка с цветом
@@ -305,15 +300,11 @@ class RichTextEditorController {
     }
 
     internal fun stripDangerousTags(html: String): String {
-        // L-3 (DRY): переиспользуем комплексный `sanitizeEmailHtml` — он вырезает
-        // script/iframe/object/embed/applet, **inline-обработчики `on*=`**, `javascript:`/
-        // `data:text/html`-URI и meta-refresh (раньше здесь резались только теги, но не обработчики).
-        // Дополнительно убираем `<base>`/`<link>`, которых нет в `sanitizeEmailHtml`.
-        // Это защита на Kotlin-стороне ДО evaluateJavascript; JS-side `sanitizeHtml` (в editorHtml)
-        // остаётся вторым барьером перед `innerHTML`.
+        // L-3 (DRY): тот же `sanitizeEmailHtml`, что и у просмотра письма: script/iframe/object/embed/applet,
+        // inline-обработчики `on*=`, `javascript:`/`data:text/html`-URI, meta-refresh, формы и поля ввода,
+        // `<base>`/`<link>`, фреймы, SVG `<use>` (MAIL-09). Защита на Kotlin-стороне ДО evaluateJavascript;
+        // JS-side `sanitizeHtml` (в editorHtml) остаётся вторым барьером перед `innerHTML`.
         return sanitizeEmailHtml(html)
-            .replace(EDITOR_BASE_TAG_REGEX, "")
-            .replace(EDITOR_LINK_TAG_REGEX, "")
     }
     fun focus() = execJs("focusEditor()")
     fun checkFormatState() = execJs("checkFormatState()")
@@ -442,7 +433,7 @@ fun RichTextEditor(
         <html>
         <head>
             <meta charset="UTF-8">
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; img-src data: cid: https: http: blob:; font-src data:; connect-src 'none';">
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; img-src data: cid: https: http: blob:; font-src data:; connect-src 'none'; ${com.dedovmosol.iwomail.util.RemoteImages.NAVIGATION_LOCKDOWN}">
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
                 * { box-sizing: border-box; }
@@ -966,7 +957,7 @@ fun RichTextEditor(
                 function sanitizeHtml(html) {
                     var temp = document.createElement('div');
                     temp.innerHTML = html;
-                    var dangerous = temp.querySelectorAll('script, iframe, object, embed, applet, meta[http-equiv], form, base, link');
+                    var dangerous = temp.querySelectorAll('script, iframe, object, embed, applet, meta[http-equiv], form, input, button, textarea, select, base, link, frameset, frame, use');
                     for (var i = 0; i < dangerous.length; i++) dangerous[i].parentNode.removeChild(dangerous[i]);
                     var all = temp.querySelectorAll('*');
                     for (var j = 0; j < all.length; j++) {
@@ -1146,6 +1137,8 @@ fun RichTextEditor(
     // Рендерер WebView умер: новый WebView (key) — один раз после падения; второе падение — текст не показывается
     var rendererGeneration by remember { mutableIntStateOf(0) }
     val rendererRecovery = remember { RendererRecovery() }
+    // Системный WebView не создался (обновляется, отключён): вместо падения приложения — объяснение и «Повторить»
+    var webViewMissing by remember { mutableStateOf(false) }
 
     // Храним актуальный callback в ref
     val onHtmlChangedRef = rememberUpdatedState(onHtmlChanged)
@@ -1296,11 +1289,27 @@ fun RichTextEditor(
         )
         return
     }
+    if (webViewMissing) {
+        androidx.compose.foundation.layout.Column(modifier = modifier.padding(16.dp)) {
+            Text(
+                text = com.dedovmosol.iwomail.ui.Strings.editorWebViewUnavailable,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            androidx.compose.material3.TextButton(onClick = {
+                webViewMissing = false
+                rendererGeneration++
+            }) {
+                Text(com.dedovmosol.iwomail.ui.Strings.retry)
+            }
+        }
+        return
+    }
 
     key(rendererGeneration) {
         AndroidView(
             factory = { ctx ->
-                WebView(ctx).apply {
+                WebViewRenderer.create(ctx)?.apply {
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT
@@ -1367,10 +1376,11 @@ fun RichTextEditor(
 
                     controller.webView = this
                     loadDataWithBaseURL(null, editorHtml, "text/html", "UTF-8", null)
-                }
+                } ?: android.view.View(ctx).also { webViewMissing = true }
             },
             modifier = modifier,
-            onRelease = { webView ->
+            onRelease = { view ->
+                val webView = view as? WebView ?: return@AndroidView
                 // Новый WebView (после падения рендерера) мог уже зарегистрироваться — его не сбрасываем
                 if (controller.webView === webView) {
                     controller.clearPendingFlush()
@@ -1379,7 +1389,8 @@ fun RichTextEditor(
                 }
                 WebViewRenderer.release(webView)
             },
-            update = { webView ->
+            update = { view ->
+                val webView = view as? WebView ?: return@AndroidView
                 if (WebViewRenderer.isGone(webView)) return@AndroidView
                 controller.webView = webView
                 // true → false: WebView сам догружает картинки уже открытой страницы, без перезагрузки редактора

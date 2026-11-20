@@ -1,105 +1,28 @@
 # Privacy Policy
 
-**Last updated:** 14 November 2026
+For source version 1.7.0 · updated 20 November 2026 · [Русский](PRIVACY_POLICY_RU.md)
 
-English: this file. Russian: [PRIVACY_POLICY_RU.md](PRIVACY_POLICY_RU.md).
+## Who receives data
 
-## Introduction
+iwo Mail Client does not route mail through a developer-operated service, include advertising SDKs or automatically upload analytics. This does not mean that data never leaves your device:
 
-iwo Mail Client ("the App") is developed by DedovMosol. This Privacy Policy explains how we handle your information when you use our application.
+- **Your mail server** receives credentials and synchronization requests. For Exchange the app uses EAS and EWS: depending on the operation it exchanges messages, attachments, drafts, contacts, events, tasks and notes. Direct Push connects directly to Exchange. IMAP and POP3 accounts receive mail; there is no SMTP sending. Mail connections use TLS; the client does not fall back to plain HTTP for older Exchange servers.
+- **Hosts of remote images and fonts** can receive your IP address, the request time and identifiers embedded in the URL. Received HTML mail blocks these resources by default. You can allow them for the current message, a trusted sender or all messages. The viewer allows remote resources in Sent, Drafts and HTML calendar event descriptions. Displaying an image already embedded in the message does not require a request to the sender’s website.
+- **Opening a web link** passes its URL to an external app. If you choose one-click unsubscribe, the client sends a request to the HTTPS URL supplied in the message without the mailbox password; the URL itself may identify your subscription. A `mailto:` link opens the composer.
+- **When checking for updates**, the app requests [release metadata](../update.json) from GitHub. The request does not include the mailbox password or mail content. Downloads use the selected APK URL in the metadata. The download host receives ordinary connection information, including your IP address. The app itself displays update notifications; Android asks for confirmation before installation or uninstallation for rollback.
 
-## Data Collection
+## What is stored on the device
 
-**We do NOT collect, store, or transmit any personal data to external servers.**
+App-private storage holds the Room database with local mail and other account data, settings, signatures, cached attachments, sending queues, sync state and local diagnostic records. A local copy of a message does not replace the one on the server. The app does not separately encrypt the mail database or attachment files.
 
-The App operates entirely on your device. All your data remains on your device and is transmitted only to the mail servers you configure (Exchange ActiveSync / EWS, IMAP, POP3).
+Mailbox and client-certificate passwords normally use `EncryptedSharedPreferences` with an Android Keystore key. If secure storage is unavailable, the fallback uses **obfuscation, not encryption**. You can refuse new password writes in that mode. Imported certificate files are copied into private storage as supplied. App lock stores a password verifier; Android performs biometric verification. [Lock recovery](SECURITY_EN.md) has different requirements from normal sign-in.
 
-## Data Stored Locally
+System backup is disabled; on Android 12 and later, extraction rules also exclude private data from device-to-device transfer. These protections do not cover files saved to Downloads, exported contacts or copies passed to another app.
 
-The following data is stored only on your device:
+## Permissions and actions you take
 
-- Email account credentials (encrypted)
-- Client certificates (.p12/.pfx files with passwords, encrypted) for mTLS authentication
-- Email messages and attachments (cached locally)
-- Drafts (stored locally and/or on the mail server)
-- Scheduled (deferred) emails awaiting send time
-- Downloaded update / rollback APK files and other app-managed local files (until deleted by you or auto-cleanup)
-- HTML signatures with formatting
-- Contacts (personal and from corporate address book)
-- Calendar events and reminders
-- Notes
-- Tasks and task reminders
-- Server certificates (if configured)
-- Certificate pinning data (SHA-256 hashes for MITM protection)
-- App settings and preferences
-- Sync history, sync checkpoints, and notification metadata used for deduplication/reliable delivery
-- Widget display data
+Network access is used for mail, remote resources and updates. The foreground service, boot receiver, exact alarms and battery optimization exemption support synchronization, scheduled sending and reminders. The app uses notifications and vibration; biometric permissions support optional fingerprint unlock. Package installation and deletion permissions are used for APK updates and rollback.
 
-## Data Transmission
+Sharing text or files into the app can add them to a draft and then transfer them to the mail server when the draft is saved or sent. Opening an attachment in another app grants access to that file; printing passes the document to Android’s print system. The widget and notifications can display mail details. Enabling app lock hides message content. The large widget still shows mailbox names and unread counts. Tapping one of those rows requires unlocking the app; the row does not give the launcher the subject or sender.
 
-The App connects only to:
-
-- Mail servers you configure (Exchange ActiveSync, Exchange Web Services, IMAP, POP3)
-- GitHub (only for checking app updates and rollbacks via `https://raw.githubusercontent.com/DedovMosol/IwoMailClient/main/update.json`)
-- No third-party analytics or advertising services
-- No personal data is sent to the developer
-
-## Permissions
-
-The App requests the following permissions:
-
-- **Internet** — to connect to mail servers and check for updates
-- **Network state** — to check network connectivity before sync
-- **Notifications** — to notify about new emails, calendar events, task reminders, and available app updates
-- **Boot completed** — to start background sync after device restart
-- **Foreground service** — for reliable background synchronization (including Direct Push — a persistent connection to the Exchange server for instant email delivery)
-- **Exact alarms** — for scheduled (deferred) email sending, calendar reminders, and task reminders
-- **Battery optimization exemption** — to ensure reliable background sync
-- **Vibration** — for haptic feedback in the app
-- **Install packages** — to install app updates downloaded from GitHub
-- **Remove packages** — to uninstall a previous/old app version during rollback or the `com.iwo.iwomail` → `com.dedovmosol.iwomail` package migration, only user confirmation triggers it
-
-## Security
-
-- Account passwords are stored encrypted using Android Keystore
-- Client certificate passwords (.p12/.pfx) are stored encrypted using Android Keystore
-- All connections to mail servers use TLS encryption by default (HTTP fallback is available for legacy servers)
-- Client certificates enable mutual TLS (mTLS) authentication for enhanced security
-- Certificate Pinning (Public Key Pinning) protection against MITM attacks — binds to server's public key (SHA-256 hash)
-- No data is shared with third parties, including the developer
-- The app has no backend servers — all data stays on your device
-
-## Interaction with Other Apps
-
-The App can receive data from other applications via Android's standard sharing mechanism:
-
-- **mailto: links** — the App can be selected as the default email client to handle mailto: links from browsers and other apps
-- **Share intent** — other apps can share text, files, and attachments to compose a new email
-- **iwomail:// URIs** — internal URI scheme used only by the home screen widget for in-app navigation (search, calendar, email, compose), no external data is involved
-- No data received from other apps is transmitted anywhere except to the mail server you configured when sending the email
-
-## Updates
-
-The app can check for updates and rollbacks by connecting to GitHub:
-
-- Update information is fetched from `https://raw.githubusercontent.com/DedovMosol/IwoMailClient/main/update.json`
-- Only version information and changelog are downloaded
-- APK files are downloaded directly from GitHub releases
-- No personal data is sent during update checks
-- Push notifications are sent when a new version is available (can be disabled in Android notification settings)
-- Updates are optional and require user confirmation
-
-## Changes to This Policy
-
-We may update this Privacy Policy from time to time. Changes will be posted in the app repository.
-
-## Contact
-
-If you have questions about this Privacy Policy:
-
-- Email: andreyid@outlook.com
-- Telegram: [@i_wantout](https://t.me/i_wantout)
-
----
-
-© 2025-2026 DedovMosol
+Policy changes are published in the repository. Questions: andreyid@outlook.com · [Telegram](https://t.me/i_wantout).

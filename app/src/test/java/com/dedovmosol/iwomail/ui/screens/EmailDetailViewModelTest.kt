@@ -331,12 +331,16 @@ class EmailDetailViewModelTest {
     // ===================== inline images =====================
 
     @Test
-    fun `inline images are loaded into state`() = runTest(dispatcher) {
-        coEvery { actions.loadInlineImages(any(), any(), any(), any(), any()) } returns mapOf("cid" to "data:img")
+    fun `inline images use decoded HTML and the message owner, not the active account`() = runTest(dispatcher) {
+        val mime = "Content-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n<p><img src=3D'ci=64:Logo'></p>"
+        val owner = ACCOUNT_ID + 1L
+        every { mailRepo.getEmail(EMAIL_ID) } returns flowOf(email().copy(body = mime, bodyType = 4, accountId = owner))
+        coEvery { actions.loadInlineImages(EMAIL_ID, owner, setOf("Logo"), mime, emptyList()) } returns mapOf("logo" to "data:img")
         val vm = createViewModel()
         advanceUntilIdle()
-        assertThat(vm.uiState.value.inlineImages).containsEntry("cid", "data:img")
-        coVerify { actions.loadInlineImages(any(), any(), any(), any(), any()) }
+        assertThat(vm.uiState.value.inlineImages).containsEntry("logo", "data:img")
+        assertThat(vm.uiState.value.email?.body).isEqualTo(mime)
+        coVerify(exactly = 1) { actions.loadInlineImages(EMAIL_ID, owner, setOf("Logo"), mime, emptyList()) }
     }
 
     // ===================== refresh =====================

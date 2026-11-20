@@ -262,6 +262,9 @@ interface EmailDao {
     @Query("SELECT * FROM emails WHERE id = :id")
     suspend fun getEmail(id: String): EmailEntity?
 
+    @Query("SELECT id, accountId, folderId, serverId, subject, `from`, dateReceived, internetMessageId FROM emails WHERE id = :id")
+    suspend fun getInlineAttachmentTarget(id: String): InlineAttachmentTarget?
+
     @Query("SELECT * FROM emails WHERE id = :id")
     fun getEmailFlow(id: String): Flow<EmailEntity?>
 

@@ -264,9 +264,17 @@ class EasAttachmentService internal constructor(
      * Вложение в память — для небольших (inline-картинки, приглашения .ics, вложения ответа и пересылки, которые
      * всё равно ограничены [MAX_ATTACHMENTS_BYTES]). Больше [MAX_IN_MEMORY_BYTES] — ошибка, файлы — [downloadAttachmentToFile].
      */
-    suspend fun downloadAttachment(fileReference: String): EasResult<ByteArray> {
-        var buffer = BoundedBuffer(MAX_IN_MEMORY_BYTES)
-        return when (val result = fetch(fileReference) { BoundedBuffer(MAX_IN_MEMORY_BYTES).also { buffer = it } }) {
+    suspend fun downloadAttachment(fileReference: String): EasResult<ByteArray> =
+        downloadAttachment(fileReference, MAX_IN_MEMORY_BYTES, MAX_INLINE_RESPONSE_BYTES)
+
+    internal suspend fun downloadSmallAttachment(fileReference: String, maxBytes: Long): EasResult<ByteArray> =
+        downloadAttachment(fileReference, maxBytes, smallAttachmentResponseLimit(maxBytes))
+
+    private suspend fun downloadAttachment(
+        fileReference: String, maxBytes: Long, maxResponseBytes: Long
+    ): EasResult<ByteArray> {
+        var buffer = BoundedBuffer(maxBytes)
+        return when (val result = fetch(fileReference, maxResponseBytes) { BoundedBuffer(maxBytes).also { buffer = it } }) {
             is EasResult.Success -> EasResult.Success(buffer.toByteArray())
             is EasResult.Error -> result
         }
@@ -290,7 +298,9 @@ class EasAttachmentService internal constructor(
     }
 
     /** Попытки по порядку; [open] открывает приёмник заново на каждую попытку (прежнее содержимое отбрасывается). */
-    private suspend fun fetch(fileReference: String, open: () -> java.io.OutputStream): EasResult<Unit> {
+    private suspend fun fetch(
+        fileReference: String, maxResponseBytes: Long = MAX_INLINE_RESPONSE_BYTES, open: () -> java.io.OutputStream
+    ): EasResult<Unit> {
         if (fileReference.isBlank()) return EasResult.Error(NOT_FOUND)
         val decoded = try { java.net.URLDecoder.decode(fileReference, "UTF-8") } catch (_: Exception) { fileReference }
         // Exchange 2007: ссылка в Fetch уже percent-encoded (%3a). Раскодированная даёт Status 15 или пустой
@@ -305,7 +315,7 @@ class EasAttachmentService internal constructor(
                 EasXmlTemplates.itemOperationsFetchAttachment(safe, withAirSyncBaseNs = false),
                 EasXmlTemplates.itemOperationsFetchAttachment(safe, range = "0-999999999")
             )) {
-                last = itemOperationsFetch(xml, open)
+                last = itemOperationsFetch(xml, maxResponseBytes, open)
                 android.util.Log.d(TAG, "ItemOperations Fetch -> ${if (last is EasResult.Success) "ok" else (last as EasResult.Error).message}")
                 if (last is EasResult.Success) return last
                 if ((last as EasResult.Error).message == TOO_LARGE) { tooLarge = true; break@attempts }
@@ -331,11 +341,11 @@ class EasAttachmentService internal constructor(
     private fun isGetAttachmentSupported(): Boolean =
         (deps.getEasVersion().substringBefore('.').toIntOrNull() ?: 12) < 14
 
-    private suspend fun itemOperationsFetch(xml: String, open: () -> java.io.OutputStream): EasResult<Unit> {
+    private suspend fun itemOperationsFetch(xml: String, maxResponseBytes: Long, open: () -> java.io.OutputStream): EasResult<Unit> {
         val job = currentCoroutineContext()[kotlinx.coroutines.Job]
         return deps.openEasCommand("ItemOperations", xml, mapOf("MS-ASAcceptMultiPart" to "T")) { resp ->
             try {
-                readFetchResponse(resp, open) { job?.ensureActive() }
+                readFetchResponse(resp, maxResponseBytes, open) { job?.ensureActive() }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(downloadError(e))
@@ -344,16 +354,24 @@ class EasAttachmentService internal constructor(
     }
 
     /** Разбор ответа Fetch; [checkActive] бросает при отмене (ответ закроет вызывающий через use). */
-    private fun readFetchResponse(resp: Response, open: () -> java.io.OutputStream, checkActive: () -> Unit): EasResult<Unit> {
+    private fun readFetchResponse(resp: Response, maxResponseBytes: Long, open: () -> java.io.OutputStream, checkActive: () -> Unit): EasResult<Unit> {
         httpError(resp.code)?.let { return EasResult.Error(it) }
         val body = resp.body ?: return EasResult.Error(NOT_FOUND)
         val contentType = resp.header("Content-Type").orEmpty()
         if (contentType.contains("multipart", ignoreCase = true)) {
             val reader = EasMultipart.Reader(body.byteStream())
-            android.util.Log.d(TAG, "multipart parts: ${reader.readHeader()}")
+            val parts = reader.readHeader()
+            val smallFetch = maxResponseBytes < MAX_INLINE_RESPONSE_BYTES
+            if (smallFetch && parts.first().let { it.offset + it.length > maxResponseBytes }) {
+                return EasResult.Error(AttachmentErrors.TOO_LARGE_FOR_MEMORY)
+            }
             val reply = EasMultipart.fetchReply(deps.parseWbxml(reader.readFirstPart()))
             statusError(reply)?.let { return EasResult.Error(it) }
             val part = reply.part ?: return EasResult.Error(NOT_FOUND)
+            val dataPart = parts.getOrNull(part) ?: return EasResult.Error(NOT_FOUND)
+            if (smallFetch && dataPart.offset + dataPart.length > maxResponseBytes) {
+                return EasResult.Error(AttachmentErrors.TOO_LARGE_FOR_MEMORY)
+            }
             val written = open().use { out -> reader.copyPart(part, out, checkActive) }
             // Exchange 2007 на раскодированную ссылку отвечает «пустым Success»: ноль байт по EAS — не файл.
             // Настоящее пустое вложение подтверждает EWS (вложение найдено по Id, Content пустой)
@@ -361,11 +379,11 @@ class EasAttachmentService internal constructor(
         }
         // Сервер не поддержал multipart: base64 внутри WBXML. Ответ читается с пределом — длина может быть
         // неизвестна (chunked); больше предела — к EWS, там поток.
-        val raw = BoundedBuffer(MAX_INLINE_RESPONSE_BYTES)
+        val raw = BoundedBuffer(maxResponseBytes)
         try {
             copy(body.byteStream(), raw, checkActive)
         } catch (_: BoundedBuffer.Overflow) {
-            return EasResult.Error(TOO_LARGE)
+            return EasResult.Error(if (maxResponseBytes < MAX_INLINE_RESPONSE_BYTES) AttachmentErrors.TOO_LARGE_FOR_MEMORY else TOO_LARGE)
         }
         val reply = deps.parseWbxml(raw.toByteArray())
         statusError(EasMultipart.fetchReply(reply))?.let { return EasResult.Error(it) }
@@ -373,9 +391,12 @@ class EasAttachmentService internal constructor(
             ?.groupValues?.get(1)?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?: return EasResult.Error(NOT_FOUND)
-        val data = java.util.Base64.getMimeDecoder().decode(base64)
-        open().use { it.write(data) }
-        return if (data.isNotEmpty()) EasResult.Success(Unit) else EasResult.Error(NOT_FOUND)
+        val written = open().use { out ->
+            java.util.Base64.getMimeDecoder().wrap(base64.byteInputStream(Charsets.US_ASCII)).use { source ->
+                copy(source, out, checkActive)
+            }
+        }
+        return if (written > 0) EasResult.Success(Unit) else EasResult.Error(NOT_FOUND)
     }
 
     /** null — Fetch успешен. Status 11 «слишком большой» — к EWS; 6/15 и прочие — следующая попытка. */
@@ -461,6 +482,9 @@ class EasAttachmentService internal constructor(
         const val NOT_FOUND = AttachmentErrors.NOT_FOUND
         const val MAX_IN_MEMORY_BYTES = 16L * 1024 * 1024
         const val MAX_INLINE_RESPONSE_BYTES = 24L * 1024 * 1024
+
+        // Base64 (including line breaks) + bounded WBXML/SOAP metadata overhead.
+        internal fun smallAttachmentResponseLimit(maxBytes: Long): Long = maxBytes * 3 / 2 + 64 * 1024
 
         fun copy(input: java.io.InputStream, out: java.io.OutputStream, onChunk: () -> Unit): Long {
             val buffer = ByteArray(64 * 1024)

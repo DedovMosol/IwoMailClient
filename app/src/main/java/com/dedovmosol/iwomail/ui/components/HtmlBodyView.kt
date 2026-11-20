@@ -29,7 +29,7 @@ import com.dedovmosol.iwomail.util.SafeToast
  * Безопасность: [html] должен быть уже пропущен через `sanitizeEmailHtml`; страница грузится с
  * `loadDataWithBaseURL(null, …)` и CSP с nonce — собственные скрипты письма не исполняются, работает
  * только наш скрипт (замер высоты, плейсхолдеры битых картинок, автоссылки). Переходы по ссылкам
- * перехватываются: mailto → [onMailto], tel → набор номера, прочее → внешний браузер.
+ * перехватываются ([EmailLinkPolicy]): mailto → [onMailto], tel → набор номера, http/https → браузер, прочее — нет.
  *
  * Высота: WebView без собственного скролла (скроллит родитель), высота карточки берётся из замера
  * содержимого после загрузки. [contentKey] — идентичность документа (id письма/события): при его
@@ -41,7 +41,7 @@ import com.dedovmosol.iwomail.util.SafeToast
 fun HtmlBodyView(
     html: String,
     contentKey: Any,
-    onMailto: (String) -> Unit,
+    onMailto: (com.dedovmosol.iwomail.util.MailtoLink) -> Unit,
     /** Загружать картинки и шрифты из интернета ([com.dedovmosol.iwomail.util.RemoteImages]). */
     remoteContentAllowed: Boolean,
 ) {
@@ -75,7 +75,8 @@ fun HtmlBodyView(
             key(rendererGeneration) {
             AndroidView(
                 factory = { ctx ->
-                    WebView(ctx).apply {
+                    // Системный WebView недоступен (обновляется, отключён): вместо падения — текст письма
+                    WebViewRenderer.create(ctx)?.apply {
                         webViewRef = this
                         settings.apply {
                             javaScriptEnabled = true // Нужен для измерения высоты
@@ -88,7 +89,9 @@ fun HtmlBodyView(
                             setSupportZoom(true)
                             // Встроенные картинки (data:) — всегда; сеть — только с разрешения (см. update)
                             loadsImagesAutomatically = true
-                            // Разрешаем смешанный контент (http изображения на https странице)
+                            blockNetworkImage = true
+                            blockNetworkLoads = true
+                            // HTTP-картинки не разрешаем даже после включения HTTPS-изображений.
                             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
                             allowFileAccess = false
                             allowContentAccess = false
@@ -132,38 +135,41 @@ fun HtmlBodyView(
                         // Измеряем высоту контента после загрузки
                         webViewClient = object : android.webkit.WebViewClient() {
                             override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
-                                request?.url?.let { uri ->
-                                    when (uri.scheme) {
-                                        "mailto" -> {
-                                            // Открываем окно написания письма в нашем приложении
-                                            val mailtoRecipient = uri.schemeSpecificPart.substringBefore("?")
-                                            onMailto(mailtoRecipient)
-                                        }
-                                        "tel" -> {
-                                            // Номеронабиратель с fallback на буфер обмена (планшеты без телефона)
-                                            try {
-                                                context.startActivity(android.content.Intent(android.content.Intent.ACTION_DIAL, uri))
-                                            } catch (_: Exception) {
-                                                val phone = uri.schemeSpecificPart
-                                                val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                                cm.setPrimaryClip(android.content.ClipData.newPlainText("Phone", phone))
-                                                SafeToast.short(context, if (isRussian) "Номер скопирован" else "Number copied")
-                                            }
-                                        }
-                                        else -> {
-                                            // http/https и прочее — открываем в браузере
-                                            try {
-                                                context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, uri))
-                                            } catch (_: Exception) {
-                                                val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                                cm.setPrimaryClip(android.content.ClipData.newPlainText("Link", uri.toString()))
-                                                SafeToast.short(context, if (isRussian) "Ссылка скопирована" else "Link copied")
-                                            }
+                                // Страница письма никуда не переходит сама: true — переход WebView отменён всегда
+                                val uri = request?.url ?: return true
+                                when (EmailLinkPolicy.decide(uri.scheme, request.isForMainFrame, request.hasGesture())) {
+                                    EmailLinkPolicy.Action.IGNORE -> Unit
+                                    EmailLinkPolicy.Action.BLOCK ->
+                                        SafeToast.short(context, if (isRussian) "Такие ссылки не открываются" else "This kind of link isn't opened")
+                                    EmailLinkPolicy.Action.MAIL ->
+                                        // Окно письма в приложении — со всеми полями ссылки (копия, тема, текст)
+                                        com.dedovmosol.iwomail.util.MailtoLink.parse(uri.toString())?.let(onMailto)
+                                    EmailLinkPolicy.Action.DIAL -> {
+                                        // Номеронабиратель с fallback на буфер обмена (планшеты без телефона)
+                                        try {
+                                            context.startActivity(android.content.Intent(android.content.Intent.ACTION_DIAL, uri))
+                                        } catch (_: Exception) {
+                                            val phone = uri.schemeSpecificPart
+                                            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                            cm.setPrimaryClip(android.content.ClipData.newPlainText("Phone", phone))
+                                            SafeToast.short(context, if (isRussian) "Номер скопирован" else "Number copied")
                                         }
                                     }
-                                    return true
+                                    EmailLinkPolicy.Action.BROWSE -> {
+                                        // Только http/https и только браузеру (CATEGORY_BROWSABLE), как ссылку со страницы
+                                        try {
+                                            context.startActivity(
+                                                android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
+                                                    .addCategory(android.content.Intent.CATEGORY_BROWSABLE)
+                                            )
+                                        } catch (_: Exception) {
+                                            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                            cm.setPrimaryClip(android.content.ClipData.newPlainText("Link", uri.toString()))
+                                            SafeToast.short(context, if (isRussian) "Ссылка скопирована" else "Link copied")
+                                        }
+                                    }
                                 }
-                                return false
+                                return true
                             }
 
                             override fun onPageFinished(view: WebView?, url: String?) {
@@ -201,13 +207,15 @@ fun HtmlBodyView(
                                 return true
                             }
                         }
-                    }
+                    } ?: android.view.View(ctx).also { rendererFailed = true }
                 },
-                onRelease = { webView ->
+                onRelease = { view ->
+                    val webView = view as? WebView ?: return@AndroidView
                     if (webViewRef === webView) webViewRef = null
                     WebViewRenderer.release(webView)
                 },
-                update = { webView ->
+                update = { view ->
+                    val webView = view as? WebView ?: return@AndroidView
                     if (WebViewRenderer.isGone(webView)) return@AndroidView
                     webViewRef = webView
                     if (html == lastLoadedHtml && remoteContentAllowed == lastRemoteAllowed) return@AndroidView
@@ -215,12 +223,10 @@ fun HtmlBodyView(
                     // Сеть закрыта дважды: CSP страницы и запрет загрузок самого WebView
                     webView.settings.blockNetworkImage = !remoteContentAllowed
                     webView.settings.blockNetworkLoads = !remoteContentAllowed
-                    webView.settings.mixedContentMode =
-                        if (remoteContentAllowed) android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                        else android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
 
                     try {
                         val nonce = java.util.UUID.randomUUID().toString().replace("-", "")
+                        val displayHtml = com.dedovmosol.iwomail.util.RemoteImages.prepareForWebView(html, remoteContentAllowed)
 
                         // DOCTYPE XHTML Transitional — «почти стандартный» режим, как в вёрстке писем: без него (quirks)
                         // body и height:100% растягиваются на высоту окна, и замер не меньше уже выставленной высоты —
@@ -230,6 +236,8 @@ fun HtmlBodyView(
                         <html>
                         <head>
                             <meta http-equiv="Content-Security-Policy" content="${com.dedovmosol.iwomail.util.RemoteImages.contentSecurityPolicy(nonce, remoteContentAllowed)}">
+                            <meta name="referrer" content="no-referrer">
+                            <meta http-equiv="x-dns-prefetch-control" content="off">
                             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes">
                             <style>
                                 html { margin: 0 !important; padding: 0 !important; }
@@ -355,25 +363,27 @@ fun HtmlBodyView(
                                     var p = node.parentNode;
                                     if (p && (p.tagName === 'SCRIPT' || p.tagName === 'STYLE')) return;
                                     var text = node.textContent;
-                                    var html = text.replace(
-                                        /(https?:\/\/[^\s<>"']+)|(\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b)|(\+?\d[\d\s\-()]{6,}\d)/g,
-                                        function(m, url, email, phone) {
-                                            if (url) return '<a href="' + url + '">' + url + '</a>';
-                                            if (email) return '<a href="mailto:' + email + '">' + email + '</a>';
-                                            if (phone) return '<a href="tel:' + phone.replace(/[\s\-()]/g, '') + '">' + phone + '</a>';
-                                            return m;
-                                        }
-                                    );
-                                    if (html !== text) {
-                                        var span = document.createElement('span');
-                                        span.innerHTML = html;
-                                        p.replaceChild(span, node);
+                                    var matches = /(https?:\/\/[^\s<>"']+)|(\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b)|(\+?\d[\d\s\-()]{6,}\d)/g;
+                                    var match, end = 0;
+                                    var links = document.createDocumentFragment();
+                                    while ((match = matches.exec(text)) !== null) {
+                                        links.appendChild(document.createTextNode(text.slice(end, match.index)));
+                                        var a = document.createElement('a');
+                                        a.href = match[1] || (match[2] ? 'mailto:' + match[2] : 'tel:' + match[3].replace(/[\s\-()]/g, ''));
+                                        a.textContent = match[0];
+                                        links.appendChild(a);
+                                        end = matches.lastIndex;
+                                    }
+                                    // Preserve escaped markup as text: innerHTML would bypass the sanitizer.
+                                    if (end > 0) {
+                                        links.appendChild(document.createTextNode(text.slice(end)));
+                                        p.replaceChild(links, node);
                                     }
                                 });
                             });
                             </script>
                         </head>
-                        <body>$html</body>
+                        <body>$displayHtml</body>
                         </html>
                         """.trimIndent()
                         webView.loadDataWithBaseURL(null, styledHtml, "text/html", "UTF-8", null)
@@ -391,6 +401,27 @@ fun HtmlBodyView(
             }
     }
 }
+}
+
+/**
+ * Что делать с переходом со страницы письма (MAIL-10). Открывается только то, что пользователь нажал сам
+ * ([hasGesture]) в основной странице: переход без касания (скрипт, meta refresh, редирект) или из фрейма — ничего
+ * не открывает и не беспокоит. Из нажатого — только http/https (браузер), mailto (письмо), tel (набор номера);
+ * intent:, javascript:, file:, content:, data: и прочие схемы не открываются: ими письмо запустило бы чужое
+ * приложение или файл приложения.
+ */
+internal object EmailLinkPolicy {
+    enum class Action { IGNORE, BLOCK, MAIL, DIAL, BROWSE }
+
+    fun decide(scheme: String?, isForMainFrame: Boolean, hasGesture: Boolean): Action {
+        if (!isForMainFrame || !hasGesture) return Action.IGNORE
+        return when (scheme?.lowercase(java.util.Locale.ROOT)) {
+            "http", "https" -> Action.BROWSE
+            "mailto" -> Action.MAIL
+            "tel" -> Action.DIAL
+            else -> Action.BLOCK
+        }
+    }
 }
 
 /** Сколько символов текста письма показывать без оформления: длинный Text раскладывается на главном потоке. */

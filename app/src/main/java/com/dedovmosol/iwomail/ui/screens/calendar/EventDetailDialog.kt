@@ -52,6 +52,7 @@ internal fun EventDetailDialog(
     calendarRepo: CalendarRepository,
     onDismiss: () -> Unit,
     onComposeClick: (String) -> Unit = {},
+    onComposeMailto: (com.dedovmosol.iwomail.util.MailtoLink) -> Unit = { onComposeClick(it.to.joinToString(", ")) },
     onEditClick: () -> Unit = {},
     onDeleteClick: () -> Unit = {},
     categoryColors: CategoryColors = CategoryColors.EMPTY
@@ -442,7 +443,7 @@ internal fun EventDetailDialog(
                             com.dedovmosol.iwomail.ui.components.HtmlBodyView(
                                 html = html,
                                 contentKey = event.id,
-                                onMailto = onComposeClick,
+                                onMailto = onComposeMailto,
                                 // Событие своего календаря — как раньше, с картинками
                                 remoteContentAllowed = true
                             )

@@ -144,6 +144,26 @@ class SearchViewModelTest {
         assertThat(state.selectedIds).isEmpty()
     }
 
+    @Test
+    fun `editing the query clears old rows and selection before the debounce`() = runTest(dispatcher) {
+        coEvery { mailRepo.search(ACCOUNT_ID, "report") } returns listOf(email("1"))
+        val vm = createViewModel()
+        advanceUntilIdle()
+        vm.onQueryChange("report")
+        vm.search()
+        advanceUntilIdle()
+        vm.addToSelection("1")
+        vm.setOnlyThreads(true)
+        vm.setDateFilter(DateFilter.WEEK)
+        vm.onQueryChange("different")
+        assertThat(vm.uiState.value.allResults).isEmpty()
+        assertThat(vm.uiState.value.selectedIds).isEmpty()
+        assertThat(vm.uiState.value.onlyThreads).isTrue()
+        vm.clearFilters()
+        assertThat(vm.uiState.value.onlyThreads).isFalse()
+        assertThat(vm.uiState.value.dateFilter).isEqualTo(DateFilter.ALL)
+    }
+
     // ===================== selection =====================
 
     @Test

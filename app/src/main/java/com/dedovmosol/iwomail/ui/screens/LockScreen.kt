@@ -1,7 +1,9 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import com.dedovmosol.iwomail.ui.utils.tryRequestFocus
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
@@ -54,7 +56,6 @@ fun LockScreen(
     biometricEnabled: Boolean,
     onBiometricRequest: () -> Unit
 ) {
-    val colorTheme = LocalColorTheme.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
 
     // Строки — захватываем в замыкания из композабельного контекста (единая точка чтения).
@@ -95,26 +96,17 @@ fun LockScreen(
 
     // Автофокус на поле пароля — когда отпечатка нет: иначе клавиатура открылась бы под системным диалогом.
     LaunchedEffect(Unit) {
-        if (!fingerprintOffered) focusRequester.requestFocus()
+        if (!fingerprintOffered) focusRequester.tryRequestFocus()
     }
 
     // NAV-01: пауза после серии неверных попыток (переживает перезапуск и смерть процесса — хранится в AppLockManager)
-    var lockoutRemainingMs by remember { mutableLongStateOf(0L) }
-    var attemptsBeforeLockout by remember { mutableIntStateOf(AppLockManager.FREE_ATTEMPTS) }
-    val lockedOut = lockoutRemainingMs > 0L
-    LaunchedEffect(Unit) {
-        lockoutRemainingMs = withContext(Dispatchers.IO) { AppLockManager.lockoutRemainingMs() }
-    }
-    LaunchedEffect(lockedOut) {
-        if (!lockedOut) return@LaunchedEffect
-        while (lockoutRemainingMs > 0L) {
-            kotlinx.coroutines.delay(minOf(1_000L, lockoutRemainingMs))
-            lockoutRemainingMs = withContext(Dispatchers.IO) { AppLockManager.lockoutRemainingMs() }
-        }
+    var lockoutRemainingMs by rememberLockoutRemainingMs {
         // Пауза кончилась: старое «неверный пароль» убрать, поле снова доступно — вернуть в него фокус
         showWrongPassword = false
-        if (!fingerprintOffered) focusRequester.requestFocus()
+        if (!fingerprintOffered) focusRequester.tryRequestFocus()
     }
+    var attemptsBeforeLockout by remember { mutableIntStateOf(AppLockManager.FREE_ATTEMPTS) }
+    val lockedOut = lockoutRemainingMs > 0L
     val attemptMessage = Strings.appLockAttemptState(attemptsBeforeLockout, lockoutRemainingMs)
 
     /** Общая точка проверки пароля (кнопка + IME-действие). Тяжёлый PBKDF2 — на IO. */
@@ -156,44 +148,7 @@ fun LockScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // Градиентный круг с иконкой замка — визуальный якорь безопасности.
-            Box(
-                modifier = Modifier
-                    .size(88.dp)
-                    .background(
-                        brush = Brush.linearGradient(
-                            colors = listOf(colorTheme.gradientStart, colorTheme.gradientEnd)
-                        ),
-                        shape = CircleShape
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    AppIcons.Lock,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(44.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            Text(
-                text = titleLabel,
-                style = MaterialTheme.typography.headlineSmall,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = descLabel,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(28.dp))
+            LockHeader(title = titleLabel, description = descLabel)
 
             OutlinedTextField(
                 value = password,
@@ -213,13 +168,7 @@ fun LockScreen(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 keyboardActions = KeyboardActions(onDone = { tryUnlock() }),
                 trailingIcon = {
-                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                        Icon(
-                            imageVector = if (passwordVisible)
-                                AppIcons.VisibilityOff else AppIcons.Visibility,
-                            contentDescription = null
-                        )
-                    }
+                    com.dedovmosol.iwomail.ui.components.PasswordVisibilityToggle(passwordVisible) { passwordVisible = it }
                 }
             )
 
@@ -269,6 +218,217 @@ fun LockScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+/** Шапка экранов блокировки: градиентный круг с замком, заголовок, пояснение (DRY: пароль и сброс). */
+@Composable
+private fun LockHeader(title: String, description: String) {
+    val colorTheme = LocalColorTheme.current
+    // Градиентный круг с иконкой замка — визуальный якорь безопасности.
+    Box(
+        modifier = Modifier
+            .size(88.dp)
+            .background(
+                brush = Brush.linearGradient(colors = listOf(colorTheme.gradientStart, colorTheme.gradientEnd)),
+                shape = CircleShape
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(AppIcons.Lock, contentDescription = null, tint = Color.White, modifier = Modifier.size(44.dp))
+    }
+    Spacer(modifier = Modifier.height(24.dp))
+    Text(text = title, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(
+        text = description,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center
+    )
+    Spacer(modifier = Modifier.height(28.dp))
+}
+
+/**
+ * NAV-01: оставшаяся пауза между попытками (хранится в [AppLockManager], переживает перезапуск), отсчёт раз в
+ * секунду; [onEnd] — пауза кончилась. Один отсчёт для экрана пароля и экрана сброса (DRY).
+ */
+@Composable
+private fun rememberLockoutRemainingMs(onEnd: () -> Unit): MutableLongState {
+    val remaining = remember { mutableLongStateOf(0L) }
+    val currentOnEnd by rememberUpdatedState(onEnd)
+    LaunchedEffect(Unit) {
+        remaining.longValue = withContext(Dispatchers.IO) { AppLockManager.lockoutRemainingMs() }
+    }
+    val lockedOut = remaining.longValue > 0L
+    LaunchedEffect(lockedOut) {
+        if (!lockedOut) return@LaunchedEffect
+        while (remaining.longValue > 0L) {
+            kotlinx.coroutines.delay(minOf(1_000L, remaining.longValue))
+            remaining.longValue = withContext(Dispatchers.IO) { AppLockManager.lockoutRemainingMs() }
+        }
+        currentOnEnd()
+    }
+    return remaining
+}
+
+/**
+ * NAV-04: блокировка включена, а её пароля на устройстве нет (хранилище ключей Android сброшено, хеш повреждён).
+ * Раньше приложение в этом случае открывалось без пароля. Теперь войти можно только паролем учётной записи
+ * (активной): он сверяется с сохранённым или, если сохранённого нет, входом на сервер Exchange. После проверки
+ * блокировка выключается — пароль блокировки задаётся заново в настройках. Попытки считаются и ограничиваются
+ * паузами так же, как пароль блокировки. Учётных записей нет — защищать нечего, блокировка выключается сразу.
+ */
+@Composable
+fun LockRecoveryScreen() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
+    val accountRepo = remember { com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(context) }
+    val settingsRepo = remember { com.dedovmosol.iwomail.data.repository.RepositoryProvider.getSettingsRepository(context) }
+    val unavailableLabel = Strings.appLockRecoveryUnavailable
+    val doneLabel = Strings.appLockRecoveryDone
+
+    // Выйти можно только сбросом (как с экрана пароля)
+    BackHandler(enabled = true) { /* намеренно пусто */ }
+
+    var account by remember { mutableStateOf<com.dedovmosol.iwomail.data.database.AccountEntity?>(null) }
+    // Пароль — только в памяти (remember), не в сохранённом состоянии
+    var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+    var isChecking by remember { mutableStateOf(false) }
+    var showWrongPassword by remember { mutableStateOf(false) }
+    var unavailable by remember { mutableStateOf(false) }
+    var attemptsBeforeLockout by remember { mutableIntStateOf(AppLockManager.FREE_ATTEMPTS) }
+    var lockoutRemainingMs by rememberLockoutRemainingMs { showWrongPassword = false }
+    val lockedOut = lockoutRemainingMs > 0L
+    val attemptMessage = Strings.appLockAttemptState(attemptsBeforeLockout, lockoutRemainingMs)
+
+    /** Сброс: сначала флаг (гейт сразу открывается), затем хеш; виджет снова показывает содержимое. */
+    suspend fun turnOffLock() {
+        // The successful reset removes this screen. Finish the authenticated state transition
+        // even if its composition scope is cancelled when DataStore emits the new flag.
+        withContext(kotlinx.coroutines.NonCancellable) {
+            settingsRepo.setAppLockBiometricEnabled(false)
+            settingsRepo.setAppLockEnabled(false)
+            AppLockManager.removePassword()
+            com.dedovmosol.iwomail.widget.updateMailWidget(context.applicationContext)
+        }
+        com.dedovmosol.iwomail.util.SafeToast.long(context, doneLabel)
+    }
+
+    LaunchedEffect(Unit) {
+        val found = withContext(Dispatchers.IO) {
+            accountRepo.getActiveAccountSync() ?: accountRepo.accounts.first().firstOrNull()
+        }
+        if (found == null) turnOffLock() else account = found
+    }
+
+    fun tryReset() {
+        val target = account ?: return
+        if (isChecking || password.isEmpty() || lockedOut) return
+        isChecking = true
+        unavailable = false
+        val candidate = password
+        scope.launch {
+            val result = try {
+                withContext(Dispatchers.IO) {
+                    AppLockManager.recoveryAttempt { accountRepo.verifyAccountPassword(target.id, candidate) }
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null // Storage or transport failure is not a wrong password.
+            } finally {
+                isChecking = false
+            }
+            when (result) {
+                null -> unavailable = true
+                AppLockManager.Attempt.Success -> {
+                    password = ""
+                    turnOffLock()
+                }
+                is AppLockManager.Attempt.Wrong -> {
+                    attemptsBeforeLockout = result.attemptsBeforeLockout
+                    lockoutRemainingMs = result.lockoutMs
+                    showWrongPassword = true
+                    if (result.lockoutMs > 0L) password = ""
+                }
+                is AppLockManager.Attempt.LockedOut -> {
+                    lockoutRemainingMs = result.remainingMs
+                    showWrongPassword = true
+                    password = ""
+                }
+            }
+        }
+    }
+
+    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        // Текст длиннее, чем на экране пароля: с клавиатурой на маленьком экране — прокрутка, иначе — по центру
+        BoxWithConstraints(modifier = Modifier.fillMaxSize().imePadding()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                .heightIn(min = maxHeight)
+                .padding(horizontal = 32.dp, vertical = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            val target = account
+            if (target == null) {
+                CircularProgressIndicator()
+                return@Column
+            }
+            LockHeader(title = Strings.appLockRecoveryTitle, description = Strings.appLockRecoveryDesc(target.email))
+
+            OutlinedTextField(
+                value = password,
+                onValueChange = {
+                    password = it
+                    showWrongPassword = false
+                    unavailable = false
+                },
+                label = { Text(Strings.appLockRecoveryPassword) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                isError = showWrongPassword || lockedOut,
+                enabled = !isChecking && !lockedOut,
+                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                keyboardActions = KeyboardActions(onDone = { tryReset() }),
+                trailingIcon = {
+                    com.dedovmosol.iwomail.ui.components.PasswordVisibilityToggle(passwordVisible) { passwordVisible = it }
+                }
+            )
+
+            val message = when {
+                showWrongPassword || lockedOut -> attemptMessage
+                unavailable -> unavailableLabel
+                else -> null
+            }
+            if (message != null) {
+                Text(
+                    text = message,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp)
+                        .semantics { liveRegion = LiveRegionMode.Polite }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            ThemeButton(
+                onClick = { tryReset() },
+                enabled = password.isNotEmpty() && !lockedOut,
+                isLoading = isChecking
+            ) {
+                Text(Strings.appLockRecoveryAction, color = Color.White)
+            }
+        }
         }
     }
 }

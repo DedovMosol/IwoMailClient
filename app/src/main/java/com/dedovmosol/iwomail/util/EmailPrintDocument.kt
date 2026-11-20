@@ -15,7 +15,7 @@ object EmailPrintDocument {
         val rows = listOf(labels.from to header.from, labels.to to header.to, labels.cc to header.cc, labels.date to header.date)
             .filter { (_, value) -> value.isNotBlank() }
             .joinToString("") { (label, value) -> "<tr><th>${label.escapeHtml()}</th><td>${value.escapeHtml()}</td></tr>" }
-        val content = if (bodyIsHtml) body else "<div class=\"plain\">${body.escapeHtml()}</div>"
+        val content = if (bodyIsHtml) RemoteImages.prepareForWebView(body, remoteAllowed) else "<div class=\"plain\">${body.escapeHtml()}</div>"
         // script-src без nonce: на странице печати скриптов нет
         val csp = RemoteImages.contentSecurityPolicy(nonce = "none", remoteAllowed = remoteAllowed).escapeHtml()
         return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" +

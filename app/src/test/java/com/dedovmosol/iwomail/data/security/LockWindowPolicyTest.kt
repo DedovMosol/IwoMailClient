@@ -28,9 +28,9 @@ class LockWindowPolicyTest {
     }
 
     @Test
-    fun `lock privacy needs both the setting and a password`() {
-        assertThat(LockPrivacy.hides(lockEnabled = true, passwordSet = true)).isTrue()
-        assertThat(LockPrivacy.hides(lockEnabled = true, passwordSet = false)).isFalse()
-        assertThat(LockPrivacy.hides(lockEnabled = false, passwordSet = true)).isFalse()
+    fun `lock privacy follows the setting, a lost password does not reveal content (NAV-04)`() {
+        assertThat(LockPrivacy.hides(lockEnabled = true)).isTrue()
+        assertThat(LockPrivacy.hides(lockEnabled = false)).isFalse()
+        assertThat(LockPrivacy.hides(lockEnabled = null)).isTrue()
     }
 }

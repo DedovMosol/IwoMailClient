@@ -13,11 +13,12 @@ import com.dedovmosol.iwomail.util.normalizeContentId
  */
 internal object EwsAttachments {
 
-    data class FileAttachment(val id: String, val name: String, val contentId: String?)
+    data class FileAttachment(val id: String, val name: String, val contentId: String?, val contentType: String? = null)
 
     private val FILE_ATTACHMENT = Regex("<(?:t:)?FileAttachment>(.*?)</(?:t:)?FileAttachment>", RegexOption.DOT_MATCHES_ALL)
     private val ATTACHMENT_ID = Regex("<(?:t:)?AttachmentId\\b[^>]*\\bId=\"([^\"]+)\"")
     private val NAME = Regex("<(?:t:)?Name>(.*?)</(?:t:)?Name>", RegexOption.DOT_MATCHES_ALL)
+    private val CONTENT_TYPE = Regex("<(?:t:)?ContentType>([^<]*)</(?:t:)?ContentType>")
     private val CONTENT_ID = Regex("<(?:t:)?ContentId>(.*?)</(?:t:)?ContentId>", RegexOption.DOT_MATCHES_ALL)
 
     private fun envelope(body: String) = """<?xml version="1.0" encoding="utf-8"?>
@@ -45,9 +46,18 @@ internal object EwsAttachments {
         FileAttachment(
             id = XmlUtils.unescape(id),
             name = XmlUtils.unescape(NAME.find(xml)?.groupValues?.get(1).orEmpty()),
-            contentId = CONTENT_ID.find(xml)?.groupValues?.get(1)?.let(XmlUtils::unescape)
+            contentId = CONTENT_ID.find(xml)?.groupValues?.get(1)?.let(XmlUtils::unescape),
+            contentType = CONTENT_TYPE.find(xml)?.groupValues?.get(1)?.let(XmlUtils::unescape)
         )
     }.toList()
+
+    /** Unlike file download, auto-display requires an unambiguous Content-ID, not just a name. */
+    fun matchInline(attachments: List<FileAttachment>, cid: String): FileAttachment? =
+        attachments.singleOrNull { att -> att.contentId?.let { normalizeContentId(it).equals(cid, ignoreCase = true) } == true }
+            ?.takeIf { att ->
+                val mime = com.dedovmosol.iwomail.util.attachmentMimeType(att.contentType, att.name)
+                mime.startsWith("image/", ignoreCase = true) || mime == "application/octet-stream"
+            }
 
     /**
      * Вложение для EAS-вложения с [name] и [contentId]: единственное с тем же именем; несколько — уточнение

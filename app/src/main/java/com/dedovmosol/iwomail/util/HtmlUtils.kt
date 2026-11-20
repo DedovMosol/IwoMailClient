@@ -17,6 +17,13 @@ fun String.escapeHtml(): String = this
     .replace("'", "&#39;")
 
 /**
+ * Обычный текст (тело mailto:, текст из «Поделиться») для HTML-редактора: символы экранируются (текст «<b>» остаётся
+ * текстом, а не разметкой), переводы строк — <br>.
+ */
+fun plainTextToHtml(text: String): String =
+    text.replace("\r\n", "\n").replace('\r', '\n').escapeHtml().replace("\n", "<br>")
+
+/**
  * Предкомпилированные regex для парсинга HTML (производительность)
  * Используются в ComposeScreen и MailRepository
  */
@@ -92,6 +99,17 @@ private val SANITIZE_JS_URI_SINGLE = Regex("""(?i)(href|src|action|formaction|xl
 private val SANITIZE_DATA_HTML_DOUBLE = Regex("""(?i)(href|src|action|formaction|xlink:href)\s*=\s*"\s*data:text/html[^"]*"""")
 private val SANITIZE_DATA_HTML_SINGLE = Regex("""(?i)(href|src|action|formaction|xlink:href)\s*=\s*'\s*data:text/html[^']*'""")
 
+/**
+ * MAIL-09: теги, которые письму не нужны, а фишингу и слежке — да. Убираются только сами теги, текст между ними
+ * остаётся (рассылки оборачивают в `<form>` всё письмо). Формы и поля ввода — поддельный вход «введите пароль»
+ * прямо в письме; `<base>` — подмена адресов относительных ссылок; `<link>` — внешние стили и dns-prefetch/prefetch
+ * (запрос на сервер отправителя при открытии, мимо запрета картинок: CSP их не закрывает); `<frame>`/`<frameset>` —
+ * чужая страница внутри письма; SVG `<use>` — подгрузка внешнего SVG. Имя — целиком (`<input`, но не `<inputs`).
+ */
+private val SANITIZE_STRIPPED_TAGS = arrayOf(
+    "form", "input", "button", "textarea", "select", "base", "link", "frameset", "frame", "use"
+)
+
 fun sanitizeEmailHtml(html: String): String {
     var h = html
     for (tag in arrayOf("script", "iframe", "object")) {
@@ -102,6 +120,7 @@ fun sanitizeEmailHtml(html: String): String {
     h = removePairedTags(h, "applet")
     h = removeOpenCloseTags(h, "applet")
     h = removeTags(h, "<meta", requireBoundary = true) { tag -> SANITIZE_META_REFRESH_ATTR.containsMatchIn(tag) }
+    h = removeNamedTags(h, SANITIZE_STRIPPED_TAGS)
     return h
         .replace(SANITIZE_EVENT_DOUBLE, "")
         .replace(SANITIZE_EVENT_SINGLE, "")
@@ -150,6 +169,39 @@ private fun removePairedTags(s: String, tag: String): String {
         sb.append(s, copyFrom, p)
         copyFrom = c + close.length
         p = indexOfAscii(s, open, copyFrom)
+    }
+    val sb = out ?: return s
+    sb.append(s, copyFrom, s.length)
+    return sb.toString()
+}
+
+/**
+ * Одним проходом заменяет пробелом теги `<name…>` и `</name…>` с именем из [names] целиком (после имени не
+ * буква/цифра/`_`/`-`: `<input`, но не `<inputs>`) — то же, что
+ * `(?i)</?(?:name1|name2…)(?![\p{L}\p{Nd}_-])[^>]*>` → `" "`. Пробел, а не пустота: из остатков вокруг удалённого тега
+ * не собирается новый (`<fo<input>rm>` даёт `<fo rm>`, а не `<form>`); в тексте пробелы схлопываются.
+ */
+private fun removeNamedTags(s: String, names: Array<String>): String {
+    var out: StringBuilder? = null
+    var copyFrom = 0
+    var lt = s.indexOf('<')
+    while (lt >= 0) {
+        val nameAt = if (lt + 1 < s.length && s[lt + 1] == '/') lt + 2 else lt + 1
+        val name = names.firstOrNull { name ->
+            val after = nameAt + name.length
+            regionMatchesAscii(s, nameAt, name) &&
+                (after >= s.length || !(s[after].isLetterOrDigit() || s[after] == '_' || s[after] == '-'))
+        }
+        if (name != null) {
+            val gt = s.indexOf('>', nameAt + name.length)
+            if (gt < 0) break
+            val sb = out ?: StringBuilder(s.length).also { out = it }
+            sb.append(s, copyFrom, lt).append(' ')
+            copyFrom = gt + 1
+            lt = s.indexOf('<', copyFrom)
+        } else {
+            lt = s.indexOf('<', lt + 1)
+        }
     }
     val sb = out ?: return s
     sb.append(s, copyFrom, s.length)
