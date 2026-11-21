@@ -365,12 +365,11 @@ fun LockRecoveryScreen() {
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         // Текст длиннее, чем на экране пароля: с клавиатурой на маленьком экране — прокрутка, иначе — по центру
-        BoxWithConstraints(modifier = Modifier.fillMaxSize().imePadding()) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
+                .imePadding()
                 .verticalScroll(androidx.compose.foundation.rememberScrollState())
-                .heightIn(min = maxHeight)
                 .padding(horizontal = 32.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
@@ -378,57 +377,56 @@ fun LockRecoveryScreen() {
             val target = account
             if (target == null) {
                 CircularProgressIndicator()
-                return@Column
-            }
-            LockHeader(title = Strings.appLockRecoveryTitle, description = Strings.appLockRecoveryDesc(target.email))
+            } else {
+                LockHeader(title = Strings.appLockRecoveryTitle, description = Strings.appLockRecoveryDesc(target.email))
 
-            OutlinedTextField(
-                value = password,
-                onValueChange = {
-                    password = it
-                    showWrongPassword = false
-                    unavailable = false
-                },
-                label = { Text(Strings.appLockRecoveryPassword) },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                isError = showWrongPassword || lockedOut,
-                enabled = !isChecking && !lockedOut,
-                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                keyboardActions = KeyboardActions(onDone = { tryReset() }),
-                trailingIcon = {
-                    com.dedovmosol.iwomail.ui.components.PasswordVisibilityToggle(passwordVisible) { passwordVisible = it }
-                }
-            )
-
-            val message = when {
-                showWrongPassword || lockedOut -> attemptMessage
-                unavailable -> unavailableLabel
-                else -> null
-            }
-            if (message != null) {
-                Text(
-                    text = message,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp)
-                        .semantics { liveRegion = LiveRegionMode.Polite }
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = {
+                        password = it
+                        showWrongPassword = false
+                        unavailable = false
+                    },
+                    label = { Text(Strings.appLockRecoveryPassword) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    isError = showWrongPassword || lockedOut,
+                    enabled = !isChecking && !lockedOut,
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    keyboardActions = KeyboardActions(onDone = { tryReset() }),
+                    trailingIcon = {
+                        com.dedovmosol.iwomail.ui.components.PasswordVisibilityToggle(passwordVisible) { passwordVisible = it }
+                    }
                 )
-            }
 
-            Spacer(modifier = Modifier.height(20.dp))
+                val message = when {
+                    showWrongPassword || lockedOut -> attemptMessage
+                    unavailable -> unavailableLabel
+                    else -> null
+                }
+                if (message != null) {
+                    Text(
+                        text = message,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp)
+                            .semantics { liveRegion = LiveRegionMode.Polite }
+                    )
+                }
 
-            ThemeButton(
-                onClick = { tryReset() },
-                enabled = password.isNotEmpty() && !lockedOut,
-                isLoading = isChecking
-            ) {
-                Text(Strings.appLockRecoveryAction, color = Color.White)
+                Spacer(modifier = Modifier.height(20.dp))
+
+                ThemeButton(
+                    onClick = { tryReset() },
+                    enabled = password.isNotEmpty() && !lockedOut,
+                    isLoading = isChecking
+                ) {
+                    Text(Strings.appLockRecoveryAction, color = Color.White)
+                }
             }
-        }
         }
     }
 }
