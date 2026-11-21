@@ -2,6 +2,8 @@ package com.dedovmosol.iwomail.ui.screens.emaillist
 
 import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.domain.EmailThreads
+import com.dedovmosol.iwomail.ui.screens.EmailDateFilter
+import com.dedovmosol.iwomail.ui.screens.MailFilter
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
 
@@ -10,6 +12,38 @@ class MailListUxTest {
         id = id, accountId = 1, folderId = folder, serverId = id, from = "a@corp.example", to = "b@corp.example",
         subject = "Topic $id", body = "", dateReceived = 100L, read = read, conversationId = conversation
     )
+
+    @Test
+    fun `prepared draft rows preserve order, hide pending and retain the first duplicate`() {
+        val first = email("1", "same", "drafts")
+        val pending = email("2", "same", "drafts")
+        val last = email("3", "same", "drafts")
+        val prepared = buildFolderMailList(
+            listOf(first, pending, first.copy(subject = "Duplicate"), last), setOf(pending.id),
+            MailFilter.ALL, EmailDateFilter.ALL, isTodayAll = false, grouped = null, onlyThreads = false
+        )
+        assertThat(prepared.collapsedRows.keys).containsExactly(first.id, last.id).inOrder()
+        assertThat(prepared.collapsedRows.threadSelection).isEmpty()
+        assertThat(prepared.emailsById[first.id]).isEqualTo(first)
+        assertThat(prepared.scope.selectableIds).containsExactly(first.id, last.id)
+    }
+
+    @Test
+    fun `prepared folder list respects mail and rolling date filters but not a second date cutoff for Today`() {
+        val now = 10 * 86_400_000L
+        val fresh = email("fresh", null).copy(dateReceived = now)
+        val seen = email("seen", null, read = true).copy(dateReceived = now)
+        val stale = email("stale", null)
+        val emails = listOf(fresh, seen, stale)
+        val result = buildFolderMailList(
+            emails, emptySet(), MailFilter.UNREAD, EmailDateFilter.WEEK, false, null, false, now
+        )
+        assertThat(result.scope.selectableIds).containsExactly(fresh.id)
+        val today = buildFolderMailList(
+            emails, emptySet(), MailFilter.UNREAD, EmailDateFilter.WEEK, true, null, false, now
+        )
+        assertThat(today.collapsedRows.keys).containsExactly(fresh.id, stale.id).inOrder()
+    }
 
     @Test
     fun `threads-only uses distinct known members but only matched local ids are selectable`() {

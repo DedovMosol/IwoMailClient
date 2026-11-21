@@ -1,8 +1,24 @@
 package com.dedovmosol.iwomail.eas
 
 import android.util.Base64
+import com.dedovmosol.iwomail.network.ConnectionFailure
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.Authenticator
+import okhttp3.Call
+import okhttp3.ConnectionPool
+import okhttp3.Protocol
+import okhttp3.Response
+import java.io.InputStream
+import java.net.ConnectException
+import java.net.UnknownHostException
+import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLHandshakeException
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -28,242 +44,143 @@ class EwsClient(
     private val httpClient: OkHttpClient,
     private val ntlmAuth: NtlmAuthenticator
 ) {
-    private val ntlmLock = Any()
+    private val ntlmLock = Mutex()
     @Volatile var serverVersion: String = VERSION_2007
         private set
 
-    /**
-     * Выделенный клиент для NTLM-handshake. NTLM аутентифицирует TCP-соединение,
-     * а не запрос: Type1 и Type3 обязаны уйти по ОДНОМУ соединению. Общий пул
-     * делит соединения с параллельными EAS/EWS-запросами того же хоста — Type3
-     * мог уйти по «чужому» соединению и получить 401. Собственный пул + сериализация
-     * через [ntlmLock] гарантируют, что Type3 переиспользует соединение Type1.
-     * newBuilder() наследует TLS/mTLS/таймауты/интерсепторы базового клиента.
-     */
-    private val ntlmClient: OkHttpClient by lazy {
+    // EWS POSTs may be mutations. A lost response, 408, 503, or redirect must not
+    // cause OkHttp to deliver the same SOAP operation again.
+    private val basicClient by lazy {
         httpClient.newBuilder()
-            .connectionPool(okhttp3.ConnectionPool(1, 60, java.util.concurrent.TimeUnit.SECONDS))
+            .retryOnConnectionFailure(false)
+            .followRedirects(false)
+            .authenticator(Authenticator.NONE)
+            .proxyAuthenticator(Authenticator.NONE)
             .build()
     }
-    
-    // ==================== Низкоуровневые методы ====================
-    
-    /**
-     * Выполняет EWS запрос с автоматическим выбором аутентификации
-     * Сначала пробует NTLM, затем Basic
-     */
-    suspend fun executeRequest(soapBody: String, action: String): EwsResult<String> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val soapRequest = buildSoapRequest(soapBody)
-                
-                // 1. Пробуем NTLM (предпочтительно для Exchange)
-                val ntlmResult = executeNtlm(soapRequest, action)
-                if (ntlmResult != null) {
-                    return@withContext EwsResult.Success(ntlmResult)
-                }
-                
-                // 2. Fallback на Basic auth
-                val basicResult = executeBasic(soapRequest, action)
-                if (basicResult != null) {
-                    return@withContext EwsResult.Success(basicResult)
-                }
-                
-                EwsResult.Error("Не удалось выполнить EWS запрос: аутентификация не удалась")
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                EwsResult.Error("EWS: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
-            }
-        }
-    }
-    
-    /**
-     * Выполняет ПОЛНЫЙ NTLM цикл в одном методе:
-     * Type1 (Negotiate) → Type2 (Challenge) → Type3 (Authenticate) + запрос
-     * 
-     * КРИТИЧНО: Все шаги должны идти в одном TCP соединении!
-     * OkHttp connection pool с keep-alive должен это обеспечить.
-     */
-    suspend fun executeNtlmRequest(soapRequest: String, action: String): String? {
-        android.util.Log.d("NTM", "executeNtlmRequest START action=$action, url=$ewsUrl")
-        return withContext(Dispatchers.IO) {
-            var lastException: Exception? = null
-            for (attempt in 0..1) {
-                try {
-                    val result = executeNtlmHandshake(soapRequest, action)
-                    if (result != null || attempt > 0) return@withContext result
-                    android.util.Log.w("NTM", "NTLM attempt $attempt returned null, retrying")
-                } catch (e: Exception) {
-                    lastException = e
-                    android.util.Log.w("NTM", "NTLM attempt $attempt failed: ${e.message}")
-                    if (attempt == 0) continue else break
-                }
-            }
-            android.util.Log.e("NTM", "NTLM all attempts failed", lastException)
-            null
-        }
-    }
 
-    private fun executeNtlmHandshake(soapRequest: String, action: String): String? = synchronized(ntlmLock) {
-        val request1 = Request.Builder()
-            .url(ewsUrl)
-            .post(soapRequest.toRequestBody(CONTENT_TYPE_XML.toMediaType()))
-            .header("Authorization", ntlmAuth.createType1AuthHeader())
-            .header("Content-Type", CONTENT_TYPE_XML)
-            .header("SOAPAction", "\"$SOAP_ACTION_PREFIX$action\"")
-            .header("Connection", "keep-alive")
+    // NTLM authenticates the TCP connection. Use a private HTTP/1.1 pool and hold
+    // the coroutine mutex through response consumption, including streaming, so
+    // another operation cannot borrow the Type1 connection before Type3.
+    private val ntlmClient by lazy {
+        basicClient.newBuilder()
+            .connectionPool(ConnectionPool(1, 60, TimeUnit.SECONDS))
+            .protocols(listOf(Protocol.HTTP_1_1))
             .build()
-        
-        val response1 = ntlmClient.newCall(request1).execute()
+    }
 
-        if (response1.code != 401) {
-            return@synchronized response1.use { if (it.isSuccessful) it.body?.string() else null }
+    suspend fun executeRequest(soapBody: String, action: String): EwsResult<String> =
+        when (val result = executeEnvelope(buildSoapRequest(soapBody), action)) {
+            is EasResult.Success -> EwsResult.Success(result.data)
+            is EasResult.Error -> EwsResult.Error(result.message)
         }
-        val wwwAuth = response1.header("WWW-Authenticate")
-        // Дочитываем тело 401 ПОЛНОСТЬЮ: close() непрочитанного тела заставляет OkHttp
-        // выбросить соединение вместо возврата в пул (IIS шлёт непустую 401.2-страницу),
-        // а Type3 по новому соединению для NTLM недействителен
-        response1.use { it.body?.bytes() }
 
-        if (wwwAuth == null) return@synchronized null
-
-        val type2Message = ntlmAuth.parseType2FromHeader(wwwAuth)
-            ?: return@synchronized null
-        val type3Header = ntlmAuth.createType3AuthHeader(type2Message)
-        
-        val request3 = Request.Builder()
-            .url(ewsUrl)
-            .post(soapRequest.toRequestBody(CONTENT_TYPE_XML.toMediaType()))
-            .header("Authorization", type3Header)
-            .header("Content-Type", CONTENT_TYPE_XML)
-            .header("SOAPAction", "\"$SOAP_ACTION_PREFIX$action\"")
-            .header("Connection", "keep-alive")
-            .build()
-        
-        return@synchronized ntlmClient.newCall(request3).execute().use { response3 ->
-            if (response3.isSuccessful) {
-                response3.body?.string()
-            } else {
-                val errorBody = response3.body?.string()
-                if (response3.code == 500 && errorBody != null && errorBody.contains("soap", ignoreCase = true)) {
-                    errorBody
-                } else {
-                    null
-                }
+    internal suspend fun executeEnvelope(soapRequest: String, action: String): EasResult<String> =
+        withAuthenticatedResponse(soapRequest, action) { response, _ ->
+            val xml = response.body?.string()
+            when {
+                xml.isNullOrBlank() -> requestError(action, "empty response")
+                action == "CreateItem" && (!isCompleteEnvelope(xml) || !CREATE_ITEM_RESULT.containsMatchIn(xml)) ->
+                    requestError(action, "missing or incomplete CreateItem response")
+                else -> EasResult.Success(xml)
             }
         }
-    }
-    
-    /**
-     * Пробует Basic аутентификацию для EWS запроса
-     */
-    suspend fun tryBasicAuth(soapRequest: String, action: String): String? {
-        android.util.Log.d("BAS", "tryBasicAuth: action=$action, soapLength=${soapRequest.length}")
-        return withContext(Dispatchers.IO) {
-            try {
-                val request = Request.Builder()
-                    .url(ewsUrl)
-                    .post(soapRequest.toRequestBody(CONTENT_TYPE_XML.toMediaType()))
-                    .header("Authorization", getBasicAuthHeader())
-                    .header("Content-Type", CONTENT_TYPE_XML)
-                    .header("SOAPAction", "\"$SOAP_ACTION_PREFIX$action\"")
-                    .build()
-                
-                android.util.Log.d("BAS", "Executing request to $ewsUrl")
-                httpClient.newCall(request).execute().use { response ->
-                    android.util.Log.d("BAS", "Response: code=${response.code}, successful=${response.isSuccessful}")
-                    
-                    if (response.isSuccessful) {
-                        val body = response.body?.string()
-                        android.util.Log.d("BAS", "SUCCESS: body length=${body?.length ?: 0}")
-                        body
-                    } else {
-                        val errorBody = response.body?.string()
-                        android.util.Log.e("BAS", "FAILED: HTTP ${response.code}, bodyLen=${errorBody?.length ?: 0}")
-                        null
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("BAS", "EXCEPTION: ${e.message}", e)
-                null
-            }
-        }
-    }
-    
-    /**
-     * EWS-запрос, ответ которого читается потоком (вложения десятки МБ): Basic, при 401 — NTLM Type1/Type3 по
-     * одному соединению (как [executeNtlmRequest]). [read] получает тело ответа 200 или 500 (SOAP Fault — тоже
-     * ответ сервера); остальные коды — ошибка. [read] вызывает checkActive на каждом блоке: при отмене корутины
-     * соединение рвётся ([okhttp3.Call.cancel]) и летит CancellationException.
-     */
+
     suspend fun <T> executeStreaming(
         soapRequest: String,
         action: String,
-        read: (java.io.InputStream, checkActive: () -> Unit) -> T
-    ): EasResult<T> = withContext(Dispatchers.IO) {
-        val job = coroutineContext[kotlinx.coroutines.Job]
-        // Отмена проверяется на каждом блоке тела: вызов рвётся, соединение не дочитывает 40 МБ впустую.
-        // Ожидание заголовков ограничено readTimeout клиента (блокирующий execute — NTLM под synchronized).
-        var current: okhttp3.Call? = null
-        val checkActive = {
-            if (job?.isActive == false) {
-                current?.cancel()
-                throw kotlinx.coroutines.CancellationException("EWS $action cancelled")
-            }
-        }
-        fun execute(call: okhttp3.Call): okhttp3.Response {
-            current = call
-            checkActive()
-            return call.execute()
-        }
-        try {
-            val response = execute(httpClient.newCall(soapPost(soapRequest, action).header("Authorization", getBasicAuthHeader()).build()))
-            val authenticated = if (response.code == 401) {
-                response.use { it.body?.bytes() }
-                callNtlm(soapRequest, action, ::execute)
-            } else {
-                response
-            } ?: return@withContext EasResult.Error("EWS $action: NTLM authentication failed")
-            authenticated.use { resp ->
-                if (resp.code != 200 && resp.code != 500) return@withContext EasResult.Error("EWS $action: HTTP ${resp.code}")
-                val body = resp.body ?: return@withContext EasResult.Error("EWS $action: empty response")
-                EasResult.Success(body.byteStream().use { read(it, checkActive) })
-            }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            if (job?.isActive == false) throw kotlinx.coroutines.CancellationException("EWS $action cancelled")
-            EasResult.Error("EWS $action: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
-        }
+        read: (InputStream, checkActive: () -> Unit) -> T
+    ): EasResult<T> = withAuthenticatedResponse(soapRequest, action) { response, checkActive ->
+        val body = response.body ?: return@withAuthenticatedResponse requestError(action, "empty response")
+        EasResult.Success(body.byteStream().use { read(it, checkActive) })
     }
 
-    private fun soapPost(soapRequest: String, action: String): Request.Builder = Request.Builder()
-        .url(ewsUrl)
-        .post(soapRequest.toRequestBody(CONTENT_TYPE_XML.toMediaType()))
-        .header("Content-Type", CONTENT_TYPE_XML)
-        .header("SOAPAction", "\"$SOAP_ACTION_PREFIX$action\"")
+    private data class AuthChallenge(val type2: ByteArray?, val offersBasic: Boolean)
 
-    /**
-     * Type1 → 401 Type2 → Type3 с телом; ответ на Type3 не прочитан (его читает вызывающий — уже вне блокировки:
-     * соединение аутентифицировано, а 40 МБ тела не должны держать остальные NTLM-запросы).
-     */
-    private fun callNtlm(
+    private suspend fun <T> withAuthenticatedResponse(
         soapRequest: String,
         action: String,
-        execute: (okhttp3.Call) -> okhttp3.Response
-    ): okhttp3.Response? = synchronized(ntlmLock) {
-        val type1 = execute(
-            ntlmClient.newCall(soapPost(soapRequest, action).header("Authorization", ntlmAuth.createType1AuthHeader())
-                .header("Connection", "keep-alive").build())
-        )
-        if (type1.code != 401) return@synchronized type1
-        val challenge = type1.header("WWW-Authenticate")
-        type1.use { it.body?.bytes() } // дочитать: иначе соединение не вернётся в пул, а Type3 нужен по нему же
-        val type2 = challenge?.let { ntlmAuth.parseType2FromHeader(it) } ?: return@synchronized null
-        execute(
-            ntlmClient.newCall(soapPost(soapRequest, action).header("Authorization", ntlmAuth.createType3AuthHeader(type2))
-                .header("Connection", "keep-alive").build())
-        )
+        read: (Response, checkActive: () -> Unit) -> EasResult<T>
+    ): EasResult<T> = withContext(Dispatchers.IO) {
+        try {
+            val body = soapRequest.toRequestBody(CONTENT_TYPE_XML.toMediaType())
+            fun post(auth: String, ntlm: Boolean = true): Request = Request.Builder()
+                .url(ewsUrl)
+                .post(body.withoutReplay())
+                .header("Authorization", auth)
+                .header("SOAPAction", "\"$SOAP_ACTION_PREFIX$action\"")
+                .apply { if (ntlm) header("Connection", "keep-alive") }
+                .build()
+
+            fun finish(response: Response, checkActive: () -> Unit): EasResult<T> = when (response.code) {
+                200, 500 -> read(response, checkActive) // EWS may return a SOAP Fault as HTTP 500.
+                // These statuses definitively rejected the SOAP operation. In particular, an
+                // unavailable EWS endpoint on Exchange 2007 can still allow the EAS fallback.
+                401, 403, 404, 405 -> requestError(action, "HTTP ${response.code}", mayHaveApplied = false)
+                else -> requestError(action, "HTTP ${response.code}")
+            }
+
+            // A null result here means *only* that a 401 explicitly offered Basic.
+            val ntlmResult = ntlmLock.withLock {
+                var challenge: AuthChallenge? = null
+                val first = ntlmClient.newCall(post(ntlmAuth.createType1AuthHeader())).readCancellable { resp, check ->
+                    if (resp.code != 401) return@readCancellable finish(resp, check)
+                    val type2 = resp.headers.values("WWW-Authenticate").firstNotNullOfOrNull { header ->
+                        NTLM_CHALLENGE.find(header)?.value?.let(ntlmAuth::parseType2FromHeader)
+                    }
+                    challenge = AuthChallenge(type2, resp.offersBasic())
+                    if (type2 == null && !resp.offersBasic()) {
+                        return@readCancellable requestError(action, "HTTP 401 without an authentication challenge", mayHaveApplied = false)
+                    }
+                    if (type2 != null) {
+                        // Drain the challenge without buffering so Type3 can reuse the connection.
+                        resp.body?.byteStream()?.let { stream ->
+                            val buffer = ByteArray(8192)
+                            while (stream.read(buffer) != -1) check()
+                        }
+                    }
+                    null
+                }
+                if (first != null) return@withLock first
+                val auth = checkNotNull(challenge)
+                val type2 = auth.type2
+                if (type2 == null) {
+                    if (auth.offersBasic) null else requestError(action, "HTTP 401", mayHaveApplied = false)
+                } else {
+                    ntlmClient.newCall(post(ntlmAuth.createType3AuthHeader(type2))).readCancellable { resp, check ->
+                        if (resp.code == 401 && resp.offersBasic()) null else finish(resp, check)
+                    }
+                }
+            }
+            ntlmResult ?: basicClient.newCall(post(getBasicAuthHeader(), ntlm = false)).readCancellable(::finish)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            coroutineContext.ensureActive()
+            requestError(
+                action, ConnectionFailure.describe(e),
+                mayHaveApplied = e !is ConnectException && e !is UnknownHostException && e !is SSLHandshakeException
+            )
+        }
     }
+
+    private fun Response.offersBasic(): Boolean = challenges().any { it.scheme.equals("Basic", ignoreCase = true) }
+
+    // Register cancellation before entering blocking HTTP I/O and keep it installed until
+    // the body is consumed/closed. Suspending only until headers would leave reads blocked.
+    private suspend fun <T> Call.readCancellable(read: (Response, () -> Unit) -> T): T =
+        suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { cancel() }
+            if (!continuation.isActive) return@suspendCancellableCoroutine
+            try {
+                val value = execute().use { response -> read(response) { continuation.context.ensureActive() } }
+                continuation.resumeWith(Result.success(value))
+            } catch (e: Exception) {
+                continuation.resumeWith(Result.failure(e))
+            }
+        }
+
+    private fun requestError(action: String, detail: String, mayHaveApplied: Boolean = true): EasResult.Error =
+        EasResult.Error(if (action == "CreateItem" && mayHaveApplied) "$EWS_CREATE_OUTCOME_UNKNOWN: $detail" else "EWS $action: $detail")
 
     // ==================== Высокоуровневые EWS операции ====================
     
@@ -491,33 +408,13 @@ class EwsClient(
         return "Basic " + Base64.encodeToString(credentials.toByteArray(), Base64.NO_WRAP)
     }
     
-    /**
-     * Выполняет NTLM handshake и возвращает маркер доступности NTLM.
-     * Реальный 3-step handshake (Type1→Type2→Type3) выполняется внутри executeNtlmRequest,
-     * т.к. все шаги ДОЛЖНЫ идти в одном TCP соединении.
-     */
-    suspend fun performNtlmHandshake(): String? {
-        return ""
-    }
-
-    /**
-     * Выполняет запрос с NTLM аутентификацией
-     */
-    private suspend fun executeNtlm(soapRequest: String, action: String): String? {
-        return executeNtlmRequest(soapRequest, action)
-    }
-    
-    /**
-     * Выполняет запрос с Basic аутентификацией
-     */
-    private suspend fun executeBasic(soapRequest: String, action: String): String? {
-        return tryBasicAuth(soapRequest, action)
-    }
-    
     companion object {
         private const val CONTENT_TYPE_XML = "text/xml; charset=utf-8"
         private const val SOAP_ACTION_PREFIX = "http://schemas.microsoft.com/exchange/services/2006/messages/"
         const val VERSION_2007 = "Exchange2007_SP1"
+        internal const val EWS_CREATE_OUTCOME_UNKNOWN = "EWS_CREATE_OUTCOME_UNKNOWN"
+        private val NTLM_CHALLENGE = Regex("""(?i)\bNTLM[ \t]+[A-Za-z0-9+/]+={0,2}(?=\s|,|$)""")
+        private val CREATE_ITEM_RESULT = Regex("""<(?:[\w.-]+:)?CreateItemResponseMessage\b[^>]*\bResponseClass\s*=\s*["'](?:Success|Error|Warning)["']""")
 
         fun isEwsSuccess(xml: String): Boolean =
             xml.contains("ResponseClass=\"Success\"") &&

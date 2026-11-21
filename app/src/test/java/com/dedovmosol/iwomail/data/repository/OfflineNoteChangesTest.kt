@@ -79,6 +79,40 @@ class OfflineNoteChangesTest {
     private fun note(serverId: String = "n1") = runBlocking { db.noteDao().getNote("${accountId}_$serverId") }
 
     @Test
+    fun `unknown queued create parks later edits and trash without replaying any mutation`() = runBlocking<Unit> {
+        val original = seed(serverId = "local_note_a", subject = "Original", body = "Body")
+        queue.markCreate(original.id, accountId, com.dedovmosol.iwomail.data.database.PimKind.NOTE, original.subject)
+        val sent = queue.get(original.id)!!
+        coEvery { easClient.createNote("Original", "Body") } coAnswers {
+            // User changes this row after the request has started and before its response is lost.
+            queue.markUpdate(original.id, accountId, sent.kind, original.subject)
+            queue.markTrash(original.id, accountId, sent.kind, original.subject)
+            EasResult.Error("${com.dedovmosol.iwomail.eas.EwsClient.EWS_CREATE_OUTCOME_UNKNOWN}: [NET:RESET]")
+        }
+
+        assertThat(repo.sendPendingNote(sent)).isEqualTo(PimSendOutcome.AWAITING_IDENTITY)
+        val parked = queue.get(original.id)!!
+        assertThat(parked.pendingCreate).isFalse()
+        assertThat(parked.pendingUpdate).isTrue()
+        assertThat(parked.pendingTrash).isTrue()
+        // A worker may have fetched the same create row before the first request finished.
+        assertThat(repo.sendPendingNote(sent)).isEqualTo(PimSendOutcome.AWAITING_IDENTITY)
+        val current = db.noteDao().getNote(original.id)!!
+        assertThat(repo.updateNote(current, "Edited again", "New body")).isInstanceOf(EasResult.Success::class.java)
+        assertThat(repo.sendPendingNote(queue.get(original.id)!!)).isEqualTo(PimSendOutcome.AWAITING_IDENTITY)
+        assertThat(queue.get(original.id)!!.pendingUpdate).isTrue()
+        assertThat(queue.get(original.id)!!.pendingTrash).isTrue()
+        assertThat(db.noteDao().getNote(original.id)!!.subject).isEqualTo("Edited again")
+        coVerify(exactly = 1) { easClient.createNote("Original", "Body") }
+        // A complete read snapshot cannot erase the unconfirmed local note.
+        coEvery { easClient.syncNotes() } returns EasResult.Success(
+            NotesSyncResult(emptyList(), isActiveAuthoritative = true, isDeletedAuthoritative = true)
+        )
+        assertThat(repo.syncNotes(accountId)).isInstanceOf(EasResult.Success::class.java)
+        assertThat(db.noteDao().getNote(original.id)!!.isDeleted).isFalse()
+    }
+
+    @Test
     fun `edit without a connection is kept on the device and queued`() = runBlocking<Unit> {
         val original = seed()
         online = false

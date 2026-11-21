@@ -24,6 +24,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -179,6 +180,7 @@ class SendController(
         val dir = try {
             ScheduledSend.schedule(context, job)
         } catch (e: java.io.IOException) {
+            if (e is ScheduledSend.ReplacementFailed) throw e // The prior schedule still owns delivery.
             // Не записать на диск (нет места) — отправить сразу, без ожидания: письмо не теряется
             android.util.Log.w("SendController", "Can't persist the email, sending at once: ${e.message}")
             return deliver(context, job, null, ru)
@@ -198,21 +200,29 @@ class SendController(
     /** Отменили: письмо — в Черновики и в редактор. */
     private suspend fun undo(context: Context, job: ScheduledSend.Job, dir: File, ru: Boolean): Outcome {
         state = SendState()
-        if (!ScheduledSend.remove(context, dir)) {
-            // Уже отправил воркер (приложение уходило в фон) — вернуть нечего
-            env.message(context, NotificationStrings.getSendUndoTooLate(ru), long = true)
-            return Outcome.SENT
+        var draftId: String? = null
+        return when (ScheduledSend.restoreDraft(context, dir, stopDeliveryOnFailure = true) { persisted ->
+            draftId = env.returnToDrafts(context, persisted)
+            draftId != null
+        }) {
+            ScheduledSend.RestoreResult.GONE -> {
+                env.message(context, NotificationStrings.getSendUndoTooLate(ru), long = true)
+                Outcome.SENT
+            }
+            ScheduledSend.RestoreResult.DRAFT_SAVE_FAILED -> {
+                env.message(context, NotificationStrings.getUndoDraftFailed(ru), long = true)
+                Outcome.FAILED
+            }
+            ScheduledSend.RestoreResult.UNAVAILABLE -> {
+                env.message(context, NotificationStrings.getEmailNotSentText(job.mail.subject, "Stored message is incomplete", false, ru), long = true)
+                Outcome.FAILED
+            }
+            ScheduledSend.RestoreResult.RESTORED -> {
+                env.message(context, NotificationStrings.getSendUndone(ru), long = false)
+                _undone.tryEmit(checkNotNull(draftId))
+                Outcome.UNDONE
+            }
         }
-        val draftId = env.returnToDrafts(context, job)
-        if (draftId == null) {
-            // Не сохранить — не терять: письмо уходит, как и собирались
-            ScheduledSend.schedule(context, job.copy(sendAt = System.currentTimeMillis()))
-            env.message(context, NotificationStrings.getUndoDraftFailed(ru), long = true)
-            return Outcome.QUEUED
-        }
-        env.message(context, NotificationStrings.getSendUndone(ru), long = false)
-        _undone.tryEmit(draftId)
-        return Outcome.UNDONE
     }
 
     /**
@@ -221,9 +231,16 @@ class SendController(
      */
     private suspend fun deliver(context: Context, job: ScheduledSend.Job, dir: File?, ru: Boolean): Outcome {
         val delivery = if (dir == null) sendOnce(context, job, null, ru) else ScheduledSend.lock(dir).withLock {
-            // Отправлено или отменено в другом месте (воркер, список запланированных)
-            if (!withContext(Dispatchers.IO) { ScheduledSend.isPending(dir) }) Delivery(Outcome.SENT)
-            else sendOnce(context, job, dir, ru)
+            when (withContext(Dispatchers.IO) { ScheduledSend.status(dir) }) {
+                ScheduledSend.Status.PENDING -> {
+                    val persisted = withContext(Dispatchers.IO) {
+                        ScheduledSend.read(dir).also { if (it == null) ScheduledSend.quarantine(context, dir) }
+                    }
+                    if (persisted != null) sendOnce(context, persisted, dir, ru) else Delivery(Outcome.FAILED)
+                }
+                ScheduledSend.Status.GONE -> Delivery(Outcome.SENT)
+                else -> Delivery(Outcome.FAILED)
+            }
         }
         when (delivery.outcome) {
             Outcome.SENT -> if (delivery.sent) {
@@ -250,13 +267,14 @@ class SendController(
     private suspend fun sendOnce(context: Context, job: ScheduledSend.Job, dir: File?, ru: Boolean): Delivery {
         val result = env.send(context, job)
         if (result is EasResult.Success) {
-            dir?.let { ScheduledSend.cancel(context, it) }
+            dir?.let { withContext(Dispatchers.IO + NonCancellable) { ScheduledSend.finish(context, it, cancelWork = true) } }
             return Delivery(Outcome.SENT, sent = true)
         }
         val error = (result as EasResult.Error).message
         if (dir != null && isRetryableSendError(error)) return Delivery(Outcome.QUEUED, error = error)
-        val saved = env.returnToDrafts(context, job) != null
-        dir?.let { ScheduledSend.cancel(context, it) }
+        val saved = if (dir == null) env.returnToDrafts(context, job) != null else {
+            ScheduledSend.retainFailure(context, dir) { env.returnToDrafts(context, job) != null }
+        }
         env.message(context, NotificationStrings.getEmailNotSentText(job.mail.subject, error, saved, ru), long = true)
         return Delivery(Outcome.FAILED, error = error)
     }

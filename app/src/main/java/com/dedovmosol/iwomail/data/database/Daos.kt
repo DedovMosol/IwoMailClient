@@ -214,6 +214,52 @@ interface FolderDao {
     suspend fun updateDisplayName(id: String, displayName: String)
 }
 
+/** Baseline rows from the start of an Inbox enumeration, not rows newly added/moved in while it runs. */
+@Entity(
+    tableName = "inbox_sync_snapshot",
+    primaryKeys = ["folderId", "emailId"],
+    foreignKeys = [ForeignKey(
+        entity = FolderEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["folderId"],
+        onDelete = ForeignKey.CASCADE
+    )]
+)
+internal data class InboxSyncSnapshotEntry(val folderId: String, val emailId: String, val seen: Boolean)
+
+@Dao
+internal interface InboxSyncSnapshotDao {
+    // The empty emailId denotes an active enumeration, even with zero local messages. Its `seen`
+    // bit guards against treating a completely empty response as proof of deletion.
+    @Insert
+    suspend fun insertMarker(marker: InboxSyncSnapshotEntry)
+
+    @Query("SELECT * FROM inbox_sync_snapshot WHERE folderId = :folderId AND emailId = ''")
+    suspend fun getMarker(folderId: String): InboxSyncSnapshotEntry?
+
+    @Query("""
+        INSERT INTO inbox_sync_snapshot (folderId, emailId, seen)
+        SELECT folderId, id, 0 FROM emails
+        WHERE folderId = :folderId AND accountId = :accountId
+          AND serverId != '' AND substr(serverId, 1, 6) != 'local_'
+          AND id = CAST(accountId AS TEXT) || '_' || serverId
+    """)
+    suspend fun captureBaseline(folderId: String, accountId: Long)
+
+    @Query("UPDATE inbox_sync_snapshot SET seen = 1 WHERE folderId = :folderId AND (emailId = '' OR emailId IN (:emailIds))")
+    suspend fun markPageSeen(folderId: String, emailIds: List<String>)
+
+    @Query("""
+        SELECT e.id FROM inbox_sync_snapshot s INNER JOIN emails e ON e.id = s.emailId AND e.folderId = s.folderId
+        WHERE s.folderId = :folderId AND s.seen = 0 AND e.accountId = :accountId
+          AND NOT EXISTS (SELECT 1 FROM pending_email_changes p WHERE p.emailId = e.id)
+    """)
+    suspend fun getUnseenWithoutPendingChanges(folderId: String, accountId: Long): List<String>
+
+    @Query("DELETE FROM inbox_sync_snapshot WHERE folderId = :folderId")
+    suspend fun clear(folderId: String)
+}
+
 @Dao
 interface EmailDao {
     @Query("""
@@ -252,9 +298,6 @@ interface EmailDao {
     /** Записи с отметкой «заменяет» (прежние версии на сервере ещё не удалены). */
     @Query("SELECT * FROM emails WHERE folderId = :folderId AND replacesServerId IS NOT NULL")
     suspend fun getReplacingEmails(folderId: String): List<EmailEntity>
-
-    @Query("SELECT EXISTS(SELECT 1 FROM emails WHERE folderId = :folderId AND subject = :subject AND id NOT IN (:exceptIds))")
-    suspend fun hasEmailWithSubject(folderId: String, subject: String, exceptIds: List<String>): Boolean
 
     @Query("SELECT * FROM emails WHERE folderId = :folderId ORDER BY dateReceived DESC LIMIT :limit OFFSET :offset")
     suspend fun getEmailsByFolderPaged(folderId: String, limit: Int, offset: Int): List<EmailEntity>

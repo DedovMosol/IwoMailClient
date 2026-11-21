@@ -91,12 +91,6 @@ class RepositoryDraftStore(
             accountRepository.switchToOtherEndpoint(accountId, fromFallback = usingFallback)
     }
 
-    override suspend fun findServerDraftBySubject(accountId: Long, subject: String, excludeServerId: String?): String? =
-        accountRepository.createEasClient(accountId)?.findUniqueDraftItemIdBySubject(subject, excludeServerId)
-
-    override suspend fun hasOtherDraftWithSubject(folderId: String, subject: String, exceptIds: Set<String>): Boolean =
-        mailRepository.hasOtherDraftWithSubject(folderId, subject, exceptIds)
-
     override suspend fun restore(email: EmailEntity, attachments: List<DraftAttachmentData>) =
         mailRepository.restoreDraftRecord(email, attachments)
 

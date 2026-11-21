@@ -132,7 +132,7 @@ class ScheduledMailViewModelTest {
         val dir = ScheduledSend.schedule(context, job("S", inAnHour))
         val vm = viewModel()
         val entry = vm.awaitItems { it.size == 1 }.single()
-        ScheduledSend.take(context, dir)
+        ScheduledSend.restoreDraft(context, dir) { true }
 
         vm.reschedule(entry, inAnHour)
         assertThat(withTimeout(5_000) { vm.events.first() }).isEqualTo(ScheduledMailEvent.AlreadyGone)

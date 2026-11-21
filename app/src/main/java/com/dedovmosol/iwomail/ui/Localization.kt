@@ -800,13 +800,25 @@ object Strings {
     /** Срок прошёл, а письмо ещё ждёт: нет связи или сервер занят — уйдёт само. */
     val scheduledWaiting: String @Composable get() =
         if (isRussian()) "Ожидает отправки — уйдёт автоматически" else "Waiting to be sent — will go out automatically"
-    val scheduledAlreadySent: String @Composable get() = if (isRussian()) "Письмо уже отправляется" else "The message is already being sent"
-    val scheduledSendingNow: String @Composable get() = if (isRussian()) "Письмо отправляется" else "Sending the message"
+    val scheduledAlreadySent: String @Composable get() = if (isRussian())
+        "Письма больше нет в очереди" else "The message is no longer queued"
+    val scheduledSendingNow: String @Composable get() = if (isRussian())
+        "Письмо поставлено на отправку" else "Message queued for immediate delivery"
+    val scheduledFailed: String @Composable get() = if (isRussian())
+        "Не отправлено — сохранено в очереди" else "Not sent — retained in the queue"
+    val scheduledCorrupt: String @Composable get() = if (isRussian())
+        "Данные письма неполные — отправка заблокирована" else "Message data is incomplete — sending blocked"
+    val scheduledUnavailable: String @Composable get() = if (isRussian())
+        "Это действие недоступно для письма" else "This action is unavailable for the message"
+    val scheduledQueueError: String @Composable get() = if (isRussian())
+        "Не удалось обновить очередь" else "Couldn't update the queue"
+    val scheduledRecoverDraft: String @Composable get() = if (isRussian())
+        "Сохранить в Черновики" else "Save to Drafts"
     val scheduledRescheduled: String @Composable get() = if (isRussian()) "Время отправки изменено" else "Send time changed"
     val scheduledReturnedToDrafts: String @Composable get() = if (isRussian())
-        "Отправка отменена — письмо в Черновиках" else "Sending cancelled — the message is in Drafts"
+        "Письмо сохранено в Черновиках" else "Message saved to Drafts"
     val scheduledDraftSaveFailed: String @Composable get() = if (isRussian())
-        "Не удалось сохранить в Черновики — отправка не отменена" else "Couldn't save to Drafts — sending is not cancelled"
+        "Не удалось сохранить в Черновики — письмо осталось в очереди" else "Couldn't save to Drafts — the message remains in the queue"
 
     // Названия цветовых тем
     val themePurple: String @Composable get() = if (isRussian()) "Фиолетовая" else "Purple"
@@ -1409,8 +1421,11 @@ object Strings {
     // Диалоги разрешений
     val backgroundWorkTitle: String @Composable get() = if (isRussian()) "Фоновая работа" else "Background work"
     val backgroundWorkText: String @Composable get() = if (isRussian())
-        "Для получения уведомлений о новых письмах приложению нужно работать в фоне.\n\nНажмите «Разрешить» в следующем окне."
-        else "To receive notifications about new emails, the app needs to work in the background.\n\nTap «Allow» in the next screen."
+        "Для получения уведомлений о новых письмах приложению нужно работать в фоне.\n\nРазрешите работу в фоне в следующем окне или найдите её в настройках батареи."
+        else "To receive notifications about new emails, the app needs to work in the background.\n\nTap Allow on the next screen, or look for background usage in battery settings."
+    val backgroundWorkSettingsUnavailable: String @Composable get() = if (isRussian())
+        "Не удалось открыть настройки. Разрешите работу в фоне в настройках батареи устройства."
+        else "Could not open settings. Allow background usage in your device’s battery settings."
     val exactAlarmsTitle: String @Composable get() = if (isRussian()) "Точные уведомления" else "Exact notifications"
     val exactAlarmsText: String @Composable get() = if (isRussian())
         "Для своевременной синхронизации почты приложению нужно разрешение на точные будильники.\n\nВключите переключатель в следующем окне."
@@ -2143,8 +2158,8 @@ object NotificationStrings {
     fun getSendUndoTooLate(isRussian: Boolean): String =
         if (isRussian) "Письмо уже отправлено" else "The email has already been sent"
     fun getUndoDraftFailed(isRussian: Boolean): String =
-        if (isRussian) "Не удалось вернуть письмо в Черновики — оно будет отправлено"
-        else "Couldn't return the email to Drafts — it will be sent"
+        if (isRussian) "Отправка остановлена. Письмо можно вернуть в Черновики из Запланированных"
+        else "Sending stopped. You can recover the message from Scheduled mail"
     fun getSendQueuedOffline(isRussian: Boolean): String =
         if (isRussian) "Нет связи — письмо уйдёт, когда она появится" else "No connection — the email will be sent when it's back"
     fun getSendQueuedServerBusy(isRussian: Boolean): String =

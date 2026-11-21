@@ -8,7 +8,11 @@ import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.AttachmentErrors
 import com.dedovmosol.iwomail.eas.EasAttachment
 import com.dedovmosol.iwomail.eas.EasClient
+import com.dedovmosol.iwomail.eas.EasAttachmentService
+import com.dedovmosol.iwomail.eas.EasEmailService
 import com.dedovmosol.iwomail.eas.EwsAttachments
+import com.dedovmosol.iwomail.eas.EwsMailMatch
+import com.dedovmosol.iwomail.eas.DraftIds
 import com.dedovmosol.iwomail.eas.EwsMailFolder
 import com.dedovmosol.iwomail.eas.isEasFileReference
 import com.dedovmosol.iwomail.util.detectImageMimeType
@@ -511,28 +515,18 @@ class EmailOperationsService(
      */
     suspend fun refreshAttachmentMetadata(emailId: String) {
         try {
-            val email = emailDao.getEmail(emailId) ?: return
+            val email = emailDao.getInlineAttachmentTarget(emailId) ?: return
             val account = accountRepo.getAccount(email.accountId) ?: return
-            if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) return
-
-            val sid = email.serverId
-            if (sid.startsWith("local_draft_") || sid.isBlank()) return
-            if (sid.contains("=") && !sid.contains(":")) return
-
+            if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE || !email.hasEasServerId()) return
             val client = accountRepo.createEasClient(email.accountId) ?: return
-            val folderServerId = email.folderId.substringAfter("_")
-
-            val attResult = kotlinx.coroutines.withTimeoutOrNull(20_000L) {
+            val folder = folderDao.getFolder(email.folderId)
+            kotlinx.coroutines.withTimeoutOrNull(20_000L) {
                 FolderSyncGate.withFolder(email.folderId) {
-                    client.fetchAttachmentMetadata(folderServerId, sid)
+                    val result = verifiedAttachmentMetadata(client, email, folder?.serverId)
+                    if (result is EasResult.Success) database.withTransaction {
+                        if (isCurrentAttachmentOwner(email)) emailSyncService.reconcileAttachments(emailId, result.data)
+                    }
                 }
-            } ?: run {
-                android.util.Log.w("EmailOps", "refreshAttachmentMetadata timeout emailId=$emailId")
-                return
-            }
-            if (attResult is EasResult.Success) {
-                // Пока шёл запрос, синхронизация могла отдать id другому письму — вложения были бы чужими
-                writeIfSameItem(email) { emailSyncService.reconcileAttachments(emailId, attResult.data) }
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
@@ -540,44 +534,131 @@ class EmailOperationsService(
         }
     }
 
-    /**
-     * Вложение письма в файл [destFile] потоком (PROTO-17, MAIL-04): уже скачанное — копия локального файла;
-     * EWS AttachmentId (черновик, сохранённый через EWS) — EWS GetAttachment; иначе EAS, а при отказе EAS
-     * (в том числе лимит ~10 МБ на Exchange 2007) — EWS по Message-ID или теме и времени письма.
-     * Клиент — аккаунта письма, а не активного (письмо из поиска другого ящика). Ошибка — файла [destFile] нет.
-     */
-    suspend fun downloadAttachmentToFile(attachment: AttachmentEntity, destFile: java.io.File): EasResult<java.io.File> {
-        attachment.localPath?.let { java.io.File(it) }?.takeIf { attachment.downloaded && it.isFile }?.let { local ->
-            return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                try {
-                    local.inputStream().use { input -> destFile.outputStream().use { input.copyTo(it, 64 * 1024) } }
-                    EasResult.Success(destFile)
-                } catch (e: Exception) {
-                    destFile.delete()
-                    if (e is CancellationException) throw e
-                    EasResult.Error(com.dedovmosol.iwomail.eas.AttachmentErrors.of(e))
+    /** Large/manual downloads and small (.ics) downloads share the same attachment identity checks. */
+    suspend fun downloadAttachmentToFile(
+        attachment: AttachmentEntity, destFile: java.io.File, expectedOwner: EmailEntity? = null
+    ): EasResult<java.io.File> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        var successful = false
+        try {
+            val result = downloadOwnedAttachment(attachment, expectedOwner, fromCache = { local ->
+                local.inputStream().use { input -> destFile.outputStream().use { input.copyTo(it, 64 * 1024) } }
+                EasResult.Success(destFile)
+            }) { client, ref, ews ->
+                if (ews) client.downloadEwsAttachmentToFile(ref, destFile) else client.downloadAttachmentToFile(ref, destFile)
+            }
+            successful = result is EasResult.Success
+            result
+        } finally {
+            if (!successful) destFile.delete()
+        }
+    }
+
+    internal suspend fun fetchAttachmentBytes(
+        attachment: AttachmentEntity, expectedOwner: EmailEntity?
+    ): EasResult<ByteArray> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val limit = EasAttachmentService.MAX_IN_MEMORY_BYTES
+        downloadOwnedAttachment(attachment, expectedOwner, fromCache = { local ->
+            val bytes = local.takeIf { it.length() <= limit }?.inputStream()?.use {
+                com.dedovmosol.iwomail.util.readStreamLimited(it, limit)
+            }
+            if (bytes == null) EasResult.Error(AttachmentErrors.TOO_LARGE_FOR_MEMORY) else EasResult.Success(bytes)
+        }) { client, ref, ews ->
+            if (ews) client.downloadSmallEwsAttachment(ref, limit) else client.downloadAttachment(ref)
+        }
+    }
+
+    private suspend fun <T> downloadOwnedAttachment(
+        attachment: AttachmentEntity,
+        expectedOwner: EmailEntity?,
+        fromCache: (java.io.File) -> EasResult<T>,
+        download: suspend (EasClient, String, Boolean) -> EasResult<T>
+    ): EasResult<T> = try {
+        val email = emailDao.getInlineAttachmentTarget(attachment.emailId)
+        if (email == null || expectedOwner != null && !email.sameAttachmentOwner(expectedOwner.attachmentTarget())) {
+            EasResult.Error(AttachmentErrors.NOT_FOUND)
+        } else {
+            val cached = attachment.localPath?.let { java.io.File(it) }?.takeIf { attachment.downloaded && it.isFile }
+            val result = if (cached != null) fromCache(cached) else downloadServerAttachment(email, attachment, download)
+            if (result is EasResult.Success && !isCurrentAttachmentOwner(email)) EasResult.Error(AttachmentErrors.NOT_FOUND)
+            else result
+        }
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        EasResult.Error(AttachmentErrors.of(e))
+    }
+
+    private suspend fun <T> downloadServerAttachment(
+        email: InlineAttachmentTarget, attachment: AttachmentEntity,
+        download: suspend (EasClient, String, Boolean) -> EasResult<T>
+    ): EasResult<T> {
+        val notFound = EasResult.Error(AttachmentErrors.NOT_FOUND)
+        val account = accountRepo.getAccount(email.accountId) ?: return EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
+        if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) return notFound
+        val client = accountRepo.createEasClient(email.accountId) ?: return EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
+        val folder = folderDao.getFolder(email.folderId)
+        val attempted = mutableSetOf<String>()
+        val result = FolderSyncGate.withFolder(email.folderId) {
+            if (!isCurrentAttachmentOwner(email)) return@withFolder notFound
+            suspend fun attempt(ref: String, ews: Boolean): EasResult<T> =
+                if (ref.isBlank() || !attempted.add(ref)) notFound else download(client, ref, ews)
+
+            var last: EasResult<T> = notFound
+            val ref = attachment.fileReference
+            if (ref.isNotBlank() && !isEasFileReference(ref)) {
+                // Opaque EWS IDs are not positional; an old one can fail but cannot select a different item.
+                last = attempt(ref, ews = true)
+            }
+            if (email.hasEasServerId()) for (i in 0..1) {
+                if (last !is EasResult.Error || AttachmentErrors.isFinal(last.message)) break
+                when (val metadata = verifiedAttachmentMetadata(client, email, folder?.serverId)) {
+                    is EasResult.Error -> {
+                        if (AttachmentErrors.isFinal(metadata.message)) last = metadata
+                        break
+                    }
+                    is EasResult.Success -> {
+                        val fresh = matchAttachment(metadata.data, attachment, EasAttachment::displayName, EasAttachment::contentId)
+                            ?.fileReference?.takeIf(String::isNotBlank) ?: break
+                        // Never probe a cached positional ref, even if the server might return HTTP 200 for it.
+                        // Only retry when a second verified lookup supplies a new, unambiguous reference.
+                        if (fresh in attempted) break
+                        last = attempt(fresh, ews = false)
+                    }
                 }
             }
-        }
-        val email = emailDao.getEmail(attachment.emailId) ?: return EasResult.Error(com.dedovmosol.iwomail.eas.AttachmentErrors.NOT_FOUND)
-        val account = accountRepo.getAccount(email.accountId) ?: return EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-        if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
-            return EasResult.Error(com.dedovmosol.iwomail.eas.AttachmentErrors.NOT_FOUND)
-        }
-        val client = accountRepo.createEasClient(email.accountId) ?: return EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
-        val ref = attachment.fileReference
-        val result = if (ref.isNotBlank() && !com.dedovmosol.iwomail.eas.isEasFileReference(ref)) {
-            client.downloadEwsAttachmentToFile(ref, destFile)
-        } else {
-            val locator = ewsFolderOf(folderDao.getFolder(email.folderId))?.let { folder ->
-                com.dedovmosol.iwomail.eas.EasClient.EwsMailLocator(email.subject, folder, email.dateReceived, email.internetMessageId)
+            if (last !is EasResult.Error || !AttachmentErrors.ewsMayHelp(last.message)) return@withFolder last
+            if (!isCurrentAttachmentOwner(email)) return@withFolder notFound
+            val nativeEwsId = email.serverId.takeIf(DraftIds::isEwsItemId)
+            val locator = ewsFolderOf(folder)?.let {
+                EasClient.EwsMailLocator(email.subject, it, email.dateReceived, email.internetMessageId)
             }
-            client.downloadMailAttachmentToFile(ref, destFile, attachment.displayName, attachment.contentId, locator)
+            val entries = client.listInlineAttachmentCandidates(nativeEwsId, locator)
+            val candidate = matchAttachment(entries, attachment, EwsAttachments.FileAttachment::name, EwsAttachments.FileAttachment::contentId)
+                ?: return@withFolder last
+            if (!isCurrentAttachmentOwner(email)) return@withFolder notFound
+            val fallback = attempt(candidate.id, ews = true)
+            if (fallback is EasResult.Success || last.message == AttachmentErrors.TOO_LARGE &&
+                fallback is EasResult.Error && fallback.message != AttachmentErrors.NOT_FOUND) fallback else last
         }
         if (result is EasResult.Success) {
-            client.policyKey?.takeIf { it != account.policyKey }?.let { accountRepo.savePolicyKey(account.id, it) }
+            client.policyKey?.takeIf { it != account.policyKey }?.let { accountRepo.savePolicyKey(email.accountId, it) }
         }
         return result
+    }
+
+    private suspend fun isCurrentAttachmentOwner(email: InlineAttachmentTarget): Boolean =
+        emailDao.getInlineAttachmentTarget(email.id)?.sameAttachmentOwner(email) == true
+
+    /** Call with the folder gate held so same-client Sync cannot renumber the verified reference before use. */
+    private suspend fun verifiedAttachmentMetadata(
+        client: EasClient, email: InlineAttachmentTarget, folderServerId: String?
+    ): EasResult<List<EasAttachment>> {
+        if (!isCurrentAttachmentOwner(email)) return EasResult.Error(AttachmentErrors.NOT_FOUND)
+        return when (val result = client.fetchInlineAttachmentMetadata(folderServerId ?: email.folderId.substringAfter('_'), email.serverId)) {
+            is EasResult.Error -> result
+            is EasResult.Success -> if (attachmentMetadataBelongsTo(email, result.data) && isCurrentAttachmentOwner(email)) {
+                EasResult.Success(result.data.attachments)
+            } else EasResult.Error(AttachmentErrors.NOT_FOUND)
+        }
     }
 
     /** Resolve only requested CIDs on the message owner's account. No body or attachment cache writes. */
@@ -591,7 +672,7 @@ class EmailOperationsService(
         onImage: (String, ByteArray) -> Unit
     ) {
         val email = emailDao.getInlineAttachmentTarget(emailId)?.takeIf { it.accountId == accountId } ?: return
-        if (email.serverId.isBlank() || email.serverId.startsWith("local_draft_")) return
+        if (email.serverId.isBlank() || DraftIds.isLocal(email.serverId)) return
         val account = accountRepo.getAccount(accountId) ?: return
         if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) return
         val client = accountRepo.createEasClient(accountId) ?: return
@@ -609,58 +690,54 @@ class EmailOperationsService(
         fun isCandidate(type: String, estimate: Long) =
             (type.startsWith("image/", ignoreCase = true) || type == "application/octet-stream" || type.isBlank()) &&
                 estimate <= maxPerImage
-        suspend fun fetch(ref: String, limit: Long): EasResult<ByteArray> = when {
-            ref.isBlank() -> EasResult.Error(AttachmentErrors.NOT_FOUND)
-            isEasFileReference(ref) -> client.downloadSmallEasAttachment(ref, limit)
-            else -> client.downloadSmallEwsAttachment(ref, limit)
-        }
         fun EasResult<ByteArray>.imageOrNull(): ByteArray? =
             (this as? EasResult.Success)?.data?.takeIf { detectImageMimeType(it) != null }
-        for (cid in cids.take(12)) {
-            val limit = minOf(remaining, maxPerImage)
-            if (limit <= 0) break
-            val cached = local.singleOrNull { matches(it.contentId, cid) }
-            // A known PDF/oversized image cannot become an inline image by changing protocols.
-            if (cached != null && !isCandidate(cached.contentType, cached.estimatedSize)) continue
-            // Positional EAS refs can still succeed after a renumbering, with unrelated bytes.
-            // Only opaque EWS attachment IDs are safe to try without checking current metadata.
-            val oldRef = cached?.fileReference.orEmpty().takeUnless(::isEasFileReference).orEmpty()
-            val tried = fetch(oldRef, limit)
-            // A stale ref can now point at a different (even oversized) file. Refresh metadata,
-            // but do not retry the same ref; connection/auth failures still stop this candidate.
-            if (tried is EasResult.Error && AttachmentErrors.isFinal(tried.message) &&
-                tried.message != AttachmentErrors.TOO_LARGE_FOR_MEMORY) continue
-            var image = tried.imageOrNull()
-            if (image == null && nativeEwsId == null) {
-                // Read fresh refs once, without reconciling Room or requesting MIME. Reject renumbered items.
-                val entries = refreshed ?: FolderSyncGate.withFolder(email.folderId) {
-                    val result = client.fetchInlineAttachmentMetadata(folder?.serverId ?: email.folderId.substringAfter('_'), email.serverId)
-                    (result as? EasResult.Success)?.data?.takeIf { meta ->
-                        meta.subject != null && meta.dateReceived != null && bodyBelongsTo(
-                            email.subject, email.dateReceived, meta.subject, EmailSyncService.parseDate(meta.dateReceived)
-                        )
-                    }?.attachments.orEmpty()
-                }.also { refreshed = it }
-                val fresh = entries.singleOrNull { matches(it.contentId, cid) }
-                if (fresh != null && !isCandidate(fresh.contentType, fresh.estimatedSize)) continue
-                val ref = fresh?.fileReference?.takeIf { it.isNotBlank() && it != oldRef }
-                if (ref != null) {
-                    val retry = fetch(ref, limit)
-                    if (retry is EasResult.Error && AttachmentErrors.isFinal(retry.message)) continue
-                    image = retry.imageOrNull()
+        FolderSyncGate.withFolder(email.folderId) {
+            for (cid in cids.take(12)) {
+                val limit = minOf(remaining, maxPerImage)
+                if (limit <= 0 || !isCurrentAttachmentOwner(email)) break
+                val cached = local.singleOrNull { matches(it.contentId, cid) }
+                // A known PDF/oversized image cannot become an inline image by changing protocols.
+                if (cached != null && !isCandidate(cached.contentType, cached.estimatedSize)) continue
+                // Positional EAS refs can still succeed after a renumbering, with unrelated bytes.
+                // Only opaque EWS attachment IDs are safe to try without checking current metadata.
+                val oldRef = cached?.fileReference.orEmpty().takeUnless(::isEasFileReference).orEmpty()
+                val tried = if (oldRef.isBlank()) EasResult.Error(AttachmentErrors.NOT_FOUND)
+                    else client.downloadSmallEwsAttachment(oldRef, limit)
+                if (tried is EasResult.Error && AttachmentErrors.isFinal(tried.message) &&
+                    tried.message != AttachmentErrors.TOO_LARGE_FOR_MEMORY) continue
+                var image = tried.imageOrNull()
+                if (image == null && nativeEwsId == null) {
+                    // Read fresh refs once, without reconciling Room or requesting MIME. Reject renumbered items.
+                    val entries = refreshed ?: when (val result = verifiedAttachmentMetadata(client, email, folder?.serverId)) {
+                        is EasResult.Success -> result.data
+                        is EasResult.Error -> {
+                            if (AttachmentErrors.isFinal(result.message)) break
+                            emptyList()
+                        }
+                    }.also { refreshed = it }
+                    val fresh = entries.singleOrNull { matches(it.contentId, cid) }
+                    if (fresh != null && !isCandidate(fresh.contentType, fresh.estimatedSize)) continue
+                    val ref = fresh?.fileReference?.takeIf { it.isNotBlank() && it != oldRef }
+                    if (ref != null) {
+                        val retry = client.downloadSmallEasAttachment(ref, limit)
+                        if (retry is EasResult.Error && AttachmentErrors.isFinal(retry.message)) continue
+                        image = retry.imageOrNull()
+                    }
                 }
-            }
-            if (image == null) {
-                val entries = ewsEntries ?: client.listInlineAttachmentCandidates(nativeEwsId, locator).also { ewsEntries = it }
-                val candidate = EwsAttachments.matchInline(entries, cid)
-                if (candidate != null && candidate.id != oldRef) {
-                    image = client.downloadSmallEwsAttachment(candidate.id, limit).imageOrNull()
+                if (image == null) {
+                    if (!isCurrentAttachmentOwner(email)) break
+                    val entries = ewsEntries ?: client.listInlineAttachmentCandidates(nativeEwsId, locator).also { ewsEntries = it }
+                    val candidate = EwsAttachments.matchInline(entries, cid)
+                    if (candidate != null && candidate.id != oldRef && isCurrentAttachmentOwner(email)) {
+                        image = client.downloadSmallEwsAttachment(candidate.id, limit).imageOrNull()
+                    }
                 }
-            }
-            if (image != null) {
-                if (emailDao.countSameItem(emailId, email.subject, email.from, email.dateReceived) == 0) return
-                remaining -= image.size
-                onImage(cid, image)
+                if (image != null) {
+                    if (!isCurrentAttachmentOwner(email)) break
+                    remaining -= image.size
+                    onImage(cid, image)
+                }
             }
         }
         client.policyKey?.takeIf { it != account.policyKey }?.let { accountRepo.savePolicyKey(accountId, it) }
@@ -1598,5 +1675,57 @@ internal fun bodyBelongsTo(localSubject: String, localDateReceived: Long, itemSu
 
 /** Sync подставляет "(No subject)" вместо пустой темы, ItemOperations присылает пустую. */
 private fun comparableSubject(subject: String): String = subject.trim().takeUnless { it == "(No subject)" }.orEmpty()
+
+private fun EmailEntity.attachmentTarget() =
+    InlineAttachmentTarget(id, accountId, folderId, serverId, subject, from, dateReceived, internetMessageId)
+
+private fun InlineAttachmentTarget.hasEasServerId() =
+    serverId.isNotBlank() && !DraftIds.isLocal(serverId) && !DraftIds.isEwsItemId(serverId)
+
+private fun InlineAttachmentTarget.sameAttachmentOwner(other: InlineAttachmentTarget): Boolean =
+    id == other.id && accountId == other.accountId && folderId == other.folderId && serverId == other.serverId &&
+        subject == other.subject && from == other.from && dateReceived == other.dateReceived &&
+        (internetMessageId.isNullOrBlank() || other.internetMessageId.isNullOrBlank() ||
+            EwsMailMatch.sameMessageId(internetMessageId, other.internetMessageId))
+
+private fun attachmentMetadataBelongsTo(
+    email: InlineAttachmentTarget, metadata: EasEmailService.AttachmentMetadata
+): Boolean {
+    val subject = comparableSubject(email.subject)
+    val remoteSubject = metadata.subject?.let(::comparableSubject)
+    if (remoteSubject != null && !EwsMailMatch.subjectsEqual(subject, remoteSubject)) return false
+    val localId = EwsMailMatch.normalizeMessageId(email.internetMessageId)
+    val remoteId = EwsMailMatch.normalizeMessageId(metadata.internetMessageId)
+    if (localId != null && remoteId != null && localId != remoteId) return false
+
+    fun mailbox(from: String?) = com.dedovmosol.iwomail.util.extractEmailAddress(from.orEmpty())
+        .takeIf { it.isNotBlank() }
+    val localSender = mailbox(email.from)
+    val remoteSender = mailbox(metadata.from)
+    if (localSender != null && remoteSender != null && !localSender.equals(remoteSender, ignoreCase = true)) return false
+    // EAS DateReceived is UTC ISO-8601. Don't treat missing/invalid data as a match or use
+    // the body fallback's wide window for an attachment reference, which may point at a different item.
+    val remoteDate = metadata.dateReceived?.let {
+        runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull()
+    }
+    if (remoteDate != null && email.dateReceived > 1 && remoteDate / 1000 != email.dateReceived / 1000) return false
+    if (localId != null && localId == remoteId) return true
+    if (remoteDate == null || remoteDate <= 1 || email.dateReceived <= 1) return false
+    // A missing Subject cannot verify a titled local message without the Message-ID above.
+    // Two subjectless messages still need a matching sender as well as the timestamp.
+    if (!EwsMailMatch.subjectsEqual(subject, remoteSubject.orEmpty())) return false
+    return subject.isNotEmpty() || localSender != null && remoteSender != null
+}
+
+private fun <T> matchAttachment(
+    candidates: List<T>, original: AttachmentEntity, name: (T) -> String, contentId: (T) -> String?
+): T? {
+    fun cid(value: String?) = value?.let(::normalizeContentId)?.takeIf(String::isNotEmpty)
+    val expectedId = cid(original.contentId)
+    if (expectedId != null) return candidates.singleOrNull { cid(contentId(it)).equals(expectedId, ignoreCase = true) }
+    val expectedName = original.displayName.trim()
+    if (expectedName.isEmpty()) return null
+    return candidates.singleOrNull { name(it).trim().equals(expectedName, ignoreCase = true) }
+}
 
 internal fun isOfflineMailError(message: String): Boolean = message.contains("[NET:")

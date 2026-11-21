@@ -1,148 +1,42 @@
 package com.dedovmosol.iwomail.ui.screens.emaildetail
 
-import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.AttachmentEntity
+import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.repository.AccountRepository
 import com.dedovmosol.iwomail.data.repository.MailRepository
-import com.dedovmosol.iwomail.eas.EasClient
 import com.dedovmosol.iwomail.eas.EasResult
 import com.google.common.truth.Truth.assertThat
 import io.mockk.coEvery
 import io.mockk.coVerify
-import io.mockk.every
 import io.mockk.mockk
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
-import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.util.Base64
 
-/**
- * Юнит-тесты self-heal для скачивания вложений в [EmailDetailActions].
- *
- * Проверяют фикс бага «иногда вложение не открывается/не скачивается — помогает обновление
- * письма»: на Exchange FileReference устаревает/бывает пустым, и теперь при первом отказе
- * ссылка обновляется ([MailRepository.refreshAttachmentMetadata]) и загрузка повторяется один раз.
- *
- * Все зависимости — MockK (конструкторная инъекция, DIP). EasClient подменяется через
- * [AccountRepository.createEasClient]. Без Robolectric.
- */
-@OptIn(ExperimentalCoroutinesApi::class)
 class EmailDetailActionsAttachmentTest {
+    @get:Rule val temp = TemporaryFolder()
 
-    private lateinit var mailRepo: MailRepository
-    private lateinit var accountRepo: AccountRepository
-    private lateinit var easClient: EasClient
-    private lateinit var actions: EmailDetailActions
-
-    private val account = mockk<AccountEntity>(relaxed = true)
-
-    @Before
-    fun setUp() {
-        mailRepo = mockk(relaxed = true)
-        accountRepo = mockk(relaxed = true)
-        easClient = mockk(relaxed = true)
-        actions = EmailDetailActions(mailRepo, accountRepo, mockk(relaxed = true), mockk(relaxed = true))
-
-        every { account.id } returns ACCOUNT_ID
-        every { account.policyKey } returns null
-        coEvery { accountRepo.getActiveAccountSync() } returns account
-        coEvery { accountRepo.createEasClient(ACCOUNT_ID) } returns easClient
-        every { easClient.policyKey } returns null
-    }
-
-    private fun attachment(ref: String) = AttachmentEntity(
-        id = ATT_ID,
-        emailId = EMAIL_ID,
-        fileReference = ref,
-        displayName = "doc.pdf",
-        contentType = "application/pdf",
-        estimatedSize = 1024L
-    )
+    private val mailRepo = mockk<MailRepository>()
+    private val accountRepo = mockk<AccountRepository>()
+    private val actions = EmailDetailActions(mailRepo, accountRepo, mockk(), mockk())
+    private val email = mockk<EmailEntity>()
+    private val png = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 1)
+    private val b64 = Base64.getEncoder().encodeToString(png)
+    private val local = AttachmentEntity(id = 42, emailId = EMAIL_ID, fileReference = "",
+        displayName = "image001.png", contentType = "image/png", estimatedSize = 5)
 
     @Test
-    fun `stale FileReference is refreshed and retried, second attempt succeeds`() = runTest {
-        val freshBytes = byteArrayOf(1, 2, 3)
-        coEvery { easClient.downloadAttachment(STALE_REF) } returns
-            EasResult.Error("Сервер не поддерживает скачивание вложений через EAS.")
-        coEvery { easClient.downloadAttachment(FRESH_REF) } returns EasResult.Success(freshBytes)
-        // refresh обновляет fileReference в БД → getAttachmentsSync возвращает свежую ссылку.
-        coEvery { mailRepo.getAttachmentsSync(EMAIL_ID) } returns listOf(attachment(FRESH_REF))
-
-        val result = actions.fetchAttachmentBytes(attachment(STALE_REF))
-
-        assertThat(result).isInstanceOf(EasResult.Success::class.java)
-        assertThat((result as EasResult.Success).data).isEqualTo(freshBytes)
-        coVerify(exactly = 1) { mailRepo.refreshAttachmentMetadata(EMAIL_ID) }
-        coVerify(exactly = 1) { easClient.downloadAttachment(STALE_REF) }
-        coVerify(exactly = 1) { easClient.downloadAttachment(FRESH_REF) }
-    }
-
-    @Test
-    fun `no retry when refresh does not change the FileReference`() = runTest {
-        coEvery { easClient.downloadAttachment(STALE_REF) } returns EasResult.Error("boom")
-        // refresh вернул ТУ ЖЕ ссылку → повтор бессмыслен (вложение реально недоступно).
-        coEvery { mailRepo.getAttachmentsSync(EMAIL_ID) } returns listOf(attachment(STALE_REF))
-
-        val result = actions.fetchAttachmentBytes(attachment(STALE_REF))
-
-        assertThat(result).isInstanceOf(EasResult.Error::class.java)
-        coVerify(exactly = 1) { mailRepo.refreshAttachmentMetadata(EMAIL_ID) }
-        coVerify(exactly = 1) { easClient.downloadAttachment(STALE_REF) }
-    }
-
-    @Test
-    fun `no retry when attachment disappeared after refresh`() = runTest {
-        coEvery { easClient.downloadAttachment(STALE_REF) } returns EasResult.Error("boom")
-        // reconcile удалил вложение (нет на сервере) → матч не найден → null → без повтора.
-        coEvery { mailRepo.getAttachmentsSync(EMAIL_ID) } returns emptyList()
-
-        val result = actions.fetchAttachmentBytes(attachment(STALE_REF))
-
-        assertThat(result).isInstanceOf(EasResult.Error::class.java)
-        coVerify(exactly = 1) { easClient.downloadAttachment(STALE_REF) }
-    }
-
-    @Test
-    fun `first attempt success does not trigger refresh`() = runTest {
-        val bytes = byteArrayOf(9)
-        coEvery { easClient.downloadAttachment(GOOD_REF) } returns EasResult.Success(bytes)
-
-        val result = actions.fetchAttachmentBytes(attachment(GOOD_REF))
-
-        assertThat(result).isInstanceOf(EasResult.Success::class.java)
-        coVerify(exactly = 0) { mailRepo.refreshAttachmentMetadata(any()) }
-        coVerify(exactly = 1) { easClient.downloadAttachment(GOOD_REF) }
-    }
-
-    @Test
-    fun `empty FileReference is populated by refresh and retried`() = runTest {
-        val bytes = byteArrayOf(7, 7)
-        coEvery { easClient.downloadAttachment("") } returns EasResult.Error("Сервер не поддерживает")
-        coEvery { easClient.downloadAttachment(FRESH_REF) } returns EasResult.Success(bytes)
-        coEvery { mailRepo.getAttachmentsSync(EMAIL_ID) } returns listOf(attachment(FRESH_REF))
-
-        val result = actions.fetchAttachmentBytes(attachment(""))
-
-        assertThat(result).isInstanceOf(EasResult.Success::class.java)
-        assertThat((result as EasResult.Success).data).isEqualTo(bytes)
-        coVerify(exactly = 1) { easClient.downloadAttachment(FRESH_REF) }
-    }
-
-    @Test
-    fun `local cached attachment is returned without any network call`() = runTest {
-        val cached = attachment(GOOD_REF).copy(downloaded = true, localPath = "/nonexistent/path.pdf")
-        // localPath не существует → fast-path не срабатывает, идём в сеть (проверяем, что это не крэшит).
-        coEvery { easClient.downloadAttachment(GOOD_REF) } returns EasResult.Success(byteArrayOf(5))
-
-        val result = actions.fetchAttachmentBytes(cached)
-
-        assertThat(result).isInstanceOf(EasResult.Success::class.java)
+    fun `ICS delegates the displayed owner to the repository and never checks the active account`() = runTest {
+        val ics = local.copy(displayName = "invite.ics", contentType = "text/calendar")
+        coEvery { mailRepo.fetchAttachmentBytes(ics, email) } returns EasResult.Success(byteArrayOf(42))
+        assertThat((actions.fetchAttachmentBytes(ics, email) as EasResult.Success).data).isEqualTo(byteArrayOf(42))
+        coVerify(exactly = 0) { accountRepo.getActiveAccountSync() }
     }
 
     @Test
     fun `partial MIME contributes one logo and requests only the other logo even with a huge PDF`() = runTest {
-        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 1)
-        val b64 = java.util.Base64.getEncoder().encodeToString(png)
         val mime = """
             Content-Type: multipart/related; boundary="rel"
 
@@ -158,22 +52,40 @@ class EmailDetailActionsAttachmentTest {
             $b64
             --rel--
         """.trimIndent()
-        val pdf = attachment(STALE_REF).copy(estimatedSize = 40_000_000)
-        val ownerId = ACCOUNT_ID + 1
-        coEvery { mailRepo.loadInlineAttachmentBytes(EMAIL_ID, ownerId, setOf("second"), listOf(pdf), any(), any(), any()) } coAnswers {
-            arg<(String, ByteArray) -> Unit>(6)("second", png) // suspend calls also have a trailing Continuation
+        val pdf = local.copy(displayName = "huge.pdf", estimatedSize = 40_000_000)
+        coEvery { mailRepo.loadInlineAttachmentBytes(EMAIL_ID, OWNER_ID, setOf("second"), listOf(pdf), any(), any(), any()) } coAnswers {
+            arg<(String, ByteArray) -> Unit>(6)("second", png)
         }
-        val images = actions.loadInlineImages(EMAIL_ID, ownerId, setOf("First", "Second"), mime, listOf(pdf))
+        val images = actions.loadInlineImages(EMAIL_ID, OWNER_ID, setOf("First", "Second"), mime, listOf(pdf))
         assertThat(images).containsExactly("first", "data:image/png;base64,$b64", "second", "data:image/png;base64,$b64")
         coVerify(exactly = 0) { accountRepo.getActiveAccountSync() }
     }
 
+    @Test
+    fun `unique local filename supplies an Outlook CID alias but not from a different message`() = runTest {
+        val file = temp.newFile().apply { writeBytes(png) }
+        val saved = local.copy(localPath = file.path, downloaded = true)
+        val alias = "image001.png@01outlook"
+        val observed = actions.loadInlineImages(EMAIL_ID, OWNER_ID, setOf("IMAGE001.PNG@01Outlook"), null,
+            listOf(saved, saved.copy(emailId = "other")))
+        assertThat(observed).containsExactly(alias, "data:image/png;base64,$b64")
+        coVerify(exactly = 0) { mailRepo.loadInlineAttachmentBytes(any(), any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `ambiguous names and explicit conflicting CIDs are not used as local substitutes`() = runTest {
+        val file = temp.newFile().apply { writeBytes(png) }
+        val saved = local.copy(localPath = file.path, downloaded = true)
+        val alias = "image001.png@01outlook"
+        coEvery { mailRepo.loadInlineAttachmentBytes(EMAIL_ID, OWNER_ID, setOf(alias), any(), any(), any(), any()) } returns Unit
+        for (rows in listOf(listOf(saved, saved.copy(id = 43)), listOf(saved.copy(contentId = "other@cid")),
+            listOf(saved.copy(emailId = "other")))) {
+            assertThat(actions.loadInlineImages(EMAIL_ID, OWNER_ID, setOf(alias), null, rows)).isEmpty()
+        }
+    }
+
     companion object {
-        private const val ACCOUNT_ID = 1L
         private const val EMAIL_ID = "email-1"
-        private const val ATT_ID = 42L
-        private const val STALE_REF = "STALE_REF"
-        private const val FRESH_REF = "FRESH_REF"
-        private const val GOOD_REF = "GOOD_REF"
+        private const val OWNER_ID = 2L
     }
 }

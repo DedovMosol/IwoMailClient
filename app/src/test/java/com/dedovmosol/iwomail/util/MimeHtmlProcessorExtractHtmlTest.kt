@@ -130,6 +130,41 @@ class MimeHtmlProcessorExtractHtmlTest {
     // ===================== fallback без boundary =====================
 
     @Test
+    fun `large base64 wrapped mime streams past adjacent pdf to small html`() {
+        val raw = multipart(
+            "application/pdf" to "A".repeat(7 * 1024 * 1024),
+            "text/html; charset=utf-8" to "<div>small html after pdf</div>"
+        )
+        val wrapped = java.util.Base64.getEncoder().encodeToString(raw.toByteArray(Charsets.ISO_8859_1))
+        assertThat(wrapped.length).isGreaterThan(8 * 1024 * 1024)
+        assertThat(MimeHtmlProcessor.extractHtmlFromMime(wrapped)).isEqualTo("<div>small html after pdf</div>")
+    }
+
+    @Test
+    fun `streamed wrapper decodes nested folded charset and ignores false boundaries in the pdf`() {
+        val html = "<div>Тело <!-- сохранено --></div>"
+        val encoder = java.util.Base64.getEncoder()
+        val innerHtml = encoder.encodeToString(html.toByteArray(Charsets.UTF_8))
+        val mime = "Content-Type: multipart/mixed;\r\n boundary=outer\r\n\r\n" +
+            "--outer\r\nContent-Type: application/pdf\r\n\r\n" +
+            "A".repeat(7 * 1024 * 1024) +
+            "\r\n--outerFAKE\r\nContent-Type: text/html\r\n\r\n<html>not the body</html>\r\n" +
+            "--outer\r\nContent-Type: multipart/alternative; boundary=inner\r\n\r\n" +
+            "--inner\r\nContent-Type: text/plain\r\n\r\nfallback\r\n" +
+            "--inner\r\nContent-Type: text/html;\r\n charset=utf-8\r\n" +
+            "Content-Transfer-Encoding: base64\r\n\r\n$innerHtml\r\n--inner--\r\n--outer--"
+        val wrapped = java.util.Base64.getMimeEncoder().encodeToString(mime.toByteArray(Charsets.ISO_8859_1))
+        assertThat(MimeHtmlProcessor.extractHtmlFromMime(wrapped)).isEqualTo(html)
+    }
+
+    @Test
+    fun `large wrapped pdf alone is not returned as message text`() {
+        val mime = multipart("application/pdf" to "A".repeat(7 * 1024 * 1024))
+        val wrapped = java.util.Base64.getEncoder().encodeToString(mime.toByteArray(Charsets.ISO_8859_1))
+        assertThat(MimeHtmlProcessor.extractHtmlFromMime(wrapped)).isEmpty()
+    }
+
+    @Test
     fun `single part mime without boundary uses regex fallback`() {
         val mime = "MIME-Version: 1.0\r\n" +
             "Content-Type: text/html; charset=utf-8\r\n" +

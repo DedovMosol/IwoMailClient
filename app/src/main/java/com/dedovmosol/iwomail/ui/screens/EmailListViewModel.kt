@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
@@ -42,10 +43,11 @@ import kotlinx.coroutines.withContext
  * операции — в [viewModelScope].
  *
  * [emails] — «сырой» список из выбранного источника (обычная папка / избранное / «сегодня»).
- * Фильтрация по типу/дате выполняется в UI (presentation) — VM хранит только фильтры и данные.
+ * Фильтрация по типу/дате выполняется в presentation — VM хранит только фильтры и данные.
  */
 data class EmailListUiState(
     val accountId: Long = 0L,
+    val sourceReady: Boolean = false,
     val folder: FolderEntity? = null,
     val folders: List<FolderEntity> = emptyList(),
     val emails: List<EmailEntity> = emptyList(),
@@ -149,6 +151,7 @@ class EmailListViewModel(
                     _uiState.update {
                         it.copy(
                             accountId = id,
+                            sourceReady = false,
                             selectedIds = emptySet(),
                             pendingRemovalIds = emptySet(),
                             folder = null,
@@ -161,27 +164,34 @@ class EmailListViewModel(
                     val emailsFlow = when {
                         isFavorites -> if (id > 0L) mailRepo.getFlaggedEmails(id) else flowOf(emptyList())
                         isTodayAll -> if (id > 0L) mailRepo.getTodayEmailsAcrossFolders(id) else flowOf(emptyList())
-                        else -> mailRepo.getEmails(folderId).map { emails -> emails.filter { it.accountId == id } }
+                        else -> mailRepo.getEmails(folderId)
+                            .map { emails -> emails.filter { it.accountId == id } }
+                            .flowOn(ioDispatcher)
                     }
                     val foldersFlow = if (id > 0L) mailRepo.getFolders(id) else flowOf(emptyList())
 
                     val threadsEnabled = combine(conversationView, uiState.map { it.onlyThreads }.distinctUntilChanged()) { setting, only ->
                         setting || only
                     }.distinctUntilChanged()
-                    combine(emailsFlow, foldersFlow, threadsEnabled) { emails, folders, threaded ->
-                        Triple(emails, folders, threaded)
-                    }.flatMapLatest { (emails, folders, threaded) ->
+                    // A new local mail emission must not cancel and restart the paired-folder query.
+                    val foldersWithPeer = combine(foldersFlow, threadsEnabled) { folders, threaded ->
+                        folders to threaded
+                    }.flatMapLatest { (folders, threaded) ->
                         val folder = if (isFavorites || isTodayAll) null else folders.find { it.id == folderId }
                         val peerId = if (threaded) peerMailboxId(folder, folders) else null
-                        if (peerId == null) flowOf(Triple(emails, folders, emptyList()))
-                        else mailRepo.getEmails(peerId).map { peer -> Triple(emails, folders, peer.filter { it.accountId == id }) }
+                        if (peerId == null) flowOf(folders to emptyList())
+                        else mailRepo.getEmails(peerId)
+                            .map { peer -> folders to peer.filter { it.accountId == id } }
+                            .flowOn(ioDispatcher)
                     }
+                    combine(emailsFlow, foldersWithPeer) { emails, (folders, peer) -> Triple(emails, folders, peer) }
                         .collect { (emails, folders, peer) ->
                             val folder = if (isFavorites || isTodayAll) null else folders.find { it.id == folderId }
                             _uiState.update { s ->
                                 val cleanedSelection = com.dedovmosol.iwomail.domain.retainSameMessages(s.selectedIds, s.emails, emails)
                                 val stillPending = com.dedovmosol.iwomail.domain.retainSameMessages(s.pendingRemovalIds, s.emails, emails)
                                 s.copy(
+                                    sourceReady = true,
                                     emails = emails,
                                     peerEmails = peer,
                                     folders = folders,

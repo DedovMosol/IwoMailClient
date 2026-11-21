@@ -165,9 +165,7 @@ class EasClient(
             isVersionDetected = { versionDetected },
             detectEasVersion = { detectEasVersion() },
             getTasksFolderId = { getTasksFolderId() },
-            performNtlmHandshake = { transport.performNtlmHandshake() },
-            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
-            tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
+            executeEwsEnvelope = transport::executeEwsEnvelope,
             sendMail = { to, subject, body, cc, bcc, importance ->
                 sendMail(to, subject, body, cc, bcc, importance)
             }
@@ -192,9 +190,7 @@ class EasClient(
             detectEasVersion = { detectEasVersion() },
             getNotesFolderId = { getNotesFolderId() },
             getDeletedItemsFolderId = { getDeletedItemsFolderId() },
-            performNtlmHandshake = { transport.performNtlmHandshake() },
-            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
-            tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
+            executeEwsEnvelope = transport::executeEwsEnvelope,
             findEwsNoteItemId = { subject, searchInDeletedItems -> findEwsNoteItemId(subject, searchInDeletedItems) }
         ))
     }
@@ -215,9 +211,7 @@ class EasClient(
             getEasVersion = { transport.easVersion },
             isVersionDetected = { versionDetected },
             detectEasVersion = { detectEasVersion() },
-            performNtlmHandshake = { transport.performNtlmHandshake() },
-            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
-            tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
+            executeEwsEnvelope = transport::executeEwsEnvelope,
             parseEasDate = { dateStr -> parseCalendarDate(dateStr) }
         ))
     }
@@ -238,9 +232,7 @@ class EasClient(
             getEasVersion = { transport.easVersion },
             isVersionDetected = { versionDetected },
             detectEasVersion = { detectEasVersion() },
-            performNtlmHandshake = { transport.performNtlmHandshake() },
-            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
-            tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
+            executeEwsEnvelope = transport::executeEwsEnvelope,
             getDraftsFolderId = { getDraftsFolderId() }
         ))
     }
@@ -271,8 +263,7 @@ class EasClient(
                 else username
             },
             getDeviceId = { deviceId },
-            performNtlmHandshake = { transport.performNtlmHandshake() },
-            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
+            executeEwsEnvelope = transport::executeEwsEnvelope,
             getDeletedItemsFolderId = { getDeletedItemsFolderId() },
             isExchange2007 = { isExchange2007() },
             buildEwsSoapRequest = { body -> transport.buildEwsSoapRequest(body) },
@@ -956,7 +947,8 @@ class EasClient(
         folder: EwsMailFolder,
         dateReceived: Long,
         internetMessageId: String?,
-        bounded: Boolean = false
+        bounded: Boolean = false,
+        exactAttachmentDate: Boolean = false
     ): EasResult<String?> = withContext(Dispatchers.IO) {
             val distinguishedFolderId = (folder as? EwsMailFolder.Distinguished)?.id
             val parentFolderXml = when (folder) {
@@ -1000,7 +992,9 @@ class EasClient(
                 val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
                 sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
                 val dateFrom = sdf.format(java.util.Date(dateReceived - windowMs))
-                val dateTo = sdf.format(java.util.Date(dateReceived + windowMs))
+                val toMs = if (exactAttachmentDate) dateReceived + 1_000L else dateReceived + windowMs
+                val dateTo = sdf.format(java.util.Date(toMs))
+                val upperBound = if (exactAttachmentDate) "IsLessThan" else "IsLessThanOrEqualTo"
                 return """<t:And>
                 <t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCaseAndNonSpacingCharacters">
                     <t:FieldURI FieldURI="item:Subject"/>
@@ -1010,10 +1004,10 @@ class EasClient(
                     <t:FieldURI FieldURI="$dateField"/>
                     <t:FieldURIOrConstant><t:Constant Value="$dateFrom"/></t:FieldURIOrConstant>
                 </t:IsGreaterThanOrEqualTo>
-                <t:IsLessThanOrEqualTo>
+                <t:$upperBound>
                     <t:FieldURI FieldURI="$dateField"/>
                     <t:FieldURIOrConstant><t:Constant Value="$dateTo"/></t:FieldURIOrConstant>
-                </t:IsLessThanOrEqualTo>
+                </t:$upperBound>
             </t:And>"""
             }
 
@@ -1032,8 +1026,9 @@ class EasClient(
                     return@buildList
                 }
                 if (dateReceived > 0L) {
+                    val windows = if (exactAttachmentDate) listOf(0L) else EwsMailMatch.dateWindowsMs()
                     for (field in dateFieldsToTry) {
-                        for (window in EwsMailMatch.dateWindowsMs()) {
+                        for (window in windows) {
                             add(buildDateRestriction(window, field))
                         }
                     }
@@ -1346,7 +1341,8 @@ class EasClient(
                 EasAttachmentService.copy(body.byteStream(), buffer) { job?.ensureActive() }
                 emailService.parseAttachmentMetadata(wbxmlParser.parse(buffer.toByteArray()))
             } catch (_: EasAttachmentService.BoundedBuffer.Overflow) {
-                EasResult.Error(AttachmentErrors.TOO_LARGE_FOR_MEMORY)
+                // No attachment bytes were read. EWS can still resolve the owner and file independently.
+                EasResult.Error(AttachmentErrors.METADATA_TOO_LARGE)
             }
         }
     }
@@ -1377,7 +1373,12 @@ class EasClient(
         itemId: String?, locator: EwsMailLocator?
     ): List<EwsAttachments.FileAttachment> {
         val id = itemId ?: locator?.let {
-            (findEwsMailItemId(it.subject, it.folder, it.dateReceived, it.internetMessageId, bounded = true) as? EasResult.Success)?.data
+            // A different same-subject item in the body fallback's wide time window might
+            // also have an identically named attachment. Require Message-ID or the exact second.
+            val subject = it.subject.trim().takeUnless { name -> name == "(No subject)" }.orEmpty()
+            if (!EwsMailMatch.messageIdOnly(it.internetMessageId) && (subject.isBlank() || it.dateReceived <= 1)) return emptyList()
+            (findEwsMailItemId(subject, it.folder, it.dateReceived, it.internetMessageId,
+                bounded = true, exactAttachmentDate = true) as? EasResult.Success)?.data
         } ?: return emptyList()
         val xml = readEwsLookup(EwsAttachments.listRequest(id), "GetItem", bounded = true) ?: return emptyList()
         return EwsAttachments.parse(xml)
@@ -1781,11 +1782,6 @@ $foldersXml
         return notesService.syncNotes()
     }
 
-    private suspend fun performNtlmHandshake(): String? =
-        transport.performNtlmHandshake()
-
-    private suspend fun executeNtlmRequest(soapRequest: String, action: String): String? =
-        transport.executeNtlmRequest(soapRequest, action)
     /**
      * Создание события календаря на сервере Exchange
      * Делегирует в CalendarService
@@ -2018,16 +2014,8 @@ $foldersXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-            val ntlmAuth = performNtlmHandshake()
-            if (ntlmAuth != null) {
-                val responseXml = executeNtlmRequest(getItemRequest, "GetItem")
-                if (responseXml != null) {
-                    val idPair = EwsIds.parseItemIdAndChangeKey(responseXml)
-                    if (idPair != null) {
-                        return idPair
-                    }
-                }
-            }
+            val responseXml = transport.executeEwsWithAuth(getItemRequest, "GetItem")
+            if (responseXml != null) return EwsIds.parseItemIdAndChangeKey(responseXml)
             // Для meeting response нужен реальный item identity с актуальным ChangeKey.
             return null
         }
@@ -2064,10 +2052,7 @@ $foldersXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        performNtlmHandshake()
-            ?: return null
-
-        val responseXml = executeNtlmRequest(findRequest, "FindItem")
+        val responseXml = transport.executeEwsWithAuth(findRequest, "FindItem")
             ?: return null
 
         return EwsIds.parseItemIdAndChangeKey(responseXml)
@@ -2126,14 +2111,9 @@ $foldersXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-                val ntlmAuth = performNtlmHandshake()
-                if (ntlmAuth == null) {
-                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                }
-
-                val responseXml = executeNtlmRequest(soapRequest, "CreateItem")
-                if (responseXml == null) {
-                    return@withContext EasResult.Error("Не удалось выполнить запрос")
+                val responseXml = when (val result = transport.executeEwsEnvelope(soapRequest, "CreateItem")) {
+                    is EasResult.Success -> result.data
+                    is EasResult.Error -> return@withContext result
                 }
 
                 if (EwsClient.isEwsSuccess(responseXml)) {
@@ -2273,8 +2253,7 @@ $foldersXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-            performNtlmHandshake() ?: continue
-            val responseXml = executeNtlmRequest(findRequest, "FindItem") ?: continue
+            val responseXml = transport.executeEwsWithAuth(findRequest, "FindItem") ?: continue
             val found = itemIdPattern.find(responseXml)?.groupValues?.get(1)
             if (found != null) return found
         }
@@ -2484,80 +2463,9 @@ $foldersXml
             }
 
             val mimeBytes = mimeMessage.toByteArray(Charsets.UTF_8)
-            val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
-            val url = buildUrl("SendMail") +
-                if (majorVersion < 14) "&SaveInSent=T" else ""
-
-            val (requestBody, contentType) = if (majorVersion >= 14) {
-                val clientId = System.currentTimeMillis().toString()
-                val wbxml = wbxmlParser.generateSendMail(clientId, mimeBytes)
-                Pair(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()), CONTENT_TYPE_WBXML)
-            } else {
-                Pair(mimeBytes.toRequestBody("message/rfc822".toMediaType()), "message/rfc822")
-            }
-
-            val requestBuilder = Request.Builder()
-                .url(url)
-                .post(requestBody)
-                .header("Authorization", getAuthHeader())
-                .header("MS-ASProtocolVersion", easVersion)
-                .header("Content-Type", contentType)
-                .header("User-Agent", "Android/12-EAS-2.0")
-
-            policyKey?.let { key ->
-                requestBuilder.header("X-MS-PolicyKey", key)
-            }
-
-            val request = requestBuilder.build()
-            val response = executeRequest(request)
-
-            val firstResult = response.use { resp ->
-                if (resp.isSuccessful || resp.code == 200) {
-                    val responseBody = resp.body?.bytes()
-                    if (responseBody != null && responseBody.isNotEmpty()) {
-                        if (responseBody[0] == 0x03.toByte()) {
-                            val xml = wbxmlParser.parse(responseBody)
-                            val status = extractValue(xml, "Status")
-                            if (status != null && status != "1") {
-                                return@withContext EasResult.Error("Ошибка отправки: Status=$status")
-                            }
-                        }
-                    }
-                    EasResult.Success(true)
-                } else if (resp.code == 449) {
-                    null
-                } else {
-                    EasResult.Error("Ошибка отправки: HTTP ${resp.code}")
-                }
-            }
-
-            if (firstResult != null) {
-                firstResult
-            } else {
-                when (val provResult = provision()) {
-                    is EasResult.Success -> {
-                        val retryRequest = Request.Builder()
-                            .url(url)
-                            // Переиспользуем requestBody: на EAS 14+ тело — WBXML ComposeMail,
-                            // сырые mimeBytes под WBXML Content-Type сервер не распарсит
-                            .post(requestBody)
-                            .header("Authorization", getAuthHeader())
-                            .header("MS-ASProtocolVersion", easVersion)
-                            .header("Content-Type", contentType)
-                            .header("User-Agent", "Android/12-EAS-2.0")
-                            .apply { policyKey?.let { header("X-MS-PolicyKey", it) } }
-                            .build()
-
-                        executeRequest(retryRequest).use { retryResp ->
-                            if (retryResp.isSuccessful) {
-                                EasResult.Success(true)
-                            } else {
-                                EasResult.Error("Ошибка отправки: HTTP ${retryResp.code}")
-                            }
-                        }
-                    }
-                    is EasResult.Error -> EasResult.Error(provResult.message)
-                }
+            val clientId = freshSendToken()
+            emailService.postComposeMail("SendMail", "&SaveInSent=T", mimeBytes) { mime ->
+                wbxmlParser.generateSendMail(clientId, mime)
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e

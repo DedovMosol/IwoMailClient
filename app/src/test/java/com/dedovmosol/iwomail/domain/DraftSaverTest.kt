@@ -38,7 +38,6 @@ class DraftSaverTest {
         val serverBccById = mutableMapOf<String, String?>()
         val successors = mutableMapOf<String, String>()
         val networkAllowed = mutableListOf<Boolean>()
-        var bySubject: String? = null
         var restoreOnCreate = true
 
         val created = mutableListOf<Pair<DraftSaver.NewDraft, Boolean>>()
@@ -108,7 +107,6 @@ class DraftSaverTest {
             probes++
             return reachable
         }
-        override suspend fun hasOtherDraftWithSubject(folderId: String, subject: String, exceptIds: Set<String>) = false
         override suspend fun restore(email: EmailEntity, attachments: List<DraftAttachmentData>) {
             drafts[email.id] = email
         }
@@ -122,7 +120,6 @@ class DraftSaverTest {
             exclusiveCalls++
             return block()
         }
-        override suspend fun findServerDraftBySubject(accountId: Long, subject: String, excludeServerId: String?) = bySubject
     }
 
     private val store = FakeStore()
@@ -234,6 +231,17 @@ class DraftSaverTest {
 
         assertThat(save(null, content())).isEqualTo(DraftSaver.Result.SavedOnDeviceOnly)
         assertThat(store.probes).isEqualTo(2) // до сохранения и повторно — отличить отказ от пропавшей связи
+    }
+
+    @Test
+    fun `a replacement without a confirmed item id cannot retire the previous server draft`() {
+        val old = serverDraft()
+        val unknown = DraftIds.newUnconfirmed()
+        store.createResult = { _, _ -> unknown }
+        save(old.id, content(body = "revised", filesUnchanged = false))
+        assertThat(store.deleted).isEmpty()
+        assertThat(store.drafts["1_$unknown"]?.body).isEqualTo("revised")
+        assertThat(store.replacing["1_$unknown"]).isEqualTo(old.serverId)
     }
 
     @Test
@@ -424,16 +432,17 @@ class DraftSaverTest {
     }
 
     @Test
-    fun `edit of a draft whose id the server did not return deletes it by unique subject`() {
+    fun `editing an unconfirmed draft never deletes a guessed server copy`() {
         val local = EmailEntity(
             id = "1_local_draft_u_1_x", accountId = 1L, folderId = "1_5", serverId = "local_draft_u_1_x", from = "",
             to = "a@corp.example", subject = "Отчёт", body = "<p>Текст</p>", dateReceived = 1L, read = true
         ).also { store.drafts[it.id] = it }
-        store.bySubject = "AAMkUNCONFIRMED="
+        serverDraft("AAMkUNRELATED=")
 
         save(local.id, content())
 
-        assertThat(store.deleted).containsExactly("AAMkUNCONFIRMED=" to "AAMkNEW=")
+        assertThat(store.deleted).isEmpty()
+        assertThat(store.drafts["1_AAMkNEW="]?.body).isEqualTo(content().body)
     }
 
     @Test

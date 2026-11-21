@@ -106,7 +106,7 @@ fun AppPermissionDialog(
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp, vertical = 16.dp),
                     style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Start,
+                    textAlign = if (prompt == AppPermissionPrompt.BackgroundWork) TextAlign.Center else TextAlign.Start,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Row(

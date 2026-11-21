@@ -95,7 +95,8 @@ class EasCalendarCrudService(
 
             // Фоллбэк на EAS — только для Exchange 2007. На 14+ встреча обязана уйти через EWS
             // (иначе приглашения не отправятся), поэтому ошибку возвращаем, а не маскируем EAS-путём.
-            if (ewsResult is EasResult.Error && majorVersion < 14) {
+            if (ewsResult is EasResult.Error && majorVersion < 14 &&
+                !ewsResult.message.startsWith(EwsClient.EWS_CREATE_OUTCOME_UNKNOWN)) {
                 createdViaEws = false
                 android.util.Log.w(
                     "EasCalendarCrudService",

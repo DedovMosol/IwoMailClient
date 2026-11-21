@@ -5,6 +5,8 @@ import com.dedovmosol.iwomail.data.database.PendingPimChangeDao
 import com.dedovmosol.iwomail.data.database.PendingPimChangeEntity
 import com.dedovmosol.iwomail.data.database.PimKind
 import com.dedovmosol.iwomail.data.model.isConnectionLevelError
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Когда правку задачи или заметки отложить, а не показывать ошибку.
@@ -46,7 +48,32 @@ internal enum class PimSendOutcome {
     /** Сервер принял (или отказал — тогда синхронизация вернёт его версию); запись снята. */
     DONE,
     /** Связи нет — запись остаётся до следующей попытки. */
-    KEPT
+    KEPT,
+    /** CreateItem may have applied. No further writes are safe until a real server ID is known. */
+    AWAITING_IDENTITY
+}
+
+// A non-create row still bound to a device-only ID represents an ambiguous CreateItem.
+// The row is retained (even with no edit/trash yet), so later edits stay queued and protected.
+internal val PendingPimChangeEntity.awaitingCreateIdentity: Boolean
+    get() = !pendingCreate && itemId.startsWith("${accountId}_local_${if (kind == PimKind.NOTE) "note" else "task"}_")
+
+// Worker and foreground sync can hold the same queued CreateItem snapshot. Serialize
+// only those sends and re-read under the lock before posting another mutation.
+internal object PendingPimCreateGate {
+    private val stripes = Array(32) { Mutex() }
+
+    suspend fun send(
+        queue: PendingPimChangeDao,
+        snapshot: PendingPimChangeEntity,
+        action: suspend (PendingPimChangeEntity) -> PimSendOutcome
+    ): PimSendOutcome {
+        if (!snapshot.pendingCreate) return action(snapshot)
+        return stripes[snapshot.itemId.hashCode() and 31].withLock {
+            val current = queue.get(snapshot.itemId) ?: return@withLock PimSendOutcome.DONE
+            action(current)
+        }
+    }
 }
 
 /**
@@ -63,14 +90,16 @@ internal class PendingPimChanges(
      */
     private val afterSent: suspend (accountId: Long, kind: PimKind) -> Unit = { _, _ -> }
 ) {
-    suspend fun flush(accountId: Long? = null, kind: PimKind? = null): Boolean {
+    suspend fun flush(accountId: Long? = null, kind: PimKind? = null, requireIdentity: Boolean = false): Boolean {
         fun matches(change: PendingPimChangeEntity) =
             (accountId == null || change.accountId == accountId) && (kind == null || change.kind == kind)
 
         val attempted = HashSet<Pair<String, Long>>()
         val sent = LinkedHashSet<Pair<Long, PimKind>>()
         while (true) {
-            val batch = queue.getAll().filter { matches(it) && (it.itemId to it.version) !in attempted }
+            val batch = queue.getAll().filter {
+                matches(it) && !it.awaitingCreateIdentity && (it.itemId to it.version) !in attempted
+            }
             if (batch.isEmpty()) break
             for (change in batch) {
                 attempted += change.itemId to change.version
@@ -78,6 +107,6 @@ internal class PendingPimChanges(
             }
         }
         for ((account, sentKind) in sent) afterSent(account, sentKind)
-        return queue.getAll().none(::matches)
+        return queue.getAll().none { matches(it) && (requireIdentity || !it.awaitingCreateIdentity) }
     }
 }

@@ -26,6 +26,7 @@ import com.dedovmosol.iwomail.ui.components.AppPermissionDialog
 import com.dedovmosol.iwomail.ui.components.AppPermissionPrompt
 import androidx.lifecycle.lifecycleScope
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
+import com.dedovmosol.iwomail.sync.BackgroundWork
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -65,6 +66,7 @@ class MainActivity : FragmentActivity() {
         const val ACTION_SHORTCUT_ADD_WIDGET = "com.dedovmosol.iwomail.SHORTCUT_ADD_WIDGET"
         
         private const val TAG = "MainActivity"
+        private const val STATE_AWAITING_BATTERY_SETTINGS = "awaitingBatterySettings"
     }
     
     private val notificationPermissionLauncher = registerForActivityResult(
@@ -108,6 +110,7 @@ class MainActivity : FragmentActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        awaitingBatteryResult = savedInstanceState?.getBoolean(STATE_AWAITING_BATTERY_SETTINGS) == true
         
         // Sync shortcut — запускаем синхронизацию через broadcast и сразу выходим
         if (intent?.action == ACTION_SHORTCUT_SYNC) {
@@ -375,6 +378,7 @@ class MainActivity : FragmentActivity() {
                     
                     val showBattery by showBatteryDialog
                     if (showBattery) {
+                        val backgroundWorkSettingsUnavailable = Strings.backgroundWorkSettingsUnavailable
                         AppPermissionDialog(
                             prompt = AppPermissionPrompt.BackgroundWork,
                             title = Strings.backgroundWorkTitle,
@@ -384,8 +388,7 @@ class MainActivity : FragmentActivity() {
                             onDismiss = { showBatteryDialog.value = false },
                             onConfirm = {
                                 showBatteryDialog.value = false
-                                awaitingBatteryResult = true
-                                openBatterySettings()
+                                openBatterySettings(backgroundWorkSettingsUnavailable)
                             }
                         )
                     }
@@ -418,15 +421,21 @@ class MainActivity : FragmentActivity() {
         handleIntent(intent)
     }
     
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(STATE_AWAITING_BATTERY_SETTINGS, awaitingBatteryResult)
+    }
+
     override fun onResume() {
         super.onResume()
-        // Вернулись из системного запроса «Фоновая работа» — следующее разрешение (точные будильники), один раз
         if (awaitingBatteryResult) {
             awaitingBatteryResult = false
-            promptPermissionsOnce()
+            // Public Settings/OEM screens do not share a reliable activity-result contract.
+            // Check actual exemption status, without re-entering the battery prompt path.
+            maybePromptExactAlarms()
         }
     }
-    
+
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
         
@@ -712,24 +721,44 @@ class MainActivity : FragmentActivity() {
         lifecycleScope.launch {
             val settingsRepo = SettingsRepository.getInstance(applicationContext)
             if (!settingsRepo.onboardingShown.first()) return@launch
-            if (showBatteryDialog.value || showAlarmDialog.value) return@launch
+            if (showBatteryDialog.value || showAlarmDialog.value || awaitingBatteryResult) return@launch
             // Не поверх онбординга и не вместе с нашим листом: сначала системные уведомления (13+), потом фон, потом будильники
             if (requestNotificationPermission()) return@launch
-            if (!com.dedovmosol.iwomail.sync.BackgroundWork.isAllowed(this@MainActivity)) {
+            if (!BackgroundWork.isAllowed(this@MainActivity)) {
                 if (settingsRepo.claimBackgroundWorkPrompt()) showBatteryDialog.value = true
                 return@launch
             }
-            if (!com.dedovmosol.iwomail.sync.BackgroundWork.exactAlarmsAllowed(this@MainActivity) &&
-                settingsRepo.claimExactAlarmsPrompt()
-            ) {
-                showAlarmDialog.value = true
+            showExactAlarmsIfNeeded(settingsRepo)
+        }
+    }
+
+    private fun maybePromptExactAlarms() {
+        lifecycleScope.launch {
+            val settingsRepo = SettingsRepository.getInstance(applicationContext)
+            if (settingsRepo.onboardingShown.first() && !showBatteryDialog.value && !awaitingBatteryResult) {
+                showExactAlarmsIfNeeded(settingsRepo)
             }
+        }
+    }
+
+    private suspend fun showExactAlarmsIfNeeded(settingsRepo: SettingsRepository) {
+        if (!showAlarmDialog.value && BackgroundWork.needsExactAlarmsPrompt(this) &&
+            settingsRepo.claimExactAlarmsPrompt()
+        ) {
+            showAlarmDialog.value = true
         }
     }
 
     /** Диалог «Фоновая работа» по запросу пользователя (баннер на главной) — сколько угодно раз. */
     private fun showBackgroundWorkDialog() {
-        if (!showAlarmDialog.value) showBatteryDialog.value = true
+        lifecycleScope.launch {
+            if (showAlarmDialog.value || showBatteryDialog.value || awaitingBatteryResult) return@launch
+            // A manually opened explanation counts too, but never disables a later banner tap.
+            SettingsRepository.getInstance(applicationContext).claimBackgroundWorkPrompt()
+            if (!showAlarmDialog.value && !awaitingBatteryResult && !BackgroundWork.isAllowed(this@MainActivity)) {
+                showBatteryDialog.value = true
+            }
+        }
     }
     
     /** @return true — системный лист открыт, следующие запросы подождут callback. */
@@ -757,25 +786,15 @@ class MainActivity : FragmentActivity() {
         }
     }
     
-    @android.annotation.SuppressLint("BatteryLife")
-    private fun openBatterySettings() {
-        // minSdk 26 (>= M): запрос игнорирования оптимизации батареи доступен всегда.
-        try {
-            val intent = android.content.Intent(
-                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                android.net.Uri.parse("package:$packageName")
-            )
-            startActivity(intent)
-        } catch (_: Exception) {
-            try {
-                val fallbackIntent = android.content.Intent(
-                    android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
-                )
-                startActivity(fallbackIntent)
-            } catch (_: Exception) { }
+    private fun openBatterySettings(unavailableMessage: String) {
+        if (BackgroundWork.isAllowed(this)) {
+            maybePromptExactAlarms()
+            return
         }
+        awaitingBatteryResult = BackgroundWork.openBatterySettings(packageName, ::startActivity)
+        if (!awaitingBatteryResult) com.dedovmosol.iwomail.util.SafeToast.long(this, unavailableMessage)
     }
-    
+
     private fun enableHighRefreshRate() {
         try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {

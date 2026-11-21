@@ -2,8 +2,10 @@ package com.dedovmosol.iwomail.domain
 
 import android.content.Context
 import com.dedovmosol.iwomail.data.database.MailDatabase
+import com.dedovmosol.iwomail.data.repository.DraftSuccessors
 import com.dedovmosol.iwomail.data.repository.DraftUpload
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
+import com.dedovmosol.iwomail.eas.COMPOSE_OUTCOME_UNKNOWN
 import com.dedovmosol.iwomail.eas.DraftAttachmentData
 import com.dedovmosol.iwomail.network.ConnectionFailure
 
@@ -13,6 +15,9 @@ import com.dedovmosol.iwomail.network.ConnectionFailure
  * не сообщив пользователю, значило бы потерять письмо незаметно.
  */
 fun isRetryableSendError(message: String): Boolean {
+    // Check delivery uncertainty before connection/HTTP retry rules. EAS 12.x has no ClientId;
+    // modern sends can also lack a stable ID across attempts or switch command after failure.
+    if (COMPOSE_OUTCOME_UNKNOWN in message) return false
     if (ConnectionFailure.fromMessage(message)?.connectionLevel == true) return true
     val http = HTTP_CODE.find(message)?.groupValues?.get(1)?.toIntOrNull() ?: return false
     return http == 429 || http in 502..504
@@ -43,9 +48,13 @@ suspend fun saveUnsentAsDraft(context: Context, accountId: Long, mail: OutgoingM
         attachmentFiles = attachments,
         importance = mail.importance,
         // Отменили отправку или не ушло — флажки «запросить отчёт» остаются, как их поставили
-        receipts = com.dedovmosol.iwomail.eas.ReceiptRequests(mail.requestReadReceipt, mail.requestDeliveryReceipt)
+        receipts = com.dedovmosol.iwomail.eas.ReceiptRequests(mail.requestReadReceipt, mail.requestDeliveryReceipt),
+        requireCompleteAttachments = true
     ) ?: return null
-    return "${accountId}_$serverId"
+    // Attachment completeness was checked before committing the draft and its rows together. An EAS sync may
+    // already have moved those rows to a successor by the time saveDraft returns.
+    val draftId = "${accountId}_$serverId"
+    return DraftSuccessors.latest(draftId) ?: draftId
 }
 
 /**

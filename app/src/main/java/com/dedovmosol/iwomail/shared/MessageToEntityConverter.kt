@@ -1,7 +1,7 @@
 package com.dedovmosol.iwomail.shared
 
 import com.dedovmosol.iwomail.data.database.EmailEntity
-import java.util.UUID
+import javax.mail.MessagingException
 import javax.mail.Flags
 import javax.mail.Message
 import javax.mail.internet.InternetAddress
@@ -26,10 +26,13 @@ object MessageToEntityConverter {
         message: Message,
         accountId: Long,
         folderId: String,
-        useMessageFlags: Boolean = true
+        useMessageFlags: Boolean = true,
+        fallbackIdentity: () -> String? = { null }
     ): EmailEntity {
         val from = (message.from?.firstOrNull() as? InternetAddress)
-        val messageId = (message as? MimeMessage)?.messageID ?: UUID.randomUUID().toString()
+        val headerId = (message as? MimeMessage)?.messageID?.takeIf { it.isNotBlank() }
+        val messageId = headerId ?: fallbackIdentity()?.takeIf { it.isNotBlank() }
+            ?: throw MessagingException("Message has neither a Message-ID nor a persistent server UID")
         
         val read = if (useMessageFlags) {
             message.flags.contains(Flags.Flag.SEEN)

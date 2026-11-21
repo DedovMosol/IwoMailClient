@@ -15,7 +15,7 @@ class ScheduledSendReceiver : BroadcastReceiver() {
         val scope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.IO)
         scope.launch {
             try {
-                ScheduledSend.runNow(context.applicationContext, dir)
+                ScheduledSend.runNow(context.applicationContext, dir, onlyIfDue = true)
             } catch (e: Exception) {
                 // Не вышло поставить срочную задачу — письмо отправит подстраховка WorkManager
                 android.util.Log.w("ScheduledSendReceiver", "runNow failed: ${e.message}")

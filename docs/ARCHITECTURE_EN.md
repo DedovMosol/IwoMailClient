@@ -23,7 +23,7 @@
 | AGP | `8.7.3` |
 | Build tooling | Gradle `8.12`, KSP `1.9.22-1.0.17`, Kover `0.7.6` |
 | UI | Jetpack Compose (BOM `2024.06.00`) + Material 3, Navigation Compose `2.7.6`, Coil `2.5.0` |
-| DB | Room `2.6.1`, `MailDatabase` version `54` (13 entities), schema export enabled (`app/schemas`) |
+| DB | Room `2.6.1`, `MailDatabase` version `55` (14 entities), schema export enabled (`app/schemas`) |
 | Network and background | OkHttp `4.12.0`, Conscrypt `2.5.2`, WorkManager `2.9.0`, DataStore `1.1.1`, Glance `1.1.1`, JavaMail (`android-mail`) `1.6.7` |
 | Security | `security-crypto` `1.1.0-alpha06` (EncryptedSharedPreferences), `biometric` `1.1.0` |
 | APK architectures | `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64` + universal APK |
@@ -228,7 +228,7 @@ com.dedovmosol.iwomail/
 
 ### Room
 
-`MailDatabase` contains 13 entity classes and 14 abstract DAO accessors (`accountDao`, `emailDao`, `folderDao`, `signatureDao`, `attachmentDao`, `contactDao`, `contactGroupDao`, `noteDao`, `calendarEventDao`, `taskDao`, `syncDao`, `categoryColorDao`, `pendingEmailChangeDao`, `pendingPimChangeDao`):
+`MailDatabase` contains 14 entity classes and 15 abstract DAO accessors (`accountDao`, `emailDao`, `folderDao`, `signatureDao`, `attachmentDao`, `contactDao`, `contactGroupDao`, `noteDao`, `calendarEventDao`, `taskDao`, `syncDao`, `categoryColorDao`, `pendingEmailChangeDao`, `pendingPimChangeDao`, `inboxSyncSnapshotDao`):
 
 - **AccountEntity:** account type, URL and alternate URL, sync mode, certificate metadata (a separate pin for the alternate URL), draft mode, per-account sync and cleanup intervals.
 - **FolderEntity:** Exchange/IMAP/POP3 folders and the SyncKey of each folder.
@@ -243,7 +243,7 @@ com.dedovmosol.iwomail/
 - **PendingPimChangeEntity** (`pending_pim_changes`, introduced in DB version 51): offline task and note changes — `pendingCreate` (added in 52), `pendingUpdate` and `pendingTrash`, `kind` (TASK/NOTE), `serverSubject`, `version`. The only foreign key is to `accounts` (cascade), for the same reason as the email queue.
 - **PendingEmailChangeEntity** (`pending_email_changes`, DB version 50): email changes made without a connection that the server has not accepted yet — `flag` and/or `read`. The value itself is not stored: the current one from `emails` is sent, so several offline edits go out as one result. There is deliberately no foreign key to `emails`: some paths rewrite messages with REPLACE (DELETE + INSERT), and a cascade would drop the pending edit. The foreign key to `accounts` uses CASCADE. `INSERT OR REPLACE … COALESCE` is used instead of UPSERT because SQLite on Android 8 is version 3.18 and has no UPSERT.
 
-The current DB version is **54**. The registered migrations cover `23→54` (`MailDatabase.ALL_MIGRATIONS`, 31 migrations, one per version). A missing upgrade migration recreates the DB only in **debug** builds (`fallbackToDestructiveMigration()` under `BuildConfig.DEBUG`); in release it fails explicitly when the DB is opened. A downgrade (installing an older APK) always recreates the DB (`fallbackToDestructiveMigrationOnDowngrade()`), and server data is resynced.
+The current DB version is **55**. The registered migrations cover `23→55` (`MailDatabase.ALL_MIGRATIONS`, 32 migrations, one per version). A missing upgrade migration recreates the DB only in **debug** builds (`fallbackToDestructiveMigration()` under `BuildConfig.DEBUG`); in release it fails explicitly when the DB is opened. A downgrade (installing an older APK) always recreates the DB (`fallbackToDestructiveMigrationOnDowngrade()`), and server data is resynced.
 
 Widget hot paths use dedicated lightweight projections instead of full entities:
 
@@ -273,7 +273,7 @@ Migration 41→42 (DB version 42) added indexes for the home-screen widget paths
 
 ### EasTransport
 
-`EasTransport` is responsible for WBXML generation and parsing, `PolicyKey` handling, the retry after HTTP `449` through Provision (two-phase, under `provisionMutex`), EWS execution (Basic first, then NTLM) and shared error normalization.
+`EasTransport` is responsible for WBXML generation and parsing, `PolicyKey` handling, the retry after HTTP `449` through Provision (two-phase, under `provisionMutex`), EWS delegation to `EwsClient` (NTLM, switching to Basic only if explicitly offered in an HTTP 401) and shared error normalization.
 
 `EasVersionDetector` picks the highest common version from `14.1`, `14.0`, `12.1`, `12.0`; Exchange 2007 SP1 reports `2.5, 12.0, 12.1`, so `12.1` is selected for it.
 
@@ -495,7 +495,7 @@ An attachment is streamed to a file and never read into memory whole (`EasAttach
 
 1. ItemOperations Fetch with `MS-ASAcceptMultiPart: T`: the file arrives as a separate binary part of the response ([MS-ASCMD] MultiPartResponse), and `EasMultipart.Reader` checks the part header and copies the part to the file. The response is read and closed inside `EasTransport.openEasCommand` in the same `withContext`, so coroutine cancellation leaves no open connection.
 2. On EAS 12.x, GetAttachment as POST (Exchange 2007 rejects GET with 501; 14.0+ has no such command). It is skipped after Status 11: the server limit is shared.
-3. EWS: the message is found by Message-ID or subject, folder and date (`EwsMailLocator`), the attachment by name, and among duplicates by Content-ID (`EwsAttachments.match`; size is not used because EWS 2007 has no `t:Size`). `EwsClient.executeStreaming` (Basic, then NTLM) hands the stream to `EwsAttachmentContent`, which decodes base64 on the fly. A cut inside `Content` is an error, `<t:Content/>` is an empty file.
+3. EWS: the message is found by Message-ID or subject, folder and date (`EwsMailLocator`), the attachment by name, and among duplicates by Content-ID (`EwsAttachments.match`; size is not used because EWS 2007 has no `t:Size`). `EwsClient.executeStreaming` uses the same authentication path as other EWS calls and hands the stream to `EwsAttachmentContent`, which decodes base64 on the fly. A cut inside `Content` is an error, `<t:Content/>` is an empty file.
 
 Errors are `AttachmentErrors` codes (TOO_LARGE, NOT_FOUND, NO_SPACE, TOO_LARGE_FOR_MEMORY); network, 401, 403 and out-of-space errors are not retried. The message screen writes to a temporary `att_*.part` and renames it on success, and the file is deleted on cancellation. Save: on Android 10+ `DownloadsSaver` (MediaStore, `IS_PENDING`), on 8–9 the SAF system dialog; on failure the created empty document is deleted. In-memory download (`downloadAttachment`) is capped at 16 MB.
 

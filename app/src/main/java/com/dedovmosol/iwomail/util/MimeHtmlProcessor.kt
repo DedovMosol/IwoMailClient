@@ -1,6 +1,8 @@
 package com.dedovmosol.iwomail.util
 
+import java.io.InputStream
 import java.nio.ByteBuffer
+import java.util.Base64
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
@@ -52,9 +54,12 @@ object MimeHtmlProcessor {
      * для одночастного MIME и нестандартных boundary.
      */
     fun extractHtmlFromMime(mimeData: String): String {
-        // Never inflate an oversized base64 wrapper just to show a preview. Large raw multipart
-        // messages can still render their small text part without copying the neighbouring files.
+        // Large raw MIME can be scanned by ranges. An oversized base64 wrapper must instead be
+        // decoded incrementally; decoding to a ByteArray/String would also copy every attachment.
         val large = mimeData.length > MAX_INLINE_MIME_CHARS
+        if (large && mimeData.all { it.isBase64Digit() || it.isWhitespace() }) {
+            return extractLargeWrappedBody(mimeData)
+        }
         val decoded = if (large) mimeData else decodeMimeWrapper(mimeData)
         var plainText: String? = null
         var html: String? = null
@@ -72,6 +77,117 @@ object MimeHtmlProcessor {
         if (large) return ""
         findTextPart(decoded, "text/plain")?.let { return it.replace("\n", "<br>") }
         return decoded
+    }
+
+    private fun Char.isBase64Digit() = this in 'A'..'Z' || this in 'a'..'z' || this in '0'..'9' ||
+        this == '+' || this == '/' || this == '='
+
+    private val multipartBoundary = Regex("(?:^|;)\\s*boundary\\s*=\\s*(?:\"([^\"]+)\"|([^;\\s]+))", RegexOption.IGNORE_CASE)
+    private val foldedHeader = Regex("\\r?\\n[ \\t]+")
+
+    /** Decode from the existing String, without creating a second encoded copy or a decoded MIME blob. */
+    private fun extractLargeWrappedBody(wrapper: String): String {
+        val source = object : InputStream() {
+            private var offset = 0
+            override fun read(): Int {
+                while (offset < wrapper.length) {
+                    val c = wrapper[offset++]
+                    if (!c.isWhitespace()) return c.code
+                }
+                return -1
+            }
+        }
+        var plain: String? = null
+        return try {
+            Base64.getDecoder().wrap(source).buffered().use { input ->
+                val boundaries = ArrayList<String>()
+                var headers: StringBuilder? = StringBuilder()
+                var bodyHeaders = ""
+                var body: StringBuilder? = null
+                var isHtml = false
+                fun finishPart(): String? {
+                    val text = body ?: return null
+                    body = null
+                    val decoded = decodeMimePartContent(bodyHeaders, text.toString().trim(), byteView = true)
+                    if (isHtml) return decoded
+                    plain = decoded
+                    return null
+                }
+                val headerLimit = 64 * 1024
+                val line = StringBuilder()
+                while (true) {
+                    line.setLength(0)
+                    val cap = when {
+                        headers != null -> headerLimit
+                        body != null -> MAX_INLINE_MIME_CHARS - (body?.length ?: 0)
+                        else -> 256 // Only the boundary prefix may matter in an ignored attachment.
+                    }.coerceAtLeast(256)
+                    var overflow = false
+                    var byte = input.read()
+                    if (byte < 0) break
+                    while (byte >= 0 && byte != '\n'.code) {
+                        if (line.length < cap) line.append(byte.toChar()) else overflow = true
+                        byte = input.read()
+                    }
+
+                    // RFC 2046 §5.1: an outer delimiter is valid even if a nested closing delimiter is missing.
+                    if (!overflow && line.startsWith("--")) {
+                        val delimiter = line.toString().trimEnd(' ', '\t', '\r')
+                        val index = boundaries.indexOfLast { delimiter == it || delimiter == "$it--" }
+                        if (index >= 0) {
+                            finishPart()?.let { return it }
+                            val closing = delimiter != boundaries[index]
+                            while (boundaries.size > index + (if (closing) 0 else 1)) boundaries.removeAt(boundaries.lastIndex)
+                            if (closing && boundaries.isEmpty()) break
+                            headers = if (closing) null else StringBuilder()
+                            continue
+                        }
+                    }
+
+                    val currentHeaders = headers
+                    val currentBody = body
+                    if (currentHeaders != null) {
+                        if (overflow || currentHeaders.length + line.length + 1 > headerLimit) {
+                            headers = null
+                        } else if (line.isEmpty() || line.length == 1 && line[0] == '\r') {
+                            val block = foldedHeader.replace(currentHeaders, " ")
+                            headers = null
+                            val values = block.lineSequence().filter { ':' in it }
+                                .associate { it.substringBefore(':').lowercase(java.util.Locale.ROOT) to it.substringAfter(':').trim() }
+                            val contentType = values["content-type"].orEmpty()
+                            val type = contentType.substringBefore(';').trim().lowercase(java.util.Locale.ROOT)
+                            val attachment = values["content-disposition"]?.substringBefore(';')?.trim()
+                                .equals("attachment", ignoreCase = true)
+                            if (!attachment && type.startsWith("multipart/")) {
+                                val match = multipartBoundary.find(contentType)
+                                val boundary = match?.groupValues?.let { it[1].ifEmpty { it[2] } }
+                                if (boundaries.size < 10 && boundary != null && boundary.length in 1..70) {
+                                    boundaries.add("--$boundary")
+                                }
+                            } else if (!attachment && (type == "text/html" || plain == null &&
+                                    (type == "text/plain" || type.isEmpty() && values.isNotEmpty()))) {
+                                body = StringBuilder()
+                                bodyHeaders = block
+                                isHtml = type == "text/html"
+                            }
+                        } else {
+                            currentHeaders.append(line).append('\n')
+                        }
+                    } else if (currentBody != null) {
+                        val newline = if (byte == '\n'.code) 1 else 0
+                        if (overflow || currentBody.length + line.length + newline > MAX_INLINE_MIME_CHARS) {
+                            body = null
+                        } else {
+                            currentBody.append(line)
+                            if (newline != 0) currentBody.append('\n')
+                        }
+                    }
+                }
+                finishPart() ?: plain?.replace("\n", "<br>").orEmpty()
+            }
+        } catch (_: java.io.IOException) {
+            plain?.replace("\n", "<br>").orEmpty()
+        }
     }
 
     /**
@@ -231,7 +347,10 @@ object MimeHtmlProcessor {
      * RFC 2045 §5 + §6: после base64/quoted-printable нужно декодировать байты
      * в charset, указанной в Content-Type.
      */
-    fun decodeMimePartContent(headers: String, body: String): String {
+    fun decodeMimePartContent(headers: String, body: String): String =
+        decodeMimePartContent(headers, body, byteView = false)
+
+    private fun decodeMimePartContent(headers: String, body: String, byteView: Boolean): String {
         val encoding = TRANSFER_ENCODING.find(headers)
             ?.groupValues
             ?.get(1)
@@ -245,8 +364,8 @@ object MimeHtmlProcessor {
 
         val bytes = when (encoding) {
             "base64" -> try {
-                android.util.Base64.decode(body, android.util.Base64.DEFAULT)
-            } catch (_: Exception) {
+                Base64.getMimeDecoder().decode(body)
+            } catch (_: IllegalArgumentException) {
                 return body
             }
             "quoted-printable" -> decodeQuotedPrintableBytes(body)
@@ -256,7 +375,7 @@ object MimeHtmlProcessor {
                 // декодированную Unicode строку. Во втором случае повторное
                 // toByteArray(ISO_8859_1) сломает кириллицу. Поэтому raw re-decode
                 // делаем только если строка ещё выглядит как 1-byte view.
-                if (charsetName != null && body.all { it.code <= 0xFF }) {
+                if (byteView || charsetName != null && body.all { it.code <= 0xFF }) {
                     body.toByteArray(Charsets.ISO_8859_1)
                 } else {
                     return body

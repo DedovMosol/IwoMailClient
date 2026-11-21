@@ -27,6 +27,13 @@ class SendFailuresTest {
     }
 
     @Test
+    fun `an unknown outcome overrides HTTP and connection retry hints`() {
+        val unknown = com.dedovmosol.iwomail.eas.COMPOSE_OUTCOME_UNKNOWN
+        assertThat(isRetryableSendError("HTTP 504 [$unknown]")).isFalse()
+        assertThat(isRetryableSendError("[NET:RESET] SocketException [$unknown]")).isFalse()
+    }
+
+    @Test
     fun `rejection that a retry will not fix`() {
         for (code in listOf(400, 401, 403, 413, 500, 501)) assertThat(isRetryableSendError(composeHttpError(code))).isFalse()
         assertThat(isRetryableSendError("Неверный адрес получателя: x")).isFalse()

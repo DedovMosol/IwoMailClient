@@ -85,6 +85,32 @@ class WbxmlParser {
         return result.toString()
     }
 
+    /** MS-ASWBXML §2.2.2.22. ComposeMail responses contain only their own direct Status. */
+    internal fun composeMailStatus(data: ByteArray, command: String): String? {
+        val root = when (command) {
+            "SendMail" -> 0x05
+            "SmartForward" -> 0x06
+            else -> return null
+        }
+        val input = ByteArrayInputStream(data)
+        if (input.read() != WBXML_VERSION || readMultiByteInt(input) != WBXML_UNKNOWN_PI ||
+            readMultiByteInt(input) != WBXML_CHARSET_UTF8 || readMultiByteInt(input) != 0 ||
+            input.read() != TOKEN_SWITCH_PAGE || input.read() != 21 ||
+            input.read() != (root or TAG_HAS_CONTENT) ||
+            input.read() != (0x12 or TAG_HAS_CONTENT) || input.read() != TOKEN_STR_I) return null
+        val status = buildString {
+            while (true) {
+                val byte = input.read()
+                if (byte == 0) break
+                if (byte !in '0'.code..'9'.code || length >= 3) return null
+                append(byte.toChar())
+            }
+        }
+        return status.takeIf {
+            it.isNotEmpty() && input.read() == TOKEN_END && input.read() == TOKEN_END && input.read() == -1
+        }
+    }
+
     private fun parseBody(input: InputStream, result: StringBuilder) {
         val tagStack = mutableListOf<String>()
         var codePage = 0

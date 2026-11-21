@@ -35,9 +35,7 @@ class EasTasksService internal constructor(
         val isVersionDetected: () -> Boolean,
         val detectEasVersion: suspend () -> EasResult<String>,
         val getTasksFolderId: suspend () -> String?,
-        val performNtlmHandshake: suspend () -> String?,
-        val executeNtlmRequest: suspend (String, String) -> String?,
-        val tryBasicAuthEws: suspend (String, String) -> String?,
+        val executeEwsEnvelope: suspend (String, String) -> EasResult<String>,
         val sendMail: suspend (String, String, String, String, String, Int) -> EasResult<Boolean>
     )
     
@@ -663,14 +661,8 @@ class EasTasksService internal constructor(
     
     // ==================== Private EWS methods ====================
 
-    private suspend fun executeEwsWithAuth(soapRequest: String, operation: String): String? {
-        var responseXml = deps.tryBasicAuthEws(soapRequest, operation)
-        if (responseXml == null) {
-            deps.performNtlmHandshake() ?: return null
-            responseXml = deps.executeNtlmRequest(soapRequest, operation)
-        }
-        return responseXml
-    }
+    private suspend fun executeEwsWithAuth(soapRequest: String, operation: String): String? =
+        (deps.executeEwsEnvelope(soapRequest, operation) as? EasResult.Success)?.data
     
     /** Итог EWS-выборки одной папки задач. */
     private class EwsTaskFolder(
@@ -933,8 +925,10 @@ class EasTasksService internal constructor(
         try {
             val soapRequest = buildEwsCreateTaskRequest(subject, body, startDate, dueDate, importance)
             
-            val responseXml = executeEwsWithAuth(soapRequest, "CreateItem")
-                ?: return@withContext EasResult.Error("Не удалось выполнить EWS CreateItem")
+            val responseXml = when (val result = deps.executeEwsEnvelope(soapRequest, "CreateItem")) {
+                is EasResult.Success -> result.data
+                is EasResult.Error -> return@withContext result
+            }
 
             if (responseXml.contains("ErrorSchemaValidation") || responseXml.contains("ErrorInvalidRequest")) {
                 android.util.Log.e("EasTasksService", "createTaskEws: Schema error! Response (first 500 chars): ${responseXml.take(500)}")

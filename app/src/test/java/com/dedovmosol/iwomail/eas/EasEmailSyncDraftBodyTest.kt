@@ -36,8 +36,7 @@ class EasEmailSyncDraftBodyTest {
             wbxmlParser = WbxmlParser(),
             getFromEmail = { "user@corp.example" },
             getDeviceId = { "androidtestdevice01" },
-            performNtlmHandshake = { null },
-            executeNtlmRequest = { _, _ -> null },
+            executeEwsEnvelope = { _, _ -> EasResult.Error("unused") },
             getDeletedItemsFolderId = { null },
             isExchange2007 = { true },
             buildEwsSoapRequest = { it },
@@ -108,6 +107,36 @@ class EasEmailSyncDraftBodyTest {
             "data.bin" to "application/octet-stream"
         ).inOrder()
         assertThat(email.attachments.first().fileReference).isEqualTo("5%3a3%3a0")
+    }
+
+    @Test
+    fun `empty delta preserves its key but empty initialization fails`() = runBlocking<Unit> {
+        val exchange = FakeExchange { Reply.Text("") }
+        val service = exchange.emailService()
+        val delta = (service.sync("5", "K1") as EasResult.Success).data
+        assertThat(delta.syncKey).isEqualTo("K1")
+        assertThat(delta.status).isEqualTo(1)
+        assertThat(delta.emails).isEmpty()
+        assertThat(service.sync("5", "0")).isInstanceOf(EasResult.Error::class.java)
+    }
+
+    @Test
+    fun `oversized draft page cannot yield a key including after provision`() = runBlocking<Unit> {
+        for (provisionFirst in listOf(false, true)) {
+            var syncAttempts = 0
+            val oversized = ByteArray(16 * 1024 * 1024 + 1)
+            val exchange = FakeExchange { call ->
+                when (call.command) {
+                    "Sync" -> if (++syncAttempts == 1 && provisionFirst) Reply.Http(449) else Reply.RawBytes(oversized)
+                    "Provision" -> Reply.Wbxml("""<Provision xmlns="Provision"><Status>1</Status><Policies><Policy><PolicyType>MS-EAS-Provisioning-WBXML</PolicyType><Status>2</Status></Policy></Policies></Provision>""")
+                    else -> Reply.Http(500)
+                }
+            }
+            val result = exchange.emailService().sync("5", "K1", windowSize = 1, fullBody = true)
+            assertThat((result as EasResult.Error).message).contains(EasTransport.RESPONSE_TOO_LARGE)
+            assertThat(exchange.calls.filter { it.command == "Sync" }.map { it.syncKey })
+                .containsExactlyElementsIn(if (provisionFirst) listOf("K1", "K1") else listOf("K1"))
+        }
     }
 
     @Test

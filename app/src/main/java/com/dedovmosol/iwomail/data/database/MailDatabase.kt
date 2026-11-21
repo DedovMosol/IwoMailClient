@@ -8,8 +8,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
-    entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class, PendingEmailChangeEntity::class, PendingPimChangeEntity::class],
-    version = 54,
+    entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class, PendingEmailChangeEntity::class, PendingPimChangeEntity::class, InboxSyncSnapshotEntry::class],
+    version = 55,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -28,6 +28,7 @@ abstract class MailDatabase : RoomDatabase() {
     abstract fun categoryColorDao(): CategoryColorDao
     abstract fun pendingEmailChangeDao(): PendingEmailChangeDao
     abstract fun pendingPimChangeDao(): PendingPimChangeDao
+    internal abstract fun inboxSyncSnapshotDao(): InboxSyncSnapshotDao
 
     companion object {
         private const val TAG = "MailDatabase"
@@ -319,6 +320,16 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `pending_email_changes` ADD COLUMN `targetFolderId` TEXT NOT NULL DEFAULT ''")
             }
         }
+        /** Persist an Inbox full-sync baseline across page checkpoints and process restarts. */
+        private val MIGRATION_54_55 = object : Migration(54, 55) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE `inbox_sync_snapshot` (`folderId` TEXT NOT NULL, `emailId` TEXT NOT NULL, " +
+                        "`seen` INTEGER NOT NULL, PRIMARY KEY(`folderId`, `emailId`), " +
+                        "FOREIGN KEY(`folderId`) REFERENCES `folders`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)"
+                )
+            }
+        }
         internal val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -350,7 +361,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_50_51,
             MIGRATION_51_52,
             MIGRATION_52_53,
-            MIGRATION_53_54
+            MIGRATION_53_54,
+            MIGRATION_54_55
         )
 
         /**

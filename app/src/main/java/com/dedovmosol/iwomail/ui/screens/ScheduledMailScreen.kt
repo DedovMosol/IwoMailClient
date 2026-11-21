@@ -61,6 +61,8 @@ fun ScheduledMailScreen(onBackClick: () -> Unit) {
     val returned by rememberUpdatedState(Strings.scheduledReturnedToDrafts)
     val gone by rememberUpdatedState(Strings.scheduledAlreadySent)
     val saveFailed by rememberUpdatedState(Strings.scheduledDraftSaveFailed)
+    val unavailable by rememberUpdatedState(Strings.scheduledUnavailable)
+    val queueError by rememberUpdatedState(Strings.scheduledQueueError)
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
@@ -69,6 +71,8 @@ fun ScheduledMailScreen(onBackClick: () -> Unit) {
                 ScheduledMailEvent.ReturnedToDrafts -> SafeToast.short(context, returned)
                 ScheduledMailEvent.AlreadyGone -> SafeToast.short(context, gone)
                 ScheduledMailEvent.DraftSaveFailed -> SafeToast.long(context, saveFailed)
+                ScheduledMailEvent.Unavailable -> SafeToast.long(context, unavailable)
+                ScheduledMailEvent.QueueError -> SafeToast.long(context, queueError)
             }
         }
     }
@@ -134,7 +138,10 @@ fun ScheduledMailScreen(onBackClick: () -> Unit) {
                                 entry = entry,
                                 onSendNow = { viewModel.sendNow(entry) },
                                 onReschedule = { rescheduleDir = entry.dir.name },
-                                onCancel = { cancelDir = entry.dir.name }
+                                onCancel = {
+                                    if (entry.status == ScheduledSend.Status.FAILED) viewModel.cancel(entry)
+                                    else cancelDir = entry.dir.name
+                                }
                             )
                             HorizontalDivider()
                         }
@@ -169,36 +176,49 @@ private fun ScheduledMailRow(
             Column {
                 Text(recipients, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    if (entry.sendAt <= System.currentTimeMillis()) Strings.scheduledWaiting else Strings.scheduledFor(time),
+                    when (entry.status) {
+                        ScheduledSend.Status.FAILED -> Strings.scheduledFailed
+                        ScheduledSend.Status.CORRUPT, ScheduledSend.Status.GONE -> Strings.scheduledCorrupt
+                        ScheduledSend.Status.PENDING -> if (entry.sendAt <= System.currentTimeMillis()) {
+                            Strings.scheduledWaiting
+                        } else Strings.scheduledFor(time)
+                    },
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
+                    color = if (entry.status == ScheduledSend.Status.PENDING) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.error
                 )
             }
         },
         leadingContent = {
             Icon(if (entry.attachmentCount > 0) AppIcons.Attachment else AppIcons.Schedule, null)
         },
-        trailingContent = {
-            Box {
-                IconButton(onClick = { menuOpen = true }) { Icon(AppIcons.MoreVert, null) }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text(Strings.sendNow) },
-                        leadingIcon = { Icon(AppIcons.Send, null) },
-                        onClick = { menuOpen = false; onSendNow() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text(Strings.changeTime) },
-                        leadingIcon = { Icon(AppIcons.Schedule, null) },
-                        onClick = { menuOpen = false; onReschedule() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text(Strings.cancelSending) },
-                        leadingIcon = { Icon(AppIcons.Close, null) },
-                        onClick = { menuOpen = false; onCancel() }
-                    )
+        trailingContent = when (entry.status) {
+            ScheduledSend.Status.FAILED -> ({
+                androidx.compose.material3.TextButton(onClick = onCancel) { Text(Strings.scheduledRecoverDraft) }
+            })
+            ScheduledSend.Status.PENDING -> ({
+                Box {
+                    IconButton(onClick = { menuOpen = true }) { Icon(AppIcons.MoreVert, null) }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text(Strings.sendNow) },
+                            leadingIcon = { Icon(AppIcons.Send, null) },
+                            onClick = { menuOpen = false; onSendNow() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(Strings.changeTime) },
+                            leadingIcon = { Icon(AppIcons.Schedule, null) },
+                            onClick = { menuOpen = false; onReschedule() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(Strings.cancelSending) },
+                            leadingIcon = { Icon(AppIcons.Close, null) },
+                            onClick = { menuOpen = false; onCancel() }
+                        )
+                    }
                 }
-            }
+            })
+            else -> null
         }
     )
 }

@@ -82,10 +82,18 @@ class NoteRepository internal constructor(
      * правка со связью. Сервер отказал — запись снимается, и синхронизация вернёт его версию; связи нет — остаётся.
      */
     internal suspend fun sendPendingNote(change: PendingPimChangeEntity, resync: Boolean = true): PimSendOutcome {
+        val result = PendingPimCreateGate.send(pendingDao, change, ::sendPendingNoteMutation)
+        // Never hold the create gate while (re-)entering sync/flush.
+        if (resync && result == PimSendOutcome.DONE) syncAfterPendingSent(change.accountId)
+        return result
+    }
+
+    private suspend fun sendPendingNoteMutation(change: PendingPimChangeEntity): PimSendOutcome {
         val note = noteDao.getNote(change.itemId) ?: run {
             pendingDao.delete(change.itemId) // заметки уже нет (удалена на сервере) — отправлять нечего
             return PimSendOutcome.DONE
         }
+        if (change.awaitingCreateIdentity) return PimSendOutcome.AWAITING_IDENTITY
         if (offline.offline()) return PimSendOutcome.KEPT
         val client = accountRepo.createEasClient(note.accountId) ?: return PimSendOutcome.KEPT
         var working = note
@@ -93,6 +101,10 @@ class NoteRepository internal constructor(
             val created = client.createNote(note.subject, note.body)
             when (created) {
                 is EasResult.Error -> {
+                    if (created.message.startsWith(com.dedovmosol.iwomail.eas.EwsClient.EWS_CREATE_OUTCOME_UNKNOWN)) {
+                        pendingDao.parkUnknownCreate(note.id)
+                        return PimSendOutcome.AWAITING_IDENTITY
+                    }
                     if (offline.canDefer(created.message)) return PimSendOutcome.KEPT
                     android.util.Log.w("NoteRepository", "Pending note create rejected: ${created.message}")
                     pendingDao.delete(note.id)
@@ -104,7 +116,7 @@ class NoteRepository internal constructor(
                     noteDao.delete(note.id)
                     noteDao.insert(renamed)
                     pendingDao.rename(note.id, newId)
-                    pendingDao.clearCreate(newId, change.version)
+                    pendingDao.clearCreate(newId)
                     working = renamed
                 }
             }
@@ -137,7 +149,6 @@ class NoteRepository internal constructor(
         }
         // Сервер мог выдать заметке новый ServerId (перенос в Deleted Items, UpdateItem на Exchange 2007):
         // синхронизация сопоставит её с локальной записью.
-        if (resync) syncNotes(working.accountId, skipRecentDeleteCheck = true)
         return PimSendOutcome.DONE
     }
 
@@ -147,11 +158,11 @@ class NoteRepository internal constructor(
     }
 
     /** Отправить правки заметок аккаунта, ждущие отправки. true — не осталось ни одной. */
-    private suspend fun flushPending(accountId: Long): Boolean = PendingPimChanges(
+    private suspend fun flushPending(accountId: Long, requireIdentity: Boolean = false): Boolean = PendingPimChanges(
         pendingDao,
         send = { sendPendingNote(it, resync = false) },
         afterSent = { account, _ -> syncAfterPendingSent(account) }
-    ).flush(accountId, PimKind.NOTE)
+    ).flush(accountId, PimKind.NOTE, requireIdentity)
 
     /**
      * Перед окончательным удалением: перенос в корзину, ещё не отправленный, — сначала на сервер. Иначе удаление по
@@ -164,6 +175,7 @@ class NoteRepository internal constructor(
     private suspend fun sendTrashFirst(accountId: Long, notes: List<NoteEntity>): List<NoteEntity>? {
         if (notes.none { pendingDao.get(it.id) != null }) return notes
         if (!flushPending(accountId)) return null
+        if (notes.any { pendingDao.get(it.id)?.awaitingCreateIdentity == true }) return null
         val current = noteDao.getAllNotesByAccountList(accountId)
         return notes.mapNotNull { note ->
             current.find { it.id == note.id }
@@ -326,7 +338,7 @@ class NoteRepository internal constructor(
             val targetIds = if (pendingDao.getItemIds(accountId, PimKind.NOTE).isEmpty()) {
                 serverIds
             } else {
-                if (!flushPending(accountId)) {
+                if (!flushPending(accountId, requireIdentity = true)) {
                     return@withEasClient EasResult.Error(RepositoryErrors.PENDING_CHANGES_NOT_SENT)
                 }
                 noteDao.getDeletedNotesByAccountList(accountId).map { it.serverId }
@@ -927,7 +939,8 @@ class NoteRepository internal constructor(
                         val activeServerIds = activeServerNotes.map { it.serverId }.toSet()
 
                         // Заметки, которые были активными локально, но исчезли с сервера (удалены в Outlook)
-                        val missingServerIds = existingActiveServerIds - activeServerIds - unresolvedServerIds
+                        val missingServerIds = (existingActiveServerIds - activeServerIds - unresolvedServerIds)
+                            .filterNot { it.startsWith("local_note_") }
 
                         // Помечаем их как удалённые локально (не полностью удаляем) — ТОЛЬКО по полному
                         // снимку папки Notes: частичная выдача (обрыв, ошибка, лимит страниц) не доказывает,

@@ -81,6 +81,33 @@ class OfflineTaskChangesTest {
     }
 
     @Test
+    fun `unknown queued create parks later edits and trash without replaying any mutation`() = runBlocking<Unit> {
+        val original = seed(serverId = "local_task_a", subject = "Original").copy(body = "Body").also { db.taskDao().insert(it) }
+        queue.markCreate(original.id, accountId, com.dedovmosol.iwomail.data.database.PimKind.TASK, original.subject)
+        val sent = queue.get(original.id)!!
+        coEvery { easClient.createTask("Original", "Body", any(), any(), any(), any(), any(), null) } coAnswers {
+            // User changes this row after the request has started and before its response is lost.
+            queue.markUpdate(original.id, accountId, sent.kind, original.subject)
+            queue.markTrash(original.id, accountId, sent.kind, original.subject)
+            EasResult.Error("${com.dedovmosol.iwomail.eas.EwsClient.EWS_CREATE_OUTCOME_UNKNOWN}: [NET:RESET]")
+        }
+
+        assertThat(repo.sendPendingTask(sent)).isEqualTo(PimSendOutcome.AWAITING_IDENTITY)
+        val parked = queue.get(original.id)!!
+        assertThat(parked.pendingCreate).isFalse()
+        assertThat(parked.pendingUpdate).isTrue()
+        assertThat(parked.pendingTrash).isTrue()
+        assertThat(repo.sendPendingTask(sent)).isEqualTo(PimSendOutcome.AWAITING_IDENTITY)
+        val current = db.taskDao().getTask(original.id)!!
+        assertThat(repo.updateTask(current, subject = "Edited again", body = "New body")).isInstanceOf(EasResult.Success::class.java)
+        assertThat(repo.sendPendingTask(queue.get(original.id)!!)).isEqualTo(PimSendOutcome.AWAITING_IDENTITY)
+        assertThat(queue.get(original.id)!!.pendingUpdate).isTrue()
+        assertThat(queue.get(original.id)!!.pendingTrash).isTrue()
+        assertThat(db.taskDao().getTask(original.id)!!.subject).isEqualTo("Edited again")
+        coVerify(exactly = 1) { easClient.createTask("Original", "Body", any(), any(), any(), any(), any(), null) }
+    }
+
+    @Test
     fun `edit without a connection is kept on the device and queued without contacting the server`() = runBlocking<Unit> {
         val original = seed()
         online = false

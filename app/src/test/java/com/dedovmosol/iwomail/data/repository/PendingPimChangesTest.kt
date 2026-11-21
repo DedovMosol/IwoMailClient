@@ -65,6 +65,33 @@ class PendingPimChangesTest {
     }
 
     @Test
+    fun `restoring a parked local item keeps its unresolved identity marker`() = runBlocking<Unit> {
+        val id = "${accountId}_local_note_a"
+        queue.markCreate(id, accountId, PimKind.NOTE, "Original")
+        queue.parkUnknownCreate(id)
+        queue.markTrash(id, accountId, PimKind.NOTE, "Original")
+        assertThat(queue.cancelTrash(id)).isTrue()
+        val parked = queue.get(id)!!
+        assertThat(parked.awaitingCreateIdentity).isTrue()
+        assertThat(parked.pendingTrash).isFalse()
+        val flusher = PendingPimChanges(queue, send = { error("a parked create is not a sendable mutation") })
+        assertThat(flusher.flush(accountId, PimKind.NOTE)).isTrue()
+        assertThat(flusher.flush(accountId, PimKind.NOTE, requireIdentity = true)).isFalse()
+    }
+
+    @Test
+    fun `settling a known create on its server id does not clear a newer edit`() = runBlocking<Unit> {
+        val localId = "${accountId}_local_task_a"
+        val serverId = "${accountId}_server_task_a"
+        queue.markCreate(localId, accountId, PimKind.TASK, "Original")
+        queue.markUpdate(localId, accountId, PimKind.TASK, "Original")
+        queue.rename(localId, serverId)
+        queue.clearCreate(serverId)
+        assertThat(queue.get(serverId)!!.pendingCreate).isFalse()
+        assertThat(queue.get(serverId)!!.pendingUpdate).isTrue()
+    }
+
+    @Test
     fun `cancelling an unsent trash keeps a pending update`() = runBlocking<Unit> {
         queue.markUpdate("n1", accountId, PimKind.NOTE, "Идеи")
         queue.markTrash("n1", accountId, PimKind.NOTE, "Идеи")

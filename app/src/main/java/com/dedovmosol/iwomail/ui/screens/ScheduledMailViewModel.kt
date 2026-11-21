@@ -25,8 +25,9 @@ sealed interface ScheduledMailEvent {
     data object ReturnedToDrafts : ScheduledMailEvent
     /** Письма уже нет: отправлено или отменено в другом месте. */
     data object AlreadyGone : ScheduledMailEvent
-    /** Отменённое письмо не удалось сохранить в Черновики — отправка осталась запланированной. */
     data object DraftSaveFailed : ScheduledMailEvent
+    data object Unavailable : ScheduledMailEvent
+    data object QueueError : ScheduledMailEvent
 }
 
 /**
@@ -51,32 +52,42 @@ class ScheduledMailViewModel(
     private val _events = Channel<ScheduledMailEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
-    fun sendNow(entry: ScheduledSend.Entry) {
-        viewModelScope.launch {
-            if (!entry.dir.exists()) return@launch _events.send(ScheduledMailEvent.AlreadyGone)
-            ScheduledSend.runNow(context, entry.dir)
-            _events.send(ScheduledMailEvent.SendingNow)
+    fun sendNow(entry: ScheduledSend.Entry) = execute {
+        when (ScheduledSend.runNow(context, entry.dir)) {
+            ScheduledSend.RunResult.ENQUEUED, ScheduledSend.RunResult.RUNNING -> ScheduledMailEvent.SendingNow
+            ScheduledSend.RunResult.GONE, ScheduledSend.RunResult.NOT_DUE -> ScheduledMailEvent.AlreadyGone
+            ScheduledSend.RunResult.UNAVAILABLE -> ScheduledMailEvent.Unavailable
         }
     }
 
-    fun reschedule(entry: ScheduledSend.Entry, sendAt: Long) {
-        viewModelScope.launch {
-            val ok = ScheduledSend.reschedule(context, entry.dir, sendAt)
-            _events.send(if (ok) ScheduledMailEvent.Rescheduled else ScheduledMailEvent.AlreadyGone)
+    fun reschedule(entry: ScheduledSend.Entry, sendAt: Long) = execute {
+        if (ScheduledSend.reschedule(context, entry.dir, sendAt)) ScheduledMailEvent.Rescheduled
+        else when (withContext(ioDispatcher) { ScheduledSend.status(entry.dir) }) {
+            ScheduledSend.Status.GONE -> ScheduledMailEvent.AlreadyGone
+            else -> ScheduledMailEvent.Unavailable
         }
     }
 
-    /** Отменить отправку: письмо — в Черновики. Уже уходит — дождаться и сообщить, что отменять поздно. */
-    fun cancel(entry: ScheduledSend.Entry) {
+    fun cancel(entry: ScheduledSend.Entry) = execute {
+        when (ScheduledSend.restoreDraft(context, entry.dir) { withContext(ioDispatcher) { keepAsDraft(it) } }) {
+            ScheduledSend.RestoreResult.RESTORED -> ScheduledMailEvent.ReturnedToDrafts
+            ScheduledSend.RestoreResult.DRAFT_SAVE_FAILED -> ScheduledMailEvent.DraftSaveFailed
+            ScheduledSend.RestoreResult.UNAVAILABLE -> ScheduledMailEvent.Unavailable
+            ScheduledSend.RestoreResult.GONE -> ScheduledMailEvent.AlreadyGone
+        }
+    }
+
+    private fun execute(action: suspend () -> ScheduledMailEvent) {
         viewModelScope.launch {
-            val job = ScheduledSend.take(context, entry.dir) ?: return@launch _events.send(ScheduledMailEvent.AlreadyGone)
-            if (withContext(ioDispatcher) { keepAsDraft(job) }) {
-                _events.send(ScheduledMailEvent.ReturnedToDrafts)
-            } else {
-                // Не терять письмо: остаётся запланированным
-                ScheduledSend.schedule(context, job)
-                _events.send(ScheduledMailEvent.DraftSaveFailed)
+            val event = try {
+                action()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.w("ScheduledMail", "Queue action failed", e)
+                ScheduledMailEvent.QueueError
             }
+            _events.send(event)
         }
     }
 

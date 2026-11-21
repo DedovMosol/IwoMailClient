@@ -191,6 +191,145 @@ class ServerIdRemapTest {
         assertThat(EmailSyncService.takeStaleResync(inbox)).isFalse()
     }
 
+    @Test
+    fun `interrupted Inbox full sync reconciles the entire snapshot after resuming`() = runBlocking<Unit> {
+        // 987 messages in the mailbox. The first 14 receive new ServerIds and differ only in the
+        // displayed recipient formatting, so no client-side header heuristic is reliable.
+        val before = (1..987).map { n -> row("2:$n", "Message $n", "sender@corp.example", t0) }
+        db.emailDao().insertAllIgnore(before)
+        val renumbered = before.take(14).mapIndexed { i, e ->
+            server("2:${i + 1000}", e.subject, e.from, e.dateReceived).copy(to = "Mailbox Display Name")
+        }
+        coEvery { client.sync("2", "0", any(), any(), any()) } returns EasResult.Success(SyncResponse("initial", 1, emptyList()))
+        coEvery { client.sync("2", "initial", any(), any(), any()) } returns EasResult.Success(
+            SyncResponse("page1", 1, renumbered, moreAvailable = true)
+        )
+        coEvery { client.sync("2", "page1", any(), any(), any()) } throws kotlinx.coroutines.CancellationException("simulated outer deadline")
+
+        try {
+            sync.syncEmailsEas(accountId, inbox, forceFullSync = true)
+            error("Expected cancellation")
+        } catch (_: kotlinx.coroutines.CancellationException) {
+            // Simulate a later worker/repository instance resuming from Room's saved key.
+        }
+        assertThat(db.folderDao().getFolder(inbox)!!.syncKey).isEqualTo("page1")
+        assertThat(db.folderDao().getFolder(inbox)!!.totalCount).isEqualTo(1001)
+        val resumed = EmailSyncService(context, db.folderDao(), db.emailDao(), db.attachmentDao(), db.accountDao(), accountRepo, db)
+        var requestedKey = "page1"
+        for ((i, page) in before.drop(14).chunked(50).withIndex()) {
+            val next = "resume${i + 1}"
+            coEvery { client.sync("2", requestedKey, any(), any(), any()) } returns EasResult.Success(
+                SyncResponse(next, 1, page.map { server(it.serverId, it.subject, it.from, it.dateReceived) },
+                    moreAvailable = (i + 1) * 50 < 973)
+            )
+            requestedKey = next
+        }
+        resumed.syncEmailsEas(accountId, inbox)
+
+        assertThat(db.folderDao().getFolder(inbox)!!.totalCount).isEqualTo(987)
+        assertThat(db.emailDao().getEmailIdsByFolder(inbox)).containsExactlyElementsIn(
+            before.drop(14).map { it.id } + renumbered.map { "${accountId}_${it.serverId}" }
+        )
+    }
+
+    @Test
+    fun `Inbox no-progress guard is not a terminal snapshot page`() = runBlocking<Unit> {
+        val before = (1..10).map { n -> row("2:$n", "Message $n", "sender@corp.example", t0) }
+        db.emailDao().insertAllIgnore(before)
+        coEvery { client.sync("2", "0", any(), any(), any()) } returns EasResult.Success(SyncResponse("initial", 1, emptyList()))
+        coEvery { client.sync("2", "initial", any(), any(), any()) } returns EasResult.Success(
+            SyncResponse("page1", 1, before.take(8).map { server(it.serverId, it.subject, it.from, it.dateReceived) }, moreAvailable = true)
+        )
+        coEvery { client.sync("2", "page1", any(), any(), any()) } returns EasResult.Success(
+            SyncResponse("page1", 1, emptyList(), moreAvailable = true)
+        )
+
+        sync.syncEmailsEas(accountId, inbox, forceFullSync = true)
+
+        assertThat(db.emailDao().getEmailIdsByFolder(inbox)).containsExactlyElementsIn(before.map { it.id })
+    }
+
+    @Test
+    fun `different Inbox ids with identical weak metadata coexist across pages`() = runBlocking<Unit> {
+        // Independent deliveries may arrive in the same second with identical From, To and Subject.
+        val first = row("2:1", "Alert", "sender@corp.example", t0, body = "first body")
+        db.emailDao().insert(first)
+        db.pendingEmailChangeDao().markRead(first.id, accountId)
+        serverSends(server("2:2", first.subject, first.from, first.dateReceived))
+
+        sync.syncEmailsEas(accountId, inbox)
+
+        assertThat(db.emailDao().getEmailIdsByFolder(inbox)).containsExactly(first.id, "${accountId}_2:2")
+        assertThat(db.pendingEmailChangeDao().get(first.id)?.read).isTrue()
+        assertThat(stored("2:1")!!.body).isEqualTo("first body")
+        assertThat(stored("2:2")!!.body).isEmpty()
+    }
+
+    @Test
+    fun `completed Inbox snapshot preserves pending edits and rows added after the baseline`() = runBlocking<Unit> {
+        val before = (1..13).map { n -> row("2:$n", "Message $n", "sender@corp.example", t0) }
+        val localOnly = row("local_draft_unconfirmed", "Local-only content", "sender@corp.example", t0, body = "unsent")
+        val otherFolder = "${accountId}_4"
+        db.folderDao().insert(FolderEntity(otherFolder, accountId, "4", "Trash", "0", FolderType.DELETED_ITEMS))
+        val otherAccount = db.accountDao().insert(
+            AccountEntity(email = "other@corp.example", displayName = "Other", serverUrl = "mail.corp.example", username = "other")
+        )
+        val otherInbox = "${otherAccount}_2"
+        db.folderDao().insert(FolderEntity(otherInbox, otherAccount, "2", "Inbox", "0", FolderType.INBOX))
+        val otherAccountMail = before.last().copy(id = "${otherAccount}_${before.last().serverId}", accountId = otherAccount, folderId = otherInbox)
+        val otherFolderMail = row("4:13", "Same account, other folder", "sender@corp.example", t0).copy(folderId = otherFolder)
+        db.emailDao().insertAllIgnore(before + listOf(localOnly, otherAccountMail, otherFolderMail))
+        db.pendingEmailChangeDao().markRead(before[9].id, accountId)
+        db.pendingEmailChangeDao().markFlag(before[10].id, accountId)
+        db.pendingEmailChangeDao().markMove(before[11].id, accountId, "${accountId}_4")
+        val addedLocally = row("2:20", "Moved in after snapshot start", "sender@corp.example", t0)
+        coEvery { client.sync("2", "0", any(), any(), any()) } returns EasResult.Success(SyncResponse("initial", 1, emptyList()))
+        coEvery { client.sync("2", "initial", any(), any(), any()) } coAnswers {
+            db.emailDao().insert(addedLocally)
+            EasResult.Success(SyncResponse("terminal", 1, before.take(9).map { server(it.serverId, it.subject, it.from, it.dateReceived) }))
+        }
+
+        sync.syncEmailsEas(accountId, inbox, forceFullSync = true)
+
+        assertThat(db.emailDao().getEmailIdsByFolder(inbox)).containsExactlyElementsIn(before.take(12).map { it.id } + listOf(addedLocally.id, localOnly.id))
+        assertThat(db.pendingEmailChangeDao().get(before[9].id)?.read).isTrue()
+        assertThat(db.pendingEmailChangeDao().get(before[10].id)?.flag).isTrue()
+        assertThat(db.pendingEmailChangeDao().get(before[11].id)?.move).isTrue()
+        assertThat(db.emailDao().getEmail(localOnly.id)?.body).isEqualTo("unsent")
+        assertThat(db.emailDao().getEmailIdsByFolder(otherInbox)).containsExactly(otherAccountMail.id)
+        assertThat(db.emailDao().getEmailIdsByFolder(otherFolder)).containsExactly(otherFolderMail.id)
+    }
+
+    @Test
+    fun `Inbox retains cache on an error or on a terminal snapshot missing at least thirty percent`() = runBlocking<Unit> {
+        val before = (1..10).map { n -> row("2:$n", "Message $n", "sender@corp.example", t0) }
+        db.emailDao().insertAllIgnore(before)
+        val initialPage = before.take(7).map { server(it.serverId, it.subject, it.from, it.dateReceived) }
+        coEvery { client.sync("2", "0", any(), any(), any()) } returns EasResult.Success(SyncResponse("initial", 1, emptyList()))
+        coEvery { client.sync("2", "initial", any(), any(), any()) } returns EasResult.Success(
+            SyncResponse("page1", 1, initialPage, moreAvailable = true)
+        )
+        coEvery { client.sync("2", "page1", any(), any(), any()) } returns EasResult.Success(SyncResponse("not-a-checkpoint", 9, emptyList()))
+
+        assertThat(sync.syncEmailsEas(accountId, inbox, forceFullSync = true)).isInstanceOf(EasResult.Error::class.java)
+        assertThat(db.folderDao().getFolder(inbox)!!.syncKey).isEqualTo("page1")
+        assertThat(db.emailDao().getEmailIdsByFolder(inbox)).containsExactlyElementsIn(before.map { it.id })
+
+        coEvery { client.sync("2", "page1", any(), any(), any()) } returns EasResult.Success(SyncResponse("terminal", 1, emptyList()))
+        sync.syncEmailsEas(accountId, inbox)
+        assertThat(db.folderDao().getFolder(inbox)!!.syncKey).isEqualTo("terminal")
+        assertThat(db.folderDao().getFolder(inbox)!!.totalCount).isEqualTo(10)
+    }
+
+    @Test
+    fun `a caller using another account cannot change an Inbox checkpoint`() = runBlocking<Unit> {
+        val wrongAccount = accountId + 1
+        coEvery { accountRepo.createEasClient(wrongAccount) } returns client
+        assertThat(sync.syncEmailsEas(wrongAccount, inbox, forceFullSync = true)).isInstanceOf(EasResult.Error::class.java)
+        assertThat(db.folderDao().getFolder(inbox)!!.syncKey).isEqualTo("K1")
+        coVerify(exactly = 0) { client.sync(any(), any(), any(), any(), any()) }
+    }
+
     // ── Тело письма ─────────────────────────────────────────────────────────────────────────────────────────────
 
     @Test

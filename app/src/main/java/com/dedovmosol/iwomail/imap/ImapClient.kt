@@ -216,6 +216,12 @@ class ImapClient(
     
     private fun messageToEntity(message: Message, folderId: String): EmailEntity {
         return MessageToEntityConverter.convert(
+            fallbackIdentity = {
+                val mailbox = message.folder as? javax.mail.UIDFolder
+                val validity = mailbox?.uidValidity ?: -1L
+                val uid = mailbox?.getUID(message) ?: -1L
+                if (validity > 0 && uid > 0) "imap:${folderId.length}:$folderId:$validity:$uid" else null
+            },
             message = message,
             accountId = account.id,
             folderId = folderId,

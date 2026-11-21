@@ -2,18 +2,72 @@ package com.dedovmosol.iwomail.sync
 
 import android.app.AlarmManager
 import android.app.PendingIntent
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowAlarmManager
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [26])
 class BackgroundWorkAlarmTest {
+
+    @Test
+    @Config(sdk = [26, 33, 34])
+    fun `battery request uses the public package-scoped exemption intent`() {
+        val launches = mutableListOf<Intent>()
+        assertThat(BackgroundWork.openBatterySettings("test.package") { launches.add(it) }).isTrue()
+        val request = launches.single()
+        assertThat(request.action).isEqualTo(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+        assertThat(request.data.toString()).isEqualTo("package:test.package")
+    }
+
+    @Test
+    @Config(sdk = [26, 33, 34])
+    fun `missing exemption request falls back to optimization settings without a package URI`() {
+        val launches = mutableListOf<Intent>()
+        assertThat(BackgroundWork.openBatterySettings("test.package") {
+            launches.add(it)
+            if (launches.size == 1) throw ActivityNotFoundException()
+        }).isTrue()
+        assertThat(launches.last().action).isEqualTo(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        assertThat(launches.last().data).isNull()
+        assertThat(launches).hasSize(2)
+    }
+
+    @Test
+    fun `OEM restriction falls back to app details and reports no launch if all handlers fail`() {
+        val launches = mutableListOf<Intent>()
+        assertThat(BackgroundWork.openBatterySettings("test.package") {
+            launches.add(it)
+            if (launches.size < 3) throw SecurityException()
+        }).isTrue()
+        assertThat(launches.last().action).isEqualTo(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+        assertThat(launches.last().data.toString()).isEqualTo("package:test.package")
+        assertThat(BackgroundWork.openBatterySettings("test.package") { throw ActivityNotFoundException() }).isFalse()
+    }
+
+    @Test
+    @Config(sdk = [33, 34])
+    fun `return advances only when exemption is actually granted and exact alarms still need permission`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val power = shadowOf(context.getSystemService(PowerManager::class.java))
+        ShadowAlarmManager.setCanScheduleExactAlarms(false)
+        power.setIgnoringBatteryOptimizations(context.packageName, false)
+        assertThat(BackgroundWork.needsExactAlarmsPrompt(context)).isFalse()
+        power.setIgnoringBatteryOptimizations(context.packageName, true)
+        assertThat(BackgroundWork.needsExactAlarmsPrompt(context)).isTrue()
+        ShadowAlarmManager.setCanScheduleExactAlarms(true)
+        assertThat(BackgroundWork.needsExactAlarmsPrompt(context)).isFalse()
+    }
 
     @Test
     fun `pendingCode differs by id kind and slot`() {

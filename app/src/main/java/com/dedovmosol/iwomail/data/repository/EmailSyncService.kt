@@ -59,31 +59,6 @@ class EmailSyncService(
 
     companion object {
         /**
-         * Окно дедупликации черновиков (мс): локальный черновик считается дубликатом
-         * серверного при совпадении темы И разнице дат меньше этого окна.
-         * 120 с покрывает рассинхронизацию часов клиент/сервер при создании.
-         */
-        const val DRAFT_DEDUP_WINDOW_MS = 120_000L
-
-        /**
-         * Чистая эвристика дедупликации черновиков (тестируема без Room).
-         *
-         * Возвращает true, если локальный черновик (`local_draft_`) уже существует
-         * на сервере: тот же субъект и дата в пределах [DRAFT_DEDUP_WINDOW_MS].
-         * Сценарий: createDraftMime() создал черновик на сервере, но ItemId не
-         * удалось извлечь из ответа — синк находит серверный черновик, и локальную
-         * копию нужно удалить вместо повторной загрузки (иначе дубликат).
-         */
-        fun isDraftDuplicate(
-            localSubject: String,
-            localDateReceived: Long,
-            serverDrafts: List<Pair<String, Long>> // (subject, dateReceived) серверных черновиков
-        ): Boolean = serverDrafts.any { (serverSubject, serverDate) ->
-            serverSubject == localSubject &&
-                kotlin.math.abs(serverDate - localDateReceived) < DRAFT_DEDUP_WINDOW_MS
-        }
-
-        /**
          * Смена ServerId после SyncKey=0 (EAS 12.1): ровно одна старая запись с тем же to в ±2 с.
          * Разный Message-ID или ConversationId — другое письмо, тело не переносить.
          */
@@ -286,8 +261,8 @@ class EmailSyncService(
             return true
         }
 
-        /** Ответ Sync с этим Status обрабатывается и его SyncKey сохраняется (3/12 — сброс ключа, 4–8 — ошибка). */
-        internal fun isProcessableSyncStatus(status: Int): Boolean = status != 3 && status != 12 && status !in 4..8
+        /** Only a successful EAS Sync response can advance the key or complete an enumeration. */
+        internal fun isProcessableSyncStatus(status: Int): Boolean = status == 1
     }
 
     init {
@@ -345,7 +320,9 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         } catch (_: Exception) {
             true
         }
-        var changed = dropLocalCopiesAlreadyOnServer(folderId)
+        // Neither a matching subject nor a nearby timestamp proves an unconfirmed CreateItem's identity.
+        // Keep the local copy and its files until the user edits, sends or deletes that exact record.
+        var changed = false
         if (!unreachable) {
             // Сначала прежние версии, не удалённые раньше, потом загрузка: только что загруженный черновик удаляет
             // заменённые им сам — повторная попытка в тот же проход была бы лишним запросом.
@@ -363,48 +340,6 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
     return syncResult
 }
 
-    /**
-     * Локальная копия черновика, который уже на сервере, удаляется. Только если черновик МОГ попасть на
-     * сервер (DraftIds.mayExistOnServer): успех без id — по теме, прежний формат id — по теме и дате (как
-     * раньше). Черновик «только на устройстве» по теме не удаляется: совпадение темы с серверным — не
-     * дубликат (правка без связи, тот же «Re: …»). Отметка «заменяет» переходит на серверную запись.
-     */
-    private suspend fun dropLocalCopiesAlreadyOnServer(folderId: String): Boolean {
-        val locals = emailDao.getLocalDrafts(folderId).filter { com.dedovmosol.iwomail.eas.DraftIds.mayExistOnServer(it.serverId) }
-        if (locals.isEmpty()) return false
-        // Серверные — без тел (тело черновика бывает до 1 млн символов): нужны тема и дата.
-        val serverDrafts = emailDao.getDedupInfoByFolder(folderId).filter { !com.dedovmosol.iwomail.eas.DraftIds.isLocal(it.serverId) }
-        if (serverDrafts.isEmpty()) return false
-        var changed = false
-        for (local in locals) {
-            val match = serverDrafts.firstOrNull { server ->
-                sameDraftSubject(server.subject, local.subject) && (
-                    com.dedovmosol.iwomail.eas.DraftIds.isUnconfirmed(local.serverId) ||
-                        isDraftDuplicate(local.subject, local.dateReceived, listOf(server.subject to server.dateReceived))
-                    )
-            } ?: continue
-            try {
-                if (local.replacesServerId != null) {
-                    val current = emailDao.getEmail(match.id)?.replacesServerId
-                    emailDao.updateReplacesServerId(
-                        match.id,
-                        com.dedovmosol.iwomail.eas.DraftIds.mergeReplaced(current, local.replacesServerId, except = match.serverId)
-                    )
-                }
-                val files = attachmentDao.getAttachmentsList(local.id).mapNotNull { it.localPath }
-                attachmentDao.deleteByEmail(local.id)
-                emailDao.delete(local.id)
-                files.forEach { path -> try { java.io.File(path).delete() } catch (_: Exception) {} }
-                // Черновик мог быть открыт в редакторе: его сохранение найдёт серверную запись.
-                DraftSuccessors.record(local.id, match.id)
-                changed = true
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-            }
-        }
-        return changed
-    }
-
 
     /**
      * Черновики, сохранённые только на устройстве, — на сервер: с вложениями, скрытыми копиями и важностью,
@@ -413,8 +348,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
      * черновик (replacesServerId) удаляется по его id.
      */
     private suspend fun uploadLocalDrafts(accountId: Long, folderId: String): Boolean {
-        val localDrafts = emailDao.getLocalDrafts(folderId).filter {
-            !com.dedovmosol.iwomail.eas.DraftIds.isUnconfirmed(it.serverId)
+        val localDrafts = emailDao.getLocalDrafts(folderId).filterNot {
+            com.dedovmosol.iwomail.eas.DraftIds.mayExistOnServer(it.serverId)
         }
         if (localDrafts.isEmpty()) return false
         val easClient = accountRepo.createEasClient(accountId) ?: return false
@@ -462,7 +397,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             // Черновик мог быть открыт в редакторе: его сохранение найдёт новую запись.
             DraftSuccessors.record(draft.id, uploaded.id)
             changed = true
-            val exclude = newId.takeUnless { com.dedovmosol.iwomail.eas.DraftIds.isLocal(it) }
+            if (com.dedovmosol.iwomail.eas.DraftIds.isUnconfirmed(newId)) continue
+            val exclude = newId
             val failed = replaced.filterNot { deleteServerDraft(accountId, it, exclude) }
             if (failed.size != replaced.size) {
                 emailDao.updateReplacesServerId(uploaded.id, com.dedovmosol.iwomail.eas.DraftIds.replacedMarker(failed))
@@ -730,6 +666,9 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         }
 
         try {
+            val folder = folderDao.getFolder(folderId)
+                ?: return EasResult.Error("Папка не найдена")
+            if (folder.accountId != accountId) return EasResult.Error("Папка не принадлежит аккаунту")
             val client = accountRepo.createEasClient(accountId)
                 ?: return EasResult.Error("Аккаунт не найден")
 
@@ -742,11 +681,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 folderDao.updateSyncKey(folderId, "0")
             }
 
-            val folder = folderDao.getFolder(folderId)
+            var syncKey = folderDao.getFolder(folderId)?.syncKey
                 ?: return EasResult.Error("Папка не найдена")
-
-            var syncKey = folder.syncKey
             val isFullResync = syncKey == "0"
+            val inboxSnapshot = database.inboxSyncSnapshotDao().takeIf { folder.type == FolderType.INBOX }
 
             // Сохраняем тела черновиков перед полной ресинхронизацией.
             // EAS Sync НЕ включает body в ответ — только заголовки.
@@ -766,7 +704,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             val isSentReconcile = isFullResync && folder.type == FolderType.SENT_ITEMS
             val serverSentIdsInFullResync = if (isSentReconcile) mutableSetOf<String>() else null
 
-            val isGenericReconcile = isFullResync && folder.type != FolderType.DRAFTS && folder.type != FolderType.SENT_ITEMS
+            val isGenericReconcile = isFullResync && inboxSnapshot == null &&
+                folder.type != FolderType.DRAFTS && folder.type != FolderType.SENT_ITEMS
             val serverGenericIdsInFullResync = if (isGenericReconcile) mutableSetOf<String>() else null
 
             if (isFullResync && folder.type == FolderType.DRAFTS) {
@@ -793,7 +732,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             }
             var newEmailsCount = 0
 
-            val windowSize = 50  // MS-ASCMD: "values >100 cause larger responses, more susceptible to communication errors"; 50×10KB≈500KB/batch
+            // Draft bodies are requested in full. Start conservatively and shrink only on a bounded
+            // response failure; the current SyncKey is retried unchanged, so no batch is skipped.
+            var windowSize = if (folder.type == FolderType.DRAFTS) 10 else 50
+            // MS-ASCMD: values >100 cause larger responses, more susceptible to communication errors.
             val includeMime = folder.type == FolderType.SENT_ITEMS && !isFullResync
 
             if (syncKey == "0") {
@@ -803,7 +745,14 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 val initResult = FolderSyncGate.withFolder(folderId) {
                     client.sync(folder.serverId, "0", windowSize, false).also { response ->
                         if (response is EasResult.Success && isProcessableSyncStatus(response.data.status)) {
-                            folderDao.updateSyncKey(folderId, response.data.syncKey)
+                            database.withTransaction {
+                                if (inboxSnapshot != null) {
+                                    inboxSnapshot.clear(folderId)
+                                    inboxSnapshot.insertMarker(InboxSyncSnapshotEntry(folderId, "", seen = false))
+                                    inboxSnapshot.captureBaseline(folderId, accountId)
+                                }
+                                folderDao.updateSyncKey(folderId, response.data.syncKey)
+                            }
                         }
                     }
                 }
@@ -817,7 +766,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                                 return EasResult.Error("Ошибка синхронизации: неверный SyncKey после retry")
                             }
                         }
-                        if (result.data.status in listOf(4, 5, 6, 7, 8)) {
+                        if (!isProcessableSyncStatus(result.data.status)) {
                             android.util.Log.e("EmailSync", "Initial sync failed with status=${result.data.status} for folder=$folderId")
                             return EasResult.Error("Ошибка синхронизации папки: status=${result.data.status}")
                         }
@@ -827,7 +776,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 }
             }
 
+            // A nonzero key may be a checkpoint from an unfinished Inbox enumeration, not an ordinary delta.
+            val inboxSnapshotActive = inboxSnapshot?.getMarker(folderId) != null
             var moreAvailable = true
+            var receivedTerminalPage = false
             var iterations = 0
             val maxIterations = 1000
             var consecutiveErrors = 0
@@ -837,11 +789,11 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             var previousSyncKey = syncKey
             var sameKeyCount = 0
             var emptyDataCount = 0
-            var syncLoopCompletedFully: Boolean
 
             /** Обработка батча и сохранение его SyncKey; [requestedAt] — момент запроса (для флагов, [FlagWriteTracker]). */
             suspend fun processSyncBatch(data: SyncResponse, requestedAt: Long) {
                 val newSyncKey = data.syncKey
+                receivedTerminalPage = !data.moreAvailable
                 moreAvailable = data.moreAvailable
 
                 // Защита от зацикливания: если сервер возвращает тот же syncKey
@@ -897,13 +849,24 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 processServerDeletions(data.deletedIds, accountId, folder, handledDraftDeletionIds)
                 processServerChanges(data, accountId, folderId, folder, requestedAt, serverDraftIdsInFullResync, serverSentIdsInFullResync, serverGenericIdsInFullResync)
 
-                // КРИТИЧНО: Сохраняем SyncKey ПОСЛЕ успешной обработки
+                // Record exact server membership alongside the SyncKey, after all page writes. Do not hold
+                // a Room write transaction while applying changes: FlagWriteTracker takes a lock before DB writes.
+                database.withTransaction {
+                    if (inboxSnapshotActive && inboxSnapshot != null) {
+                        val seen = (data.emails.map { it.serverId } + data.changedEmails.map { it.serverId })
+                            .filter { it.isNotBlank() }.map { "${accountId}_$it" }
+                        for (ids in seen.chunked(500)) inboxSnapshot.markPageSeen(folderId, ids)
+                        if (receivedTerminalPage) {
+                            reconcileInboxSnapshot(inboxSnapshot, folderId, accountId)
+                            inboxSnapshot.clear(folderId)
+                        }
+                    }
+                    folderDao.updateSyncKey(folderId, newSyncKey)
+                    val totalCount = emailDao.getCountByFolder(folderId)
+                    val unreadCount = emailDao.getUnreadCount(folderId)
+                    folderDao.updateCounts(folderId, unreadCount, totalCount)
+                }
                 syncKey = newSyncKey
-                folderDao.updateSyncKey(folderId, syncKey)
-
-                val totalCount = emailDao.getCountByFolder(folderId)
-                val unreadCount = emailDao.getUnreadCount(folderId)
-                folderDao.updateCounts(folderId, unreadCount, totalCount)
             }
 
             while (moreAvailable && iterations < maxIterations && consecutiveErrors < maxConsecutiveErrors) {
@@ -941,13 +904,20 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             return syncEmailsEas(accountId, folderId, skipRecentEditCheck, retryCount + 1)
                         }
 
-                        if (result.data.status in 4..8) {
-                            android.util.Log.w("EmailSync", "Sync returned error status=${result.data.status} for folder=$folderId, breaking")
-                            break
+                        if (!isProcessableSyncStatus(result.data.status)) {
+                            return EasResult.Error("Sync Status=${result.data.status}")
                         }
                         // Батч обработан и ключ сохранён под шлюзом (processSyncBatch)
                     }
                     is EasResult.Error -> {
+                        if (folder.type == FolderType.DRAFTS &&
+                            result.message.contains(com.dedovmosol.iwomail.eas.EasTransport.RESPONSE_TOO_LARGE)) {
+                            if (windowSize == 1) return result
+                            windowSize = (windowSize / 2).coerceAtLeast(1)
+                            consecutiveErrors = 0
+                            android.util.Log.w("EmailSync", "Draft Sync response exceeded bound; retrying same SyncKey with WindowSize=$windowSize")
+                            continue
+                        }
                         if (result.message.contains("INVALID_SYNCKEY") ||
                             result.message.contains("Status=3") ||
                             result.message.contains("Status=12") ||
@@ -974,17 +944,15 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 }
             }
 
-            syncLoopCompletedFully = !moreAvailable && consecutiveErrors < maxConsecutiveErrors
-
-            if (serverDraftIdsInFullResync != null && serverDraftIdsInFullResync.isNotEmpty() && syncLoopCompletedFully) {
+            if (serverDraftIdsInFullResync != null && serverDraftIdsInFullResync.isNotEmpty() && receivedTerminalPage) {
                 reconcileDraftsAfterFullResync(serverDraftIdsInFullResync, folderId)
             }
 
-            if (serverSentIdsInFullResync != null && serverSentIdsInFullResync.isNotEmpty() && syncLoopCompletedFully) {
+            if (serverSentIdsInFullResync != null && serverSentIdsInFullResync.isNotEmpty() && receivedTerminalPage) {
                 reconcileSentAfterFullResync(serverSentIdsInFullResync, folderId)
             }
 
-            if (serverGenericIdsInFullResync != null && serverGenericIdsInFullResync.isNotEmpty() && syncLoopCompletedFully) {
+            if (serverGenericIdsInFullResync != null && serverGenericIdsInFullResync.isNotEmpty() && receivedTerminalPage) {
                 reconcileGenericFolderAfterFullResync(serverGenericIdsInFullResync, folderId)
             }
 
@@ -1072,7 +1040,13 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         val filteredByServerId = deduplicateByServerId(newEmails, accountId)
 
         val isDrafts = folder.type == FolderType.DRAFTS
-        val contentResult = deduplicateByContent(filteredByServerId, folderId, isDrafts, syncData.deletedIds.toSet())
+        // Different Inbox ServerIds may identify different deliveries with identical headers. A completed
+        // full snapshot or an explicit Delete can retire old IDs; heuristic matching must not erase them.
+        val contentResult = if (folder.type == FolderType.INBOX) {
+            ContentDedupResult(filteredByServerId, emptyMap())
+        } else {
+            deduplicateByContent(filteredByServerId, folderId, isDrafts, syncData.deletedIds.toSet())
+        }
 
         // Серверные черновики, заменённые правкой без связи, не возвращаем: их удалит загрузка замены.
         val replacedServerIds = if (isDrafts) {
@@ -1329,8 +1303,9 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         val dedupInfos = emailDao.getDedupInfoByFolder(folderId)
         val dedupCandidates = if (isDrafts) {
             dedupInfos.filter { e ->
-                !(e.serverId.length > 30 && !e.serverId.contains(":") && !e.serverId.startsWith("local_draft_"))
-                && e.serverId !in deletedInBatch
+                !com.dedovmosol.iwomail.eas.DraftIds.isLocal(e.serverId) &&
+                    !(e.serverId.length > 30 && !e.serverId.contains(":")) &&
+                    e.serverId !in deletedInBatch
             }
         } else {
             dedupInfos
@@ -2040,8 +2015,22 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         android.util.Log.d("EmailSyncService", "reconcileSent: Removed ${orphanIds.size} orphaned sent emails")
     }
 
+    /** Called in the same Room transaction as the terminal page and its SyncKey. */
+    private suspend fun reconcileInboxSnapshot(snapshot: InboxSyncSnapshotDao, folderId: String, accountId: Long) {
+        if (snapshot.getMarker(folderId)?.seen != true) return
+        val orphans = snapshot.getUnseenWithoutPendingChanges(folderId, accountId)
+        if (orphans.isEmpty()) return
+        val localCount = emailDao.getCountByFolder(folderId)
+        if (orphans.size.toLong() * 10 >= localCount.toLong() * 3) {
+            android.util.Log.w("EmailSyncService", "Inbox snapshot: ${orphans.size}/$localCount missing; skipping cleanup")
+            return
+        }
+        // Attachment rows are removed by the email foreign key; queued edits were excluded above.
+        for (ids in orphans.chunked(500)) emailDao.deleteByIds(ids)
+    }
+
     /**
-     * RECONCILE для INBOX и прочих папок после full resync (Status=3 recovery).
+     * RECONCILE для прочих папок после full resync (Status=3 recovery).
      * MS-ASCMD: ServerId стабильность НЕ гарантирована для item-level на EAS 12.1.
      * Удаляем orphan-записи (локальные, отсутствующие на сервере) с safety guard 30%.
      */

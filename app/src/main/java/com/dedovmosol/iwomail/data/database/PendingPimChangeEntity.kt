@@ -84,10 +84,20 @@ abstract class PendingPimChangeDao {
     @Query("UPDATE pending_pim_changes SET pendingTrash = 0 WHERE itemId = :itemId AND version = :version")
     protected abstract suspend fun resetTrash(itemId: String, version: Long)
 
-    @Query("UPDATE pending_pim_changes SET pendingCreate = 0 WHERE itemId = :itemId AND version = :version")
-    protected abstract suspend fun resetCreate(itemId: String, version: Long)
+    /** Unknown create: park its local row; do not clear updates or trash, even if they arrived during I/O. */
+    @Query("UPDATE pending_pim_changes SET pendingCreate = 0, version = version + 1 WHERE itemId = :itemId AND pendingCreate = 1")
+    abstract suspend fun parkUnknownCreate(itemId: String)
 
-    @Query("DELETE FROM pending_pim_changes WHERE itemId = :itemId AND pendingUpdate = 0 AND pendingTrash = 0 AND pendingCreate = 0")
+    @Query("UPDATE pending_pim_changes SET pendingCreate = 0 WHERE itemId = :itemId")
+    protected abstract suspend fun resetCreate(itemId: String)
+
+    // The device-only row itself is the parked-create marker. Restoring a local
+    // item from trash must not drop it when it has no remaining update flags.
+    @Query("""
+        DELETE FROM pending_pim_changes
+        WHERE itemId = :itemId AND pendingUpdate = 0 AND pendingTrash = 0 AND pendingCreate = 0
+          AND instr(itemId, CAST(accountId AS TEXT) || '_local_') <> 1
+    """)
     protected abstract suspend fun deleteIfEmpty(itemId: String)
 
     @Query("DELETE FROM pending_pim_changes WHERE itemId = :itemId")
@@ -121,10 +131,10 @@ abstract class PendingPimChangeDao {
         setCreate(itemId)
     }
 
-    /** Создание принято сервером — если после отправки его не правили ещё раз ([version]). */
+    /** The server acknowledged creation independently of edits queued during the request. */
     @Transaction
-    open suspend fun clearCreate(itemId: String, version: Long) {
-        resetCreate(itemId, version)
+    open suspend fun clearCreate(itemId: String) {
+        resetCreate(itemId)
         deleteIfEmpty(itemId)
     }
 

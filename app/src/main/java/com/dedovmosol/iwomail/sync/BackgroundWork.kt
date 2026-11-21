@@ -2,10 +2,13 @@ package com.dedovmosol.iwomail.sync
 
 import android.app.AlarmManager
 import android.app.PendingIntent
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import android.provider.Settings
 
 /**
  * Разрешения, без которых новые письма приходят с опозданием: работа в фоне (исключение из оптимизации батареи — иначе
@@ -17,10 +20,38 @@ object BackgroundWork {
     fun isAllowed(context: Context): Boolean =
         context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(context.packageName) == true
 
+    /**
+     * The per-app Doze exemption request is available from API 23, including our entire
+     * API 26+ range. OEM Settings may omit or forbid it, so try public Settings actions
+     * in order. A launched screen is not evidence that the exemption was granted.
+     */
+    @android.annotation.SuppressLint("BatteryLife")
+    internal fun openBatterySettings(packageName: String, launch: (Intent) -> Unit): Boolean {
+        val app = Uri.fromParts("package", packageName, null)
+        return listOf(
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, app),
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, app)
+        ).any { intent ->
+            try {
+                // Don't preflight with resolveActivity: Android package visibility can hide handlers.
+                launch(intent)
+                true
+            } catch (_: ActivityNotFoundException) {
+                false
+            } catch (_: SecurityException) {
+                false
+            }
+        }
+    }
+
     /** Точные будильники разрешены (до Android 12 — всегда). */
     fun exactAlarmsAllowed(context: Context): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
             context.getSystemService(AlarmManager::class.java)?.canScheduleExactAlarms() == true
+
+    internal fun needsExactAlarmsPrompt(context: Context): Boolean =
+        !exactAlarmsAllowed(context) && isAllowed(context)
 
     /**
      * Сколько ближайших напоминаний держим в AlarmManager (календарь, задачи, флаги — по столько).

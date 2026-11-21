@@ -1,53 +1,50 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.first
 
-/**
- * Появление слайда онбординга.
- *
- * HorizontalPager с beyondBounds=1 заранее композит соседа. Если enter стартует на первой
- * композиции, «Органайзер» и «Настройки» доигрывают за экраном — на свайпе уже всё на месте.
- *
- * Прятать соседа до currentPage нельзя: во время свайпа превью пустое.
- * Пауза перед enter тоже нельзя: первые 100 мс жеста сосед пустой.
- *
- * Enter стартует, когда слайд текущий **или** цель жеста ([androidx.compose.foundation.pager.PagerState.targetPage]).
- * Уже показанный слайд не прячем: возврат назад не вспыхивает.
- */
 internal object OnboardingPageEnter {
-
     fun isArmed(page: Int, currentPage: Int, targetPage: Int): Boolean =
         page == currentPage || page == targetPage
 
-    enum class Content { Hidden, Show, Animate }
+    fun initialProgress(animationsEnabled: Boolean, alreadyShown: Boolean): Float =
+        if (animationsEnabled && !alreadyShown) 0f else 1f
 
-    fun content(armed: Boolean, animationsEnabled: Boolean, alreadyShown: Boolean): Content {
-        if (alreadyShown) return Content.Show
-        if (!animationsEnabled) return Content.Show
-        if (!armed) return Content.Hidden
-        return Content.Animate
-    }
+    fun alpha(progress: Float): Float = 0.85f + 0.15f * progress
 }
 
+/** Prefetched pages keep their content measured and visible; entering only animates the layer. */
 @Composable
-internal fun rememberOnboardingVisible(armed: Boolean, animationsEnabled: Boolean): Boolean {
-    var shown by remember { mutableStateOf(false) }
-    val phase = OnboardingPageEnter.content(armed, animationsEnabled, shown)
-    LaunchedEffect(armed, animationsEnabled) {
-        when (OnboardingPageEnter.content(armed, animationsEnabled, shown)) {
-            OnboardingPageEnter.Content.Show -> shown = true
-            OnboardingPageEnter.Content.Hidden -> Unit
-            OnboardingPageEnter.Content.Animate -> shown = true
+internal fun Modifier.onboardingPageEnter(armed: Boolean, animationsEnabled: Boolean): Modifier {
+    var shown by rememberSaveable { mutableStateOf(false) }
+    val currentArmed by rememberUpdatedState(armed)
+    val progress = remember { Animatable(OnboardingPageEnter.initialProgress(animationsEnabled, shown)) }
+    // Losing targetPage after a cancelled swipe must not stop the entrance part-way through.
+    LaunchedEffect(animationsEnabled) {
+        if (!animationsEnabled || shown) {
+            shown = true
+            progress.snapTo(1f)
+        } else {
+            snapshotFlow { currentArmed }.first { it }
+            shown = true
+            progress.animateTo(1f, tween(220))
         }
     }
-    return when (phase) {
-        OnboardingPageEnter.Content.Hidden -> false
-        OnboardingPageEnter.Content.Show -> true
-        OnboardingPageEnter.Content.Animate -> shown
+    return if (!animationsEnabled) this else graphicsLayer {
+        alpha = OnboardingPageEnter.alpha(progress.value)
+        translationY = 10.dp.toPx() * (1f - progress.value)
     }
 }

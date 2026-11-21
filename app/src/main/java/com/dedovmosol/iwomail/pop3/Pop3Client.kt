@@ -103,6 +103,7 @@ class Pop3Client(
     
     private fun messageToEntity(message: Message): EmailEntity {
         return MessageToEntityConverter.convert(
+            fallbackIdentity = { (message.folder as? com.sun.mail.pop3.POP3Folder)?.getUID(message)?.takeIf { it.isNotBlank() }?.let { "pop3:$it" } },
             message = message,
             accountId = account.id,
             folderId = "INBOX", // POP3 поддерживает только INBOX

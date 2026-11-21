@@ -53,11 +53,12 @@ import com.dedovmosol.iwomail.eas.MailFlag
 import com.dedovmosol.iwomail.ui.screens.emaillist.ContextMailLabel
 import com.dedovmosol.iwomail.ui.screens.emaillist.MailConfirmation
 import com.dedovmosol.iwomail.ui.screens.emaillist.MailListQuickScroll
-import com.dedovmosol.iwomail.ui.screens.emaillist.MailListScope
+import com.dedovmosol.iwomail.ui.screens.emaillist.FolderListRows
+import com.dedovmosol.iwomail.ui.screens.emaillist.FolderMailList
 import com.dedovmosol.iwomail.ui.screens.emaillist.MailRow
 import com.dedovmosol.iwomail.ui.screens.emaillist.mailListContentPadding
 import com.dedovmosol.iwomail.ui.screens.emaillist.mailListLabel
-import com.dedovmosol.iwomail.ui.screens.emaillist.rememberMailListScope
+import com.dedovmosol.iwomail.ui.screens.emaillist.rememberFolderMailList
 import com.dedovmosol.iwomail.ui.screens.emaillist.SwipeableEmailRow
 import com.dedovmosol.iwomail.ui.screens.emaillist.SwipeRules
 import com.dedovmosol.iwomail.ui.LocalLanguage
@@ -139,10 +140,6 @@ fun EmailListScreen(
     val isTodayAll = viewModel.isTodayAll
     val folder = uiState.folder
     val folders = uiState.folders
-    val displayEmails = remember(uiState.emails, uiState.pendingRemovalIds) {
-        val pending = uiState.pendingRemovalIds
-        if (pending.isEmpty()) uiState.emails else uiState.emails.filter { it.id !in pending }
-    }
     val mailFilter = uiState.mailFilter
     val dateFilter = uiState.dateFilter
     val showFilters = uiState.showFilters
@@ -175,47 +172,25 @@ fun EmailListScreen(
     var emptyTrashConfirmation by remember { mutableStateOf<MailConfirmation?>(null) }
     var showMoreMenu by rememberSaveable { mutableStateOf(false) }
 
-    // Применяем фильтры
-    // PERF: вычисляем cutoff-дату ОДИН раз, а не на каждое письмо
-    val filteredEmails = remember(displayEmails, mailFilter, dateFilter, isTodayAll) {
-        val dateCutoff: Long = if (isTodayAll) 0L else when (dateFilter) {
-            EmailDateFilter.ALL -> 0L
-            EmailDateFilter.TODAY -> {
-                val cal = java.util.Calendar.getInstance()
-                cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-                cal.set(java.util.Calendar.MINUTE, 0)
-                cal.set(java.util.Calendar.SECOND, 0)
-                cal.set(java.util.Calendar.MILLISECOND, 0)
-                cal.timeInMillis
-            }
-            else -> dateFilter.days?.let { days ->
-                System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
-            } ?: 0L
-        }
-        val needsDateFilter = dateCutoff > 0L
-        val needsMailFilter = mailFilter != MailFilter.ALL
-
-        displayEmails
-            .distinctBy { it.id }
-            .filter { email ->
-                val matchesMail = if (!needsMailFilter) true else when (mailFilter) {
-                    MailFilter.ALL -> true
-                    MailFilter.UNREAD -> !email.read
-                    MailFilter.STARRED -> email.flagged
-                    MailFilter.WITH_ATTACHMENTS -> email.hasAttachments
-                    MailFilter.IMPORTANT -> email.importance == 2
-                }
-                val matchesDate = !needsDateFilter || email.dateReceived >= dateCutoff
-                matchesMail && matchesDate
-            }
-    }
-
-    val peerEmails = remember(uiState.peerEmails, uiState.pendingRemovalIds) {
-        uiState.peerEmails.filterNot { it.id in uiState.pendingRemovalIds }
-    }
-    val mailScope = rememberMailListScope(
-        displayEmails, filteredEmails, (conversationView || onlyThreads) && !isDraftsFolder, onlyThreads, peerEmails
-    )
+    val folderList = if (uiState.sourceReady) {
+        rememberFolderMailList(
+            emails = uiState.emails,
+            peerEmails = uiState.peerEmails,
+            pendingRemovalIds = uiState.pendingRemovalIds,
+            mailFilter = mailFilter,
+            dateFilter = dateFilter,
+            isTodayAll = isTodayAll,
+            threaded = (conversationView || onlyThreads) && !isDraftsFolder,
+            onlyThreads = onlyThreads
+        )
+    } else null
+    // Keep the mounted list on a same-account refresh (scroll/preview caches), but only a
+    // prepared model matching the current snapshot can supply action targets.
+    var previousList by remember(uiState.accountId, folderId, folder?.type) { mutableStateOf<FolderMailList?>(null) }
+    SideEffect { if (folderList != null) previousList = folderList }
+    val visibleList = folderList ?: previousList
+    val displayEmails = folderList?.displayEmails.orEmpty()
+    val mailScope = folderList?.scope
     val selectedIds = remember(mailScope, uiState.selectedIds) {
         mailScope?.selectOnly(uiState.selectedIds).orEmpty()
     }
@@ -635,12 +610,12 @@ fun EmailListScreen(
                 activeFiltersCount = activeFiltersCount,
                 onClearFilters = { viewModel.clearFilters() },
                 totalCount = displayEmails.size,
-                filteredCount = mailScope?.selectableIds?.size ?: filteredEmails.size
+                filteredCount = mailScope?.selectableIds?.size ?: 0
             )
 
             // Список писем
             EmailList(
-                mailScope = mailScope,
+                folderList = visibleList,
                 selectedIds = selectedIds,
                 isSelectionMode = isSelectionMode,
                 isRefreshing = isRefreshing,
@@ -651,7 +626,8 @@ fun EmailListScreen(
                 isDrafts = isDraftsFolder,
                 isSent = isSentFolder,
                 recipientFolderIds = recipientFolderIds,
-                onEmailClick = { email ->
+                onEmailClick = click@{ email ->
+                    if (mailScope == null || viewModel.uiState.value !== uiState) return@click
                     if (isSelectionMode) {
                         hapticScreen.tick()
                         updateSelection(MailRow.toggleThread(selectedIds, listOf(email.id)))
@@ -673,7 +649,7 @@ fun EmailListScreen(
                 onFlagChosen = { email, flag ->
                     if (viewModel.uiState.value === uiState && email.id in mailScope?.selectableIds.orEmpty()) viewModel.setFlag(email.id, flag)
                 },
-                swipeRules = swipeRules,
+                swipeRules = if (folderList == null) SwipeRules.NONE else swipeRules,
                 onSwipe = swipe@{ email, action ->
                     if (viewModel.uiState.value !== uiState || email.id !in mailScope?.selectableIds.orEmpty()) return@swipe
                     if (action == SwipeAction.DELETE) com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
@@ -893,7 +869,7 @@ private fun SelectionTopBar(
 @OptIn(androidx.compose.material.ExperimentalMaterialApi::class)
 @Composable
 private fun EmailList(
-    mailScope: MailListScope?,
+    folderList: FolderMailList?,
     selectedIds: Set<String>,
     isSelectionMode: Boolean,
     isRefreshing: Boolean,
@@ -917,12 +893,12 @@ private fun EmailList(
 ) {
     val listState = rememberLazyListState()
     var expandedThreads by rememberSaveable { mutableStateOf(emptyList<String>()) }
-    val emailCount = mailScope?.selectableIds?.size
+    val emailCount = folderList?.scope?.selectableIds?.size
     val pullRefreshState = rememberPullRefreshState(isRefreshing, onRetry)
 
     Box(modifier = Modifier.fillMaxSize()) {
         when {
-            mailScope == null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+            folderList == null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
             errorMessage != null && emailCount == 0 -> {
                 ErrorContent(message = errorMessage, onRetry = onRetry, modifier = Modifier.fillMaxSize())
             }
@@ -960,7 +936,7 @@ private fun EmailList(
                     modifier = if (!isFavorites && !isTodayAll) Modifier.pullRefresh(pullRefreshState) else Modifier
                 ) {
                     EmailListContent(
-                        mailScope = mailScope,
+                        folderList = folderList,
                         expandedThreads = expandedThreads,
                         onToggleThread = { threadKey ->
                             expandedThreads = if (threadKey in expandedThreads) expandedThreads - threadKey else expandedThreads + threadKey
@@ -1085,7 +1061,7 @@ private fun EnvelopeRefreshIndicator(
 
 @Composable
 private fun EmailListContent(
-    mailScope: MailListScope,
+    folderList: FolderMailList,
     expandedThreads: List<String>,
     onToggleThread: (String) -> Unit,
     selectedIds: Set<String>,
@@ -1106,6 +1082,7 @@ private fun EmailListContent(
     onDismissError: () -> Unit,
     onDragSelect: (Set<String>) -> Unit
 ) {
+    val mailScope = folderList.scope
     val context = LocalContext.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
     val stableOnFlagChosen by rememberUpdatedState(onFlagChosen)
@@ -1118,7 +1095,7 @@ private fun EmailListContent(
 
     // Миниатюры — только найденные: письма без картинки проверяются снова (её могли скачать при открытии письма)
     var imagePreviewCache by remember { mutableStateOf<Map<String, com.dedovmosol.iwomail.ui.screens.emaillist.ListPreview>>(emptyMap()) }
-    val emailById = remember(mailScope) { mailScope.matchedEmails.associateBy { it.id } }
+    val emailById = folderList.emailsById
     val previewScope = rememberCoroutineScope()
     val imagePreviews = remember(mailRepo) {
         val settingsRepo = com.dedovmosol.iwomail.data.repository.SettingsRepository.getInstance(context)
@@ -1174,17 +1151,18 @@ private fun EmailListContent(
     }
 
     val stableOnToggleThread by rememberUpdatedState(onToggleThread)
-    val rows = remember(mailScope, expandedThreads) { mailScope.rows(expandedThreads.toSet()) }
+    val rows = remember(folderList, expandedThreads) {
+        if (expandedThreads.isEmpty()) folderList.collapsedRows
+        else FolderListRows(mailScope.rows(expandedThreads.toSet()))
+    }
 
     // Drag selection uses the same scope as the toolbar and select-all.
-    val rowKeys = remember(rows) { rows.map { it.key } }
-    val threadSelection = remember(rows) { MailRow.selectionOf(rows) }
     val dragSelectModifier = com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier(
         listState = listState,
-        itemKeys = rowKeys,
+        itemKeys = rows.keys,
         selectedIds = selectedIds,
         onSelectionChange = onDragSelect,
-        expand = { key -> mailScope.dragTargets(key, threadSelection) }
+        expand = { key -> mailScope.dragTargets(key, rows.threadSelection) }
     )
     val haptic = rememberAppHaptics()
     val currentSelectedIds by rememberUpdatedState(selectedIds)
@@ -1214,7 +1192,7 @@ private fun EmailListContent(
             item { ErrorBanner(message = errorMessage, onDismiss = onDismissError) }
         }
 
-        items(rows, key = { it.key }, contentType = { it::class }) { row ->
+        items(rows.items, key = { it.key }, contentType = { it::class }) { row ->
             if (row is MailRow.Header) {
                 // Нажатие — раскрыть или свернуть; в режиме выбора нажатие и долгое нажатие — выбрать все письма цепочки.
                 // Свайпа и флажка нет: действие над всей цепочкой легко принять за действие над одним письмом

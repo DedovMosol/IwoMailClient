@@ -40,9 +40,7 @@ class EasCalendarUpdateMeetingTest {
             getEasVersion = { transport.easVersion },
             isVersionDetected = { true },
             detectEasVersion = { EasResult.Success(transport.easVersion) },
-            performNtlmHandshake = { transport.performNtlmHandshake() },
-            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
-            tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
+            executeEwsEnvelope = transport::executeEwsEnvelope,
             parseEasDate = { null }
         ))
     }
@@ -253,6 +251,26 @@ class EasCalendarUpdateMeetingTest {
     }
 
     // ───────────────────────── EWS (Exchange 2007, EAS 12.1) ─────────────────────────
+
+    @Test
+    fun `Exchange 2007 - EWS rejection permits EAS create but ambiguous HTTP failure does not`() = runBlocking<Unit> {
+        for (code in listOf(404, 405, 503)) {
+            val routeOk = route()
+            val exchange = FakeExchange { call ->
+                if (call.isEws && call.command == "CreateItem") Reply.Http(code) else routeOk(call)
+            }
+            val result = service(exchange, "12.1").createCalendarEvent(
+                subject = "Planning", startTime = START, endTime = START + 3_600_000L
+            )
+            assertThat(exchange.calls.count { it.isEws && it.command == "CreateItem" }).isEqualTo(1)
+            if (code == 503) {
+                assertThat((result as EasResult.Error).message).contains(EwsClient.EWS_CREATE_OUTCOME_UNKNOWN)
+                assertThat(exchange.hasEasCall()).isFalse()
+            } else {
+                assertThat(exchange.calls.count { !it.isEws && it.xml.contains("<Add>") }).isEqualTo(1)
+            }
+        }
+    }
 
     @Test
     fun `Exchange 2007 - organizer meeting change mails all and appends only new attendees`() = runBlocking<Unit> {

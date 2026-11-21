@@ -82,6 +82,21 @@ class EmailListViewModelTest {
     }
 
     @Test
+    fun `drafts stays loading until the first local emission even if it is empty`() = runTest(dispatcher) {
+        val local = kotlinx.coroutines.flow.MutableSharedFlow<List<EmailEntity>>()
+        every { mailRepo.getEmails(DRAFTS_ID) } returns local
+        every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(listOf(folderMock(DRAFTS_ID, FolderType.DRAFTS)))
+        val vm = createViewModel(folderId = DRAFTS_ID)
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.sourceReady).isFalse()
+        local.emit(emptyList())
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.sourceReady).isTrue()
+        assertThat(vm.uiState.value.emails).isEmpty()
+        assertThat(vm.uiState.value.folder?.type).isEqualTo(FolderType.DRAFTS)
+    }
+
+    @Test
     fun `threads filter subscribes to the paired folder without enabling conversation view globally`() = runTest(dispatcher) {
         every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(listOf(
             folderMock(INBOX_ID, FolderType.INBOX), folderMock("sent", FolderType.SENT_ITEMS)
@@ -97,6 +112,24 @@ class EmailListViewModelTest {
         advanceUntilIdle()
         assertThat(vm.uiState.value.onlyThreads).isFalse()
         assertThat(vm.uiState.value.peerEmails).isEmpty()
+    }
+
+    @Test
+    fun `new primary rows reuse the paired folder subscription`() = runTest(dispatcher) {
+        val inbox = kotlinx.coroutines.flow.MutableStateFlow(listOf(email("a")))
+        every { mailRepo.getEmails(INBOX_ID) } returns inbox
+        every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(listOf(
+            folderMock(INBOX_ID, FolderType.INBOX), folderMock("sent", FolderType.SENT_ITEMS)
+        ))
+        every { mailRepo.getEmails("sent") } returns flowOf(listOf(email("peer").copy(folderId = "sent")))
+        val vm = createViewModel()
+        vm.setOnlyThreads(true)
+        advanceUntilIdle()
+        inbox.value = listOf(email("new"), email("a"))
+        advanceUntilIdle()
+        verify(exactly = 1) { mailRepo.getEmails("sent") }
+        assertThat(vm.uiState.value.emails.map { it.id }).containsExactly("new", "a").inOrder()
+        assertThat(vm.uiState.value.peerEmails.map { it.id }).containsExactly("peer")
     }
 
     @Test

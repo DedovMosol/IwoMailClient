@@ -15,6 +15,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.UUID
 
 /**
  * Worker для отправки писем из очереди при появлении сети
@@ -26,7 +27,6 @@ class OutboxWorker(
     
     companion object {
         private const val OUTBOX_FILE = "outbox.json"
-        private const val OUTBOX_TEMP_FILE = "outbox.json.tmp"
         private const val WORK_NAME = "outbox_send"
         
         // Общий lock для всех операций с файлом очереди
@@ -40,10 +40,14 @@ class OutboxWorker(
          * если очередь не пуста — отправить их, когда будет связь. Вызывать не с главного потока.
          */
         fun drainLegacyQueue(context: Context) {
-            val pending = synchronized(outboxLock) { loadOutboxInternal(context).length() > 0 }
-            if (!pending) return
+            val rows = synchronized(outboxLock) {
+                val queue = loadOutboxInternal(context)
+                (0 until queue.length()).mapNotNull(queue::optJSONObject)
+            }
+            if (rows.none { !it.optBoolean("failed") || recoverable(it) }) return
+            val network = if (rows.any { !it.optBoolean("failed") }) NetworkType.CONNECTED else NetworkType.NOT_REQUIRED
             val request = OneTimeWorkRequestBuilder<OutboxWorker>()
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(network).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, java.util.concurrent.TimeUnit.MINUTES)
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.KEEP, request)
@@ -60,6 +64,8 @@ class OutboxWorker(
             saveOutboxInternal(context, outbox)
         }
         
+        private fun recoverable(entry: JSONObject): Boolean = entry.optLong("accountId", -1L) >= 0 && entry.opt("body") is String
+
         /** Запись очереди → письмо (старые записи без новых полей — с прежними значениями по умолчанию). */
         internal fun mailOf(entry: JSONObject) = OutgoingMail(
             to = entry.optString("to"),
@@ -87,25 +93,8 @@ class OutboxWorker(
             }
         }
         
-        /**
-         * Атомарная запись: write → temp, rename temp → target
-         * Если крашнемся во время writeText — основной файл не повреждён
-         */
         private fun saveOutboxInternal(context: Context, outbox: JSONArray) {
-            val file = File(context.filesDir, OUTBOX_FILE)
-            val tempFile = File(context.filesDir, OUTBOX_TEMP_FILE)
-            try {
-                tempFile.writeText(outbox.toString())
-                // renameTo — атомарная операция на файловой системе
-                if (!tempFile.renameTo(file)) {
-                    // Fallback: если renameTo не сработал (например, разные файловые системы)
-                    tempFile.copyTo(file, overwrite = true)
-                    tempFile.delete()
-                }
-            } catch (e: Exception) {
-                // Если temp-файл не записался, основной файл не повреждён
-                tempFile.delete()
-            }
+            ScheduledSend.atomicText(File(context.filesDir, OUTBOX_FILE), outbox.toString())
         }
     }
     
@@ -118,8 +107,33 @@ class OutboxWorker(
             return@withContext Result.success()
         }
         
-        val accountRepo = RepositoryProvider.getAccountRepository(applicationContext)
-        val failedEmails = JSONArray()
+        val accountRepo by lazy { RepositoryProvider.getAccountRepository(applicationContext) }
+        var retry = false
+        val remove = mutableSetOf<Int>()
+        fun terminal(email: JSONObject) = synchronized(outboxLock) {
+            email.put("failed", true)
+            // Do this before the suspending draft save, so a stopped worker cannot send it again.
+            saveOutboxLocked(applicationContext, outbox)
+        }
+        suspend fun recover(index: Int, email: JSONObject) {
+            if (!recoverable(email)) return
+            val key = runCatching { UUID.fromString(email.optString("recoveryId")) }.getOrNull() ?: UUID.randomUUID().also {
+                synchronized(outboxLock) {
+                    email.put("recoveryId", it.toString())
+                    saveOutboxLocked(applicationContext, outbox)
+                }
+            }
+            try {
+                ScheduledSend.recoverLegacyOutbox(applicationContext, key, ScheduledSend.Job(
+                    accountId = email.getLong("accountId"), mail = mailOf(email), sendAt = email.optLong("timestamp"),
+                    clientId = email.optString("clientId").ifBlank { key.toString() }
+                ))
+                remove.add(index)
+            } catch (e: java.io.IOException) {
+                android.util.Log.w("OutboxWorker", "Could not move a failed message to recovery", e)
+                retry = true
+            }
+        }
         var successCount = 0
         val successAccountIds = mutableSetOf<Long>() // Аккаунты с успешной отправкой
         
@@ -127,23 +141,38 @@ class OutboxWorker(
         val easClients = mutableMapOf<Long, com.dedovmosol.iwomail.eas.EasClient?>()
         
         for (i in 0 until outbox.length()) {
-            val email = outbox.getJSONObject(i)
-            val accountId = email.getLong("accountId")
-            
+            val email = outbox.optJSONObject(i) ?: continue
+            if (email.optBoolean("failed")) {
+                recover(i, email)
+                continue
+            }
+            val accountId = email.optLong("accountId", -1L)
+            if (!recoverable(email)) {
+                terminal(email)
+                continue
+            }
+            val mail = mailOf(email)
+
             try {
                 val easClient = easClients.getOrPut(accountId) {
                     accountRepo.createEasClient(accountId)
                 }
                 if (easClient == null) {
-                    // Аккаунта нет — письмо не отправить никогда; иначе (клиент временно не собрать) — позже
-                    if (accountRepo.getAccount(accountId) != null) failedEmails.put(email)
+                    if (accountRepo.getAccount(accountId) != null) retry = true else {
+                        terminal(email)
+                        recover(i, email)
+                        SendNotifications.notSent(
+                            applicationContext, com.dedovmosol.iwomail.MailApplication.CHANNEL_OUTBOX,
+                            SendNotifications.idFor(email.optString("clientId")), mail.subject, "Account not found", false
+                        )
+                    }
                     continue
                 }
-                val mail = mailOf(email)
                 // N-11: стабильный id (null для старых записей без него → прежнее поведение).
                 val result = easClient.send(mail, stableClientId = email.optString("clientId").takeIf { it.isNotBlank() })
                 when (result) {
                     is EasResult.Success -> {
+                        remove.add(i)
                         successCount++
                         successAccountIds.add(accountId)
                     }
@@ -151,10 +180,13 @@ class OutboxWorker(
                         val attempts = email.optInt("attempts", 0) + 1
                         email.put("attempts", attempts)
                         if (isRetryableSendError(result.message) && attempts < MAX_ATTEMPTS) {
-                            failedEmails.put(email)
+                            retry = true
                         } else {
-                            // Повтор не поможет: письмо — в Черновики, пользователь узнаёт, почему оно не ушло
-                            val saved = saveUnsentAsDraft(applicationContext, accountId, mail) != null
+                            terminal(email)
+                            val saved = ScheduledSend.attemptDraftSave {
+                                saveUnsentAsDraft(applicationContext, accountId, mail) != null
+                            }
+                            if (saved) remove.add(i) else recover(i, email)
                             SendNotifications.notSent(
                                 applicationContext, com.dedovmosol.iwomail.MailApplication.CHANNEL_OUTBOX,
                                 SendNotifications.idFor(email.optString("clientId")), mail.subject, result.message, saved
@@ -164,30 +196,16 @@ class OutboxWorker(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                failedEmails.put(email)
+                if (!email.optBoolean("failed")) retry = true
             }
         }
-        
+
+        // This legacy queue has no producers in current versions. Indexes avoid conflating two older
+        // messages written to the same account in the same millisecond.
         synchronized(outboxLock) {
-            val current = loadOutboxLocked(applicationContext)
-            val emailKey = { json: org.json.JSONObject ->
-                "${json.optLong("accountId")}_${json.optLong("timestamp")}"
-            }
-            val failedByKey = (0 until failedEmails.length())
-                .map { failedEmails.getJSONObject(it) }
-                .associateBy { emailKey(it) }
-            val sentKeys = (0 until outbox.length())
-                .map { emailKey(outbox.getJSONObject(it)) }
-                .filter { it !in failedByKey }
-                .toSet()
-            val merged = JSONArray()
-            for (i in 0 until current.length()) {
-                val item = current.getJSONObject(i)
-                val key = emailKey(item)
-                // Неудачные — с обновлённым счётчиком попыток; отправленные и брошенные — из очереди вон
-                if (key !in sentKeys) merged.put(failedByKey[key] ?: item)
-            }
-            saveOutboxLocked(applicationContext, merged)
+            val remaining = JSONArray()
+            for (i in 0 until outbox.length()) if (i !in remove) remaining.put(outbox.get(i))
+            saveOutboxLocked(applicationContext, remaining)
         }
         
         // Показываем уведомление и воспроизводим звук если что-то отправилось
@@ -202,7 +220,7 @@ class OutboxWorker(
             for (accountId in successAccountIds) refreshSentFolder(applicationContext, accountId)
         }
         // Если остались неотправленные — повторим позже
-        if (failedEmails.length() > 0) {
+        if (retry) {
             Result.retry()
         } else {
             Result.success()

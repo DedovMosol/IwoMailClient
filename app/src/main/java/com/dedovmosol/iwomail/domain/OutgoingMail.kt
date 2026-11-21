@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.domain
 
+import com.dedovmosol.iwomail.eas.COMPOSE_OUTCOME_UNKNOWN
 import com.dedovmosol.iwomail.eas.EasClient
 import com.dedovmosol.iwomail.eas.EasResult
 
@@ -51,7 +52,8 @@ suspend fun EasClient.send(mail: OutgoingMail, stableClientId: String? = null): 
         val error = (forwarded as EasResult.Error).message
         // Обрыв связи: сервер мог пересылку и принять — обычная отправка следом продублировала бы письмо (на EAS 12.x
         // ClientId не защищает). Повтор той же пересылки — у вызывающего.
-        if (com.dedovmosol.iwomail.network.ConnectionFailure.fromMessage(error)?.connectionLevel == true) return forwarded
+        if (COMPOSE_OUTCOME_UNKNOWN in error ||
+            com.dedovmosol.iwomail.network.ConnectionFailure.fromMessage(error)?.connectionLevel == true) return forwarded
         android.util.Log.w("OutgoingMail", "SmartForward failed: $error, falling back to SendMail")
     }
     return if (mail.attachments.isEmpty()) {

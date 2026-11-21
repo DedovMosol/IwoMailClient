@@ -172,9 +172,7 @@ internal fun FakeExchange.tasksService(easVersion: String, tasksFolderId: String
         isVersionDetected = { true },
         detectEasVersion = { EasResult.Success(transport.easVersion) },
         getTasksFolderId = { tasksFolderId },
-        performNtlmHandshake = { transport.performNtlmHandshake() },
-        executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
-        tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
+        executeEwsEnvelope = transport::executeEwsEnvelope,
         sendMail = { _, _, _, _, _, _ -> EasResult.Error("unused") }
     ))
 }
@@ -338,9 +336,7 @@ internal fun FakeExchange.calendarService(
         getEasVersion = { transport.easVersion },
         isVersionDetected = { true },
         detectEasVersion = { EasResult.Success(transport.easVersion) },
-        performNtlmHandshake = { transport.performNtlmHandshake() },
-        executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
-        tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
+        executeEwsEnvelope = transport::executeEwsEnvelope,
         parseEasDate = parseEasDate
     ))
 }

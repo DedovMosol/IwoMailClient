@@ -40,9 +40,7 @@ class EasTasksParserTest {
             isVersionDetected = { true },
             detectEasVersion = { EasResult.Error("unused") },
             getTasksFolderId = { null },
-            performNtlmHandshake = { null },
-            executeNtlmRequest = { _, _ -> null },
-            tryBasicAuthEws = { _, _ -> null },
+            executeEwsEnvelope = { _, _ -> EasResult.Error("unused") },
             sendMail = { _, _, _, _, _, _ -> EasResult.Error("unused") }
         )
         return EasTasksService(deps)

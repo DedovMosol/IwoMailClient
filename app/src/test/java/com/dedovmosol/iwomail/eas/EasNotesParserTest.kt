@@ -43,9 +43,7 @@ class EasNotesParserTest {
             detectEasVersion = { EasResult.Error("unused") },
             getNotesFolderId = { null },
             getDeletedItemsFolderId = { null },
-            performNtlmHandshake = { null },
-            executeNtlmRequest = { _, _ -> null },
-            tryBasicAuthEws = { _, _ -> null },
+            executeEwsEnvelope = { _, _ -> EasResult.Error("unused") },
             findEwsNoteItemId = { _, _ -> null }
         )
         return EasNotesService(deps)

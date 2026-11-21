@@ -76,15 +76,12 @@ class DraftSaver(
         suspend fun serverExtras(accountId: Long, serverId: String): ServerExtras?
         /** Сервер аккаунта отвечает по TCP: нет — сохранение не удалось из-за связи. */
         suspend fun serverReachable(accountId: Long): Boolean
-        suspend fun hasOtherDraftWithSubject(folderId: String, subject: String, exceptIds: Set<String>): Boolean
         suspend fun restore(email: EmailEntity, attachments: List<DraftAttachmentData>)
         /** Фоновая синхронизация не возвращает черновик с этим id (окно между созданием нового и удалением прежнего). */
         fun protect(emailId: String)
         fun unprotect(emailId: String)
         /** Без параллельной загрузки черновиков синхронизацией (иначе локальный черновик ушёл бы на сервер дважды). */
         suspend fun <T> exclusive(accountId: Long, block: suspend () -> T): T
-        /** EWS-id единственного серверного черновика с темой [subject] (кроме [excludeServerId]); null — не однозначно. */
-        suspend fun findServerDraftBySubject(accountId: Long, subject: String, excludeServerId: String?): String?
     }
 
     /** Что известно о серверном черновике только по EWS. null в полях — не известно. */
@@ -165,7 +162,7 @@ class DraftSaver(
             // картинки — файлами вложений. Черновик, созданный без подтверждённого id, — тоже заново: синхронизация
             // его не загружает (он уже на сервере) и убирает, когда придёт серверная копия, — правка пропала бы.
             if (content.filesUnchanged && content.body.length <= DraftUpload.MAX_LOCAL_BODY_CHARS &&
-                !DraftIds.isUnconfirmed(existing.serverId)
+                !DraftIds.mayExistOnServer(existing.serverId)
             ) {
                 // Скрытые копии не известны (правка черновика из Outlook без связи): пустое поле их не стирает —
                 // их прочитает загрузка с устройства у заменяемой версии.
@@ -301,15 +298,14 @@ class DraftSaver(
             }
         }
 
-        // Новая версия на сервере. Прежние — удаляются по id; не вышло — удалит синхронизация. Отметка ставится до
-        // удалений и снимается по мере успеха. Прежняя версия без id (сервер подтвердил создание, id не вернул) —
-        // по однозначной теме, кроме новой.
-        val unconfirmedOld = if (DraftIds.isUnconfirmed(old.serverId)) {
-            store.findServerDraftBySubject(account.id, old.subject, newId.takeUnless { DraftIds.isLocal(it) })
-        } else {
-            null
+        // Only a known predecessor ID can authorize server deletion. Even a single same-subject
+        // match could belong to another draft if our unconfirmed CREATE hasn't appeared in Sync.
+        if (DraftIds.isUnconfirmed(newId)) {
+            store.markReplacing(newEmailId, DraftIds.replacedMarker(replaced))
+            if (oldIsLocal) store.removeLocally(old.id) else store.unprotect(old.id)
+            return Result.SavedOnDeviceOnly
         }
-        val pending = (replaced + listOfNotNull(unconfirmedOld)).distinct().toMutableList()
+        val pending = replaced.toMutableList()
         if (pending.isNotEmpty()) store.markReplacing(newEmailId, DraftIds.replacedMarker(pending))
         for (serverId in pending.toList()) {
             if (store.delete(account.id, serverId, excludeServerId = newId) is EasResult.Success) pending -= serverId
@@ -318,9 +314,7 @@ class DraftSaver(
         if (oldIsLocal || old.serverId in pending) store.removeLocally(old.id)
 
         // Запись новой версии должна остаться (её могла убрать фоновая синхронизация).
-        if (store.draft(newEmailId) == null &&
-            !store.hasOtherDraftWithSubject(old.folderId, content.subject, setOf(old.id))
-        ) {
+        if (store.draft(newEmailId) == null && store.successor(newEmailId)?.let { store.draft(it) } == null) {
             val record = recordOf(account, old.folderId, newId, effective, bcc, attachments.isNotEmpty(), DraftIds.replacedMarker(pending))
             store.restore(record, attachments)
         }

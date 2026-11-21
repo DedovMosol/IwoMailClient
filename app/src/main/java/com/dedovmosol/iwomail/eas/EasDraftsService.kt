@@ -51,6 +51,7 @@ class EasDraftsService internal constructor(
 ) {
 
     companion object {
+        private val MIME_CREATE_REJECTION_CODES = setOf("ErrorMimeContentConversionFailed", "ErrorInvalidMimeContent")
         private val MESSAGE_PATTERN = "<t:Message>(.*?)</t:Message>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val ITEM_PATTERN = "<t:Item>(.*?)</t:Item>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val SUBJECT_PATTERN = "<t:Subject>(.*?)</t:Subject>".toRegex(RegexOption.DOT_MATCHES_ALL)
@@ -90,9 +91,7 @@ class EasDraftsService internal constructor(
         val getEasVersion: () -> String,
         val isVersionDetected: () -> Boolean,
         val detectEasVersion: suspend () -> EasResult<String>,
-        val performNtlmHandshake: suspend () -> String?,
-        val executeNtlmRequest: suspend (String, String) -> String?,
-        val tryBasicAuthEws: suspend (String, String) -> String?,
+        val executeEwsEnvelope: suspend (String, String) -> EasResult<String>,
         val getDraftsFolderId: suspend () -> String?
     )
     
@@ -125,16 +124,24 @@ class EasDraftsService internal constructor(
                 if (!DraftIds.isLocal(mimeResult.data)) applyDraftExtrasEws(mimeResult.data, bcc, importance, receipts)
                 return mimeResult
             }
-            // Ошибку MIME не «чиним» поиском по теме: самый свежий черновик с той же темой — обычно
-            // ПРЕДЫДУЩАЯ версия пересохраняемого черновика; её id выдался бы за новый, а саму её
-            // вызывающий затем удалил бы. Успешный ответ без ItemId (Exchange 2007) разобран в createDraftMime.
+            // Only an explicit MIME rejection can justify a second CreateItem. Missing or
+            // unusable responses get an unconfirmed ID and will not be re-uploaded by sync.
+            if ((mimeResult as EasResult.Error).message !in MIME_CREATE_REJECTION_CODES) {
+                return if (mimeResult.message.startsWith(EwsClient.EWS_CREATE_OUTCOME_UNKNOWN)) {
+                    EasResult.Success(DraftIds.newUnconfirmed())
+                } else EasResult.Success(DraftIds.newDeviceOnly())
+            }
         }
 
         val ewsResult = createDraftEws(to, cc, bcc, subject, body, attachments, importance, receipts)
         if (ewsResult is EasResult.Success) {
             return ewsResult
         }
-        android.util.Log.w("EasDraftsService", "createDraft: not saved on the server (${(ewsResult as EasResult.Error).message})")
+        val error = ewsResult as EasResult.Error
+        if (error.message.startsWith(EwsClient.EWS_CREATE_OUTCOME_UNKNOWN)) {
+            return EasResult.Success(DraftIds.newUnconfirmed())
+        }
+        android.util.Log.w("EasDraftsService", "createDraft: not saved on the server (${error.message})")
         // НЕ createDraftEas: он сбрасывает SyncKey на "0" (полная ресинхронизация теряет pending Adds).
         return EasResult.Success(DraftIds.newDeviceOnly())
     }
@@ -441,35 +448,21 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             val soapRequest = sb.toString()
             
             // 3. Отправляем
-            val responseXml = executeEwsWithAuth(soapRequest, "CreateItem")
-                ?: return@withContext EasResult.Error("MIME CreateItem: нет ответа от сервера")
-            
-            // 4. Извлекаем ItemId
-            var itemId = XmlValueExtractor.extractAttribute(responseXml, "ItemId", "Id")
-                ?: EasPatterns.EWS_ITEM_ID.find(responseXml)?.groupValues?.get(1)
-                ?: ITEM_ID_T_PATTERN.find(responseXml)?.groupValues?.get(1)
-            
-            // 5. Если ItemId не найден, но ответ без ошибки — черновик мог быть создан.
-            // Ищем его через FindItem в папке Drafts по теме (Exchange 2007 SP1+).
-            val hasError = responseXml.contains("ResponseClass=\"Error\"")
-            if (itemId == null && !hasError && subject.isNotBlank()) {
-                try {
-                    itemId = findDraftItemIdBySubject(subject)
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                }
+            val responseXml = when (val result = deps.executeEwsEnvelope(soapRequest, "CreateItem")) {
+                is EasResult.Success -> result.data
+                is EasResult.Error -> return@withContext result
             }
-            
+
+            // Never resolve a missing ItemId by subject: another draft could share it.
             when {
-                itemId != null -> EasResult.Success(itemId)
-                // Сервер подтвердил создание, но id не узнать: черновик есть на сервере — не создаём второй,
-                // синхронизация найдёт его и сверит с локальной копией (DraftIds.mayExistOnServer).
-                !hasError && EwsClient.isEwsSuccess(responseXml) -> EasResult.Success(DraftIds.newUnconfirmed())
-                else -> {
-                    val messageText = EasPatterns.EWS_MESSAGE_TEXT.find(responseXml)?.groupValues?.get(1)
-                    val details = messageText ?: if (hasError) "Server error" else "ItemId not found"
-                    EasResult.Error("MIME CreateItem: $details")
+                EwsClient.isEwsSuccess(responseXml) ->
+                    EasResult.Success(EwsIds.parseItemId(responseXml) ?: DraftIds.newUnconfirmed())
+                responseXml.contains("ResponseClass=\"Error\"") -> {
+                    val message = XmlUtils.extractTopLevelBlocks(responseXml, "CreateItemResponseMessage").singleOrNull()
+                    val code = message?.let { XmlUtils.extractTagValue(it, "ResponseCode")?.trim() }
+                    EasResult.Error(code ?: "MIME CreateItem rejected")
                 }
+                else -> EasResult.Error("${EwsClient.EWS_CREATE_OUTCOME_UNKNOWN}: MIME CreateItem not confirmed")
             }
             } finally {
                 tempFile.delete()
@@ -590,17 +583,11 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
     // === Вспомогательные методы ===
     
     /**
-     * Basic Auth → NTLM fallback для EWS SOAP запросов.
+     * Выполняет один EWS SOAP запрос через общий транспорт.
      * DRY: единая точка авторизации вместо inline-повторений.
      */
-    private suspend fun executeEwsWithAuth(soapRequest: String, operation: String): String? {
-        var responseXml = deps.tryBasicAuthEws(soapRequest, operation)
-        if (responseXml == null) {
-            deps.performNtlmHandshake() ?: return null
-            responseXml = deps.executeNtlmRequest(soapRequest, operation)
-        }
-        return responseXml
-    }
+    private suspend fun executeEwsWithAuth(soapRequest: String, operation: String): String? =
+        (deps.executeEwsEnvelope(soapRequest, operation) as? EasResult.Success)?.data
 
     /**
      * Ищет черновик по теме через EWS FindItem в папке Drafts.
@@ -723,26 +710,26 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         try {
             val ewsVersion = resolveEwsVersion()
             val request = EwsDraftXml.createItem(ewsVersion, subject, body, to, cc, bcc, importance, deps.escapeXml, receipts)
-            val response = executeEwsWithAuth(request, "CreateItem")
-                ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
-            var itemId = EwsIds.parseItemId(response)
-            if (itemId == null && EwsClient.isEwsSuccess(response) && subject.isNotBlank()) {
-                // Успех без ItemId (встречается на Exchange 2007): только что созданный — самый свежий с этой темой.
-                itemId = findDraftItemIdBySubject(subject)
+            val response = when (val result = deps.executeEwsEnvelope(request, "CreateItem")) {
+                is EasResult.Success -> result.data
+                is EasResult.Error -> return@withContext result
             }
-            if (itemId == null) {
-                // Успех без id: черновик на сервере есть, второй не создаём (см. createDraftMime). Вложения без id не
-                // добавить — тогда ошибка (как раньше): иначе новая версия без них, а прежняя удалена.
-                if (EwsClient.isEwsSuccess(response) && attachments.isEmpty()) {
-                    return@withContext EasResult.Success(DraftIds.newUnconfirmed())
-                }
-                return@withContext EasResult.Error("Не удалось создать черновик: ${ewsErrorDetails(response)}")
+            if (!EwsClient.isEwsSuccess(response)) {
+                val detail = ewsErrorDetails(response)
+                return@withContext if (response.contains("ResponseClass=\"Error\"")) {
+                    EasResult.Error("Не удалось создать черновик: $detail")
+                } else EasResult.Error("${EwsClient.EWS_CREATE_OUTCOME_UNKNOWN}: $detail")
             }
+            // The server created a draft, but we cannot safely add files or delete the
+            // predecessor without a confirmed ID. Preserve all local content; do not re-create.
+            val itemId = EwsIds.parseItemId(response)
+                ?: return@withContext EasResult.Success(DraftIds.newUnconfirmed())
             if (attachments.isNotEmpty()) {
                 val attached = attachFilesEws(itemId, EwsIds.parseChangeKey(response), attachments, ewsVersion)
                 if (attached is EasResult.Error) {
-                    hardDeleteEws(itemId, ewsVersion)
-                    return@withContext attached
+                    // A later upload is only safe after cleanup is confirmed.
+                    return@withContext if (hardDeleteEws(itemId, ewsVersion)) attached
+                    else EasResult.Error("${EwsClient.EWS_CREATE_OUTCOME_UNKNOWN}: could not confirm cleanup of partial draft")
                 }
             }
             EasResult.Success(itemId)
@@ -792,14 +779,9 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
     }
 
     /** Уборка черновика, который не удалось собрать целиком (без «Удалённых»). */
-    private suspend fun hardDeleteEws(itemId: String, version: String) {
-        try {
-            executeEwsWithAuth(EwsDraftXml.hardDelete(version, itemId, deps.escapeXml), "DeleteItem")
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            android.util.Log.w("EasDraftsService", "hardDeleteEws: ${e.message}")
-        }
-    }
+    private suspend fun hardDeleteEws(itemId: String, version: String): Boolean =
+        executeEwsWithAuth(EwsDraftXml.hardDelete(version, itemId, deps.escapeXml), "DeleteItem")
+            ?.let { EwsClient.isCompleteEnvelope(it) && EwsClient.isEwsSuccessOrNotFound(it) } == true
 
     private fun ewsErrorDetails(xml: String): String =
         EasPatterns.EWS_MESSAGE_TEXT.find(xml)?.groupValues?.get(1)

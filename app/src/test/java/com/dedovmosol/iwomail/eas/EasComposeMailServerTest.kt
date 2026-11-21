@@ -39,8 +39,7 @@ class EasComposeMailServerTest {
             wbxmlParser = WbxmlParser(),
             getFromEmail = { "me@corp.example" },
             getDeviceId = { "androidtestdevice01" },
-            performNtlmHandshake = { null },
-            executeNtlmRequest = { _, _ -> null },
+            executeEwsEnvelope = { _, _ -> EasResult.Error("unused") },
             getDeletedItemsFolderId = { null },
             isExchange2007 = { easVersion.startsWith("12") },
             buildEwsSoapRequest = { it },
@@ -124,12 +123,52 @@ class EasComposeMailServerTest {
     }
 
     @Test
+    fun `nonempty proxy and invalid WBXML bodies never acknowledge sending`() = runBlocking<Unit> {
+        for (reply in listOf(
+            Reply.Text("<html><body>Sign in</body></html>"),
+            Reply.Wbxml("""<SendMail xmlns="ComposeMail"/>"""),
+            Reply.Wbxml(status(1).replace("SendMail", "SmartForward")),
+            Reply.Wbxml(status(1).replace("<Status>1</Status>", "<Status>bad</Status>"))
+        )) {
+            val exchange = FakeExchange { reply }
+            assertThat(exchange.emailService("14.1").sendMail("a@corp.example", "S", "B"))
+                .isInstanceOf(EasResult.Error::class.java)
+        }
+    }
+
+    @Test
+    fun `SmartForward after provisioning also rejects nonempty HTML`() = runBlocking<Unit> {
+        val attempts = AtomicInteger()
+        val exchange = FakeExchange { if (attempts.incrementAndGet() == 1) Reply.Http(449) else Reply.Text("<html/>") }
+        assertThat(exchange.emailService("12.1").smartForward(
+            to = "a@corp.example", subject = "S", body = "B", collectionId = "5", itemId = "5:1"
+        )).isInstanceOf(EasResult.Error::class.java)
+        assertThat(attempts.get()).isEqualTo(2)
+    }
+
+    @Test
     fun `HTTP error is reported with its code`() = runBlocking<Unit> {
         val exchange = FakeExchange { Reply.Http(503) }
 
         val result = exchange.emailService("12.1").sendMail("a@corp.example", "S", "B")
 
-        assertThat(result).isEqualTo(EasResult.Error(composeHttpError(503)))
+        assertThat((result as EasResult.Error).message).contains(composeHttpError(503))
+        assertThat(result.message).contains(COMPOSE_OUTCOME_UNKNOWN)
+    }
+
+    @Test
+    fun `submitted sends with oversized or lost responses never qualify for an automatic retry`() = runBlocking<Unit> {
+        for (version in listOf("12.1", "14.1")) {
+            for (reply in listOf(Reply.RawBytes(ByteArray(4097)), Reply.Disconnect, Reply.Http(504))) {
+                val exchange = FakeExchange { reply }
+                val service = exchange.emailService(version)
+                val result = service.sendMail("a@corp.example", "S", "B") as EasResult.Error
+                assertThat(result.message).contains(COMPOSE_OUTCOME_UNKNOWN)
+                assertThat(com.dedovmosol.iwomail.domain.isRetryableSendError(result.message)).isFalse()
+                assertThat(result.isRetryable()).isFalse()
+                assertThat(exchange.sent()).hasSize(1)
+            }
+        }
     }
 
     @Test

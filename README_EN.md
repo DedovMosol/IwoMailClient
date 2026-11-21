@@ -27,7 +27,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **Production focus:** Exchange 2007 SP1/SP2 and compatible on-premise Exchange servers.
 - **Primary protocol:** EAS 12.0/12.1/14.0/14.1 for mail, folders, contacts, Direct Push and part of the operations.
 - **EWS addition:** calendar, tasks, notes, drafts, calendar attachments, meeting responses and fallback scenarios for Exchange 2007.
-- **Auth:** Basic Auth, NTLMv2 fallback additionally for EWS operations. The EAS transport works with Basic Auth only. OAuth 2.0 / Modern Auth are not yet implemented.
+- **Auth:** EAS uses Basic Auth over TLS. EWS negotiates NTLMv2 and uses Basic only when the server explicitly offers it in a 401 response. OAuth 2.0 / Modern Auth are not yet implemented.
 - **Local model:** offline-first via Room DB, the UI reads data through Flow, background services update the database.
 
 ## ✨ Features
@@ -67,7 +67,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **Correct unread logic:** the widget's new-mail list is filtered by Inbox and `read = 0`.
 - **Race protection:** `updateMailWidget()` serializes `GlanceAppWidget.updateAll()` through a shared mutex and uses `applicationContext`.
 - **Width-adaptive layout:** the bottom action row adapts to widget width (a Glance `Row` never wraps its content) — narrow sizes show fewer avatars and hide the last-sync label so the buttons aren't clipped, avatars scale with the widget.
-- **Room indexes (migration 41→42):** indexes for hot widget queries: unread Inbox, folder type, active tasks, current and upcoming calendar events. The current schema version is v54.
+- **Room indexes (migration 41→42):** indexes for hot widget queries: unread Inbox, folder type, active tasks, current and upcoming calendar events. The current schema version is v55.
 
 </details>
 
@@ -149,7 +149,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 | Build | Gradle 8.12, AGP 8.7.3, KSP 1.9.22-1.0.17, Kover 0.7.6, minSdk 26, targetSdk 36 |
 | UI | Jetpack Compose, Compose BOM 2024.06.00, Material 3, Navigation 2.7.6, Lifecycle/ViewModel 2.7.0 |
 | Async | Coroutines 1.7.3, Flow |
-| Storage | Room 2.6.1 (`MailDatabase` v54), DataStore Preferences 1.1.1 |
+| Storage | Room 2.6.1 (`MailDatabase` v55), DataStore Preferences 1.1.1 |
 | Network | OkHttp 4.12.0, Conscrypt 2.5.2 |
 | Protocols | EAS, EWS, JavaMail IMAP/POP3 (`android-mail` 1.6.7) |
 | Background | WorkManager 2.9.0, Foreground Service, AlarmManager |
@@ -175,7 +175,7 @@ Protocol Layer
   EasTransport + EAS services + EWS client + IMAP/POP3 beta clients
     ↓
 Persistence / Network
-  Room MailDatabase v54, DataStore
+  Room MailDatabase v55, DataStore
   HttpClientProvider, NetworkMonitor, NtlmAuthenticator
     ↓
 Background

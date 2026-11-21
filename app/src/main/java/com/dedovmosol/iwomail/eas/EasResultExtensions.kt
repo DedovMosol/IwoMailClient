@@ -26,7 +26,7 @@ private val RETRYABLE_KEYWORDS = arrayOf("Status=", "failed", "error")
  * чтобы такие ошибки не ретраились, даже если текст случайно содержит retryable-слово.
  */
 private val NON_RETRYABLE_MARKERS = arrayOf(
-    "UNAUTHORIZED", "ACCESS_DENIED", "PROVISION_REQUIRED", "REMOTE_WIPE"
+    "UNAUTHORIZED", "ACCESS_DENIED", "PROVISION_REQUIRED", "REMOTE_WIPE", EwsClient.EWS_CREATE_OUTCOME_UNKNOWN, COMPOSE_OUTCOME_UNKNOWN
 )
 
 fun <T> EasResult<T>.isRetryable(): Boolean {

@@ -79,6 +79,59 @@ class ScheduledSendStorageTest {
     }
 
     @Test
+    fun `body corruption is detected instead of sending a partial job`() {
+        val dir = File(tmp.root, "4b_abc")
+        ScheduledSend.write(dir, job)
+        File(dir, ScheduledSend.BODY_FILE).appendText("changed")
+        assertThat(ScheduledSend.read(dir)).isNull()
+        assertThat(ScheduledSend.status(dir)).isEqualTo(ScheduledSend.Status.CORRUPT)
+    }
+
+    @Test
+    fun `missing manifest attachment is detected instead of silently dropping it`() {
+        val dir = File(tmp.root, "4c_abc")
+        ScheduledSend.write(dir, job)
+        val manifest = org.json.JSONArray(File(dir, "manifest.json").readText())
+        File(dir, manifest.getJSONObject(0).getString("file")).delete()
+        assertThat(ScheduledSend.read(dir)).isNull()
+        assertThat(ScheduledSend.status(dir)).isEqualTo(ScheduledSend.Status.CORRUPT)
+        assertThat(manifest.length()).isEqualTo(2)
+    }
+
+    @Test
+    fun `modern count detects loss of manifest and every attachment`() {
+        val dir = File(tmp.root, "4d_abc")
+        ScheduledSend.write(dir, job)
+        dir.listFiles()!!.filter { it.name != "mail.json" && it.name != ScheduledSend.BODY_FILE }.forEach { it.delete() }
+        assertThat(ScheduledSend.read(dir)).isNull()
+    }
+
+    @Test
+    fun `legacy disk jobs require a body and reject lost or malformed manifests`() {
+        val dir = File(tmp.root, "4e_abc")
+        ScheduledSend.write(dir, job)
+        val data = workDataOf("accountId" to 1L, "to" to "a@b.cd")
+        val metaFile = File(dir, "mail.json")
+        val meta = JSONObject(metaFile.readText()).apply { remove("attachmentCount"); remove("bodyBytes") }
+        metaFile.writeText(meta.toString())
+        assertThat(ScheduledSend.read(dir)?.mail?.attachments).hasSize(2)
+        val manifest = File(dir, "manifest.json")
+        val original = manifest.readText()
+        manifest.writeText("not an array")
+        assertThat(ScheduledSend.read(dir)).isNull()
+        assertThat(ScheduledEmailWorker.legacyJob(data, dir)).isNull()
+        manifest.delete()
+        assertThat(ScheduledSend.read(dir)).isNull()
+        assertThat(ScheduledEmailWorker.legacyJob(data, dir)).isNull()
+        manifest.writeText(original)
+        File(dir, ScheduledSend.BODY_FILE).delete()
+        assertThat(ScheduledSend.read(dir)).isNull()
+        assertThat(ScheduledEmailWorker.legacyJob(data, dir)).isNull()
+        assertThat(ScheduledEmailWorker.legacyJob(workDataOf("accountId" to 1L, "to" to "a@b.cd", "body" to "inline"), dir)
+            ?.mail?.attachments).hasSize(2)
+    }
+
+    @Test
     fun `alarm extra outside the payload root is rejected`() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         fun dir(name: String?) = ScheduledSend.dirFromAlarm(context, Intent().putExtra("payload", name))

@@ -23,7 +23,7 @@
 | AGP | `8.7.3` |
 | Инструменты сборки | Gradle `8.12`, KSP `1.9.22-1.0.17`, Kover `0.7.6` |
 | UI | Jetpack Compose (BOM `2024.06.00`) + Material 3, Navigation Compose `2.7.6`, Coil `2.5.0` |
-| БД | Room `2.6.1`, `MailDatabase` версии `54` (13 entity), экспорт схем включён (`app/schemas`) |
+| БД | Room `2.6.1`, `MailDatabase` версии `55` (14 entity), экспорт схем включён (`app/schemas`) |
 | Сеть и фон | OkHttp `4.12.0`, Conscrypt `2.5.2`, WorkManager `2.9.0`, DataStore `1.1.1`, Glance `1.1.1`, JavaMail (`android-mail`) `1.6.7` |
 | Безопасность | `security-crypto` `1.1.0-alpha06` (EncryptedSharedPreferences), `biometric` `1.1.0` |
 | Архитектуры APK | `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64` + универсальный APK |
@@ -229,7 +229,7 @@ com.dedovmosol.iwomail/
 
 ### Room
 
-`MailDatabase` содержит 13 entity-классов и 14 абстрактных DAO-аксессоров (`accountDao`, `emailDao`, `folderDao`, `signatureDao`, `attachmentDao`, `contactDao`, `contactGroupDao`, `noteDao`, `calendarEventDao`, `taskDao`, `syncDao`, `categoryColorDao`, `pendingEmailChangeDao`, `pendingPimChangeDao`):
+`MailDatabase` содержит 14 entity-классов и 15 абстрактных DAO-аксессоров (`accountDao`, `emailDao`, `folderDao`, `signatureDao`, `attachmentDao`, `contactDao`, `contactGroupDao`, `noteDao`, `calendarEventDao`, `taskDao`, `syncDao`, `categoryColorDao`, `pendingEmailChangeDao`, `pendingPimChangeDao`, `inboxSyncSnapshotDao`):
 
 - **AccountEntity:** тип аккаунта, URL и альтернативный URL, режим синхронизации, метаданные сертификатов (отдельный пин для альтернативного URL), режим черновиков, интервалы синхронизации и очистки на уровне аккаунта.
 - **FolderEntity:** папки Exchange/IMAP/POP3 и SyncKey каждой папки.
@@ -244,7 +244,7 @@ com.dedovmosol.iwomail/
 - **PendingPimChangeEntity** (`pending_pim_changes`, таблица добавлена в версии БД 51): правки задач и заметок без связи — `pendingCreate` (добавлен в версии 52), `pendingUpdate` и `pendingTrash`, `kind` (TASK/NOTE), `serverSubject`, `version`. Внешний ключ только на `accounts` (каскад), по той же причине, что и у очереди писем.
 - **PendingEmailChangeEntity** (`pending_email_changes`, версия БД 50): изменения писем, сделанные без связи и ещё не принятые сервером, — `flag` и/или `read`. Само значение не хранится: отправляется текущее из `emails`, поэтому несколько правок без связи уходят одним итогом. Внешнего ключа на `emails` нет намеренно: часть путей перезаписывает письма через REPLACE (DELETE + INSERT), и каскад стёр бы ожидающую правку. Внешний ключ на `accounts` — с каскадным удалением. Вместо UPSERT используется `INSERT OR REPLACE … COALESCE`, потому что SQLite на Android 8 — версии 3.18 и UPSERT не знает.
 
-Текущая версия БД — **54**. Зарегистрированные миграции покрывают `23→54` (`MailDatabase.ALL_MIGRATIONS`, 31 миграция, по одной на версию). При отсутствии миграции для обновления БД пересоздаётся только в **debug**-сборках (`fallbackToDestructiveMigration()` под `BuildConfig.DEBUG`); в release это даёт явный сбой при открытии БД. Понижение версии (установка более старого APK) всегда пересоздаёт БД (`fallbackToDestructiveMigrationOnDowngrade()`), серверные данные синхронизируются заново.
+Текущая версия БД — **55**. Зарегистрированные миграции покрывают `23→55` (`MailDatabase.ALL_MIGRATIONS`, 32 миграции, по одной на версию). При отсутствии миграции для обновления БД пересоздаётся только в **debug**-сборках (`fallbackToDestructiveMigration()` под `BuildConfig.DEBUG`); в release это даёт явный сбой при открытии БД. Понижение версии (установка более старого APK) всегда пересоздаёт БД (`fallbackToDestructiveMigrationOnDowngrade()`), серверные данные синхронизируются заново.
 
 Горячие пути виджета используют отдельные лёгкие проекции вместо полных entity:
 
@@ -274,7 +274,7 @@ com.dedovmosol.iwomail/
 
 ### EasTransport
 
-`EasTransport` отвечает за генерацию и разбор WBXML, обработку `PolicyKey`, повтор после HTTP `449` через Provision (двухфазный, под `provisionMutex`), выполнение EWS-запросов (сначала Basic, затем NTLM) и общую нормализацию ошибок.
+`EasTransport` отвечает за генерацию и разбор WBXML, обработку `PolicyKey`, повтор после HTTP `449` через Provision (двухфазный, под `provisionMutex`), делегирование EWS-запросов в `EwsClient` (NTLM, переход на Basic только после явного предложения в HTTP 401) и общую нормализацию ошибок.
 
 `EasVersionDetector` выбирает наибольшую общую версию из `14.1`, `14.0`, `12.1`, `12.0`; Exchange 2007 SP1 отдаёт `2.5, 12.0, 12.1`, поэтому для него выбирается `12.1`.
 
@@ -496,7 +496,7 @@ Exchange 2007 (EAS 12.1) выдаёт ServerId по порядку выдачи 
 
 1. ItemOperations Fetch с `MS-ASAcceptMultiPart: T`: файл приходит отдельной двоичной частью ответа ([MS-ASCMD] MultiPartResponse), `EasMultipart.Reader` проверяет заголовок частей и копирует нужную в файл. Ответ читается и закрывается внутри `EasTransport.openEasCommand` в том же `withContext`, поэтому отмена корутины не оставляет открытого соединения.
 2. На EAS 12.x — GetAttachment методом POST (GET Exchange 2007 отвергает с 501, в 14.0+ команды нет). После Status 11 не пробуется: лимит сервера общий.
-3. EWS: письмо находится по Message-ID или теме, папке и дате (`EwsMailLocator`), вложение — по имени, при дублях по Content-ID (`EwsAttachments.match`; размер не используется — в EWS 2007 нет `t:Size`). `EwsClient.executeStreaming` (Basic, затем NTLM) отдаёт поток в `EwsAttachmentContent`, который декодирует base64 на лету. Обрыв внутри `Content` — ошибка, `<t:Content/>` — пустой файл.
+3. EWS: письмо находится по Message-ID или теме, папке и дате (`EwsMailLocator`), вложение — по имени, при дублях по Content-ID (`EwsAttachments.match`; размер не используется — в EWS 2007 нет `t:Size`). `EwsClient.executeStreaming` использует тот же порядок аутентификации, что и обычный EWS-запрос, и отдаёт поток в `EwsAttachmentContent`, который декодирует base64 на лету. Обрыв внутри `Content` — ошибка, `<t:Content/>` — пустой файл.
 
 Ошибки — коды `AttachmentErrors` (TOO_LARGE, NOT_FOUND, NO_SPACE, TOO_LARGE_FOR_MEMORY); сеть, 401, 403 и нехватка места повторов не вызывают. Экран письма пишет во временный `att_*.part` и переименовывает после успеха, при отмене файл удаляется. «Сохранить»: на Android 10+ `DownloadsSaver` (MediaStore, `IS_PENDING`), на 8–9 системный диалог SAF; при ошибке созданный пустой документ удаляется. Вложение в память (`downloadAttachment`) ограничено 16 МБ.
 

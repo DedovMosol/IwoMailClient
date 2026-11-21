@@ -31,8 +31,6 @@ class EasNotesServiceTest {
     private val detectEasVersion = mockk<suspend () -> EasResult<String>>()
     private val getNotesFolderId = mockk<suspend () -> String?>()
     private val getDeletedItemsFolderId = mockk<suspend () -> String?>()
-    private val performNtlmHandshake = mockk<suspend () -> String?>()
-    private val executeNtlmRequest = mockk<suspend (String, String) -> String?>()
     private val findEwsNoteItemId = mockk<suspend (String, Boolean) -> String?>()
     
     @Before
@@ -49,9 +47,7 @@ class EasNotesServiceTest {
             detectEasVersion = detectEasVersion,
             getNotesFolderId = getNotesFolderId,
             getDeletedItemsFolderId = getDeletedItemsFolderId,
-            performNtlmHandshake = performNtlmHandshake,
-            executeNtlmRequest = executeNtlmRequest,
-            tryBasicAuthEws = { _, _ -> null },
+            executeEwsEnvelope = { _, _ -> EasResult.Error("unused") },
             findEwsNoteItemId = findEwsNoteItemId
         )
         

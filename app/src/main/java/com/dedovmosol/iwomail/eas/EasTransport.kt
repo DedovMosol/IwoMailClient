@@ -17,7 +17,7 @@ import android.util.Base64
  *
  * Encapsulates:
  *  - WBXML-encoded EAS command execution (with HTTP 449 → Provision retry)
- *  - EWS SOAP execution (Basic → NTLM fallback)
+ *  - EWS SOAP execution (challenge-driven authentication)
  *  - Provision two-phase flow (MS-ASPROV 3.1.5.1)
  *
  * Thread-safety:
@@ -159,25 +159,33 @@ class EasTransport(
     ): EasResult<T> = withContext(Dispatchers.IO) {
         try {
             val wbxml = wbxmlParser.generate(xml)
+            // An empty response is a no-change acknowledgement only for a non-initial Sync
+            // without pending client commands. Never synthesize a success for a mutation.
+            val emptySyncResponse = if (command == "Sync" && XmlUtils.extractTagValue(xml, "Commands") == null) {
+                XmlUtils.extractTagValue(xml, "SyncKey")?.takeIf { it.isNotBlank() && it != "0" }?.let { key ->
+                    """<?xml version="1.0" encoding="UTF-8"?><Sync><Collections><Collection><Status>1</Status><SyncKey>$key</SyncKey></Collection></Collections></Sync>"""
+                }
+            } else null
 
             val request = buildEasRequest(command, wbxml, withPolicyKey = !skipPolicyKey)
             val response = executeRequest(request)
 
             response.use { resp ->
                 if (resp.code == 449 && command != "Provision") {
+                    resp.close() // 449 body is not parsed or buffered.
                     when (val provResult = provision()) {
                         is EasResult.Success -> {
                             val retryResponse = executeRequest(buildEasRequest(command, wbxml, withPolicyKey = true))
 
                             retryResponse.use { retryResp ->
                                 if (retryResp.isSuccessful) {
-                                    val responseBody = retryResp.body?.bytes()
+                                    val responseBody = readBoundedBody(retryResp.body)
                                     if (responseBody != null && responseBody.isNotEmpty()) {
                                         val responseXml = wbxmlParser.parse(responseBody)
                                         return@withContext EasResult.Success(parser(responseXml))
-                                    } else if (command == "Sync") {
+                                    } else if (retryResp.code == 200 && emptySyncResponse != null) {
                                         try {
-                                            return@withContext EasResult.Success(parser(EMPTY_SYNC_RESPONSE))
+                                            return@withContext EasResult.Success(parser(emptySyncResponse))
                                         } catch (e: Exception) {
                                             if (e is kotlinx.coroutines.CancellationException) throw e
                                             return@withContext EasResult.Error("Пустой ответ от сервера после retry (Sync)")
@@ -197,13 +205,13 @@ class EasTransport(
                 }
 
                 if (resp.isSuccessful) {
-                    val responseBody = resp.body?.bytes()
+                    val responseBody = readBoundedBody(resp.body)
                     if (responseBody != null && responseBody.isNotEmpty()) {
                         val responseXml = wbxmlParser.parse(responseBody)
                         EasResult.Success(parser(responseXml))
-                    } else if (command == "Sync") {
+                    } else if (resp.code == 200 && emptySyncResponse != null) {
                         try {
-                            EasResult.Success(parser(EMPTY_SYNC_RESPONSE))
+                            EasResult.Success(parser(emptySyncResponse))
                         } catch (e: Exception) {
                             if (e is kotlinx.coroutines.CancellationException) throw e
                             EasResult.Error("Пустой ответ от сервера (Sync)")
@@ -400,30 +408,11 @@ class EasTransport(
 
     // ========================= EWS Transport =========================
 
-    suspend fun performNtlmHandshake(): String? {
-        return ewsClient.performNtlmHandshake()
-    }
+    internal suspend fun executeEwsEnvelope(soapRequest: String, action: String): EasResult<String> =
+        ewsClient.executeEnvelope(soapRequest, action)
 
-    suspend fun executeNtlmRequest(soapRequest: String, action: String): String? {
-        return ewsClient.executeNtlmRequest(soapRequest, action)
-    }
-
-    private suspend fun tryBasicAuthEws(soapRequest: String, action: String): String? {
-        return ewsClient.tryBasicAuth(soapRequest, action)
-    }
-
-    /**
-     * Basic Auth → NTLM fallback for EWS SOAP requests.
-     * DRY: single auth entry point instead of inline repetitions.
-     */
-    suspend fun executeEwsWithAuth(soapRequest: String, operation: String): String? {
-        var response = tryBasicAuthEws(soapRequest, operation)
-        if (response == null) {
-            performNtlmHandshake() ?: return null
-            response = executeNtlmRequest(soapRequest, operation)
-        }
-        return response
-    }
+    suspend fun executeEwsWithAuth(soapRequest: String, action: String): String? =
+        (executeEwsEnvelope(soapRequest, action) as? EasResult.Success)?.data
 
     fun buildEwsSoapRequest(bodyContent: String): String {
         return """${EasXmlTemplates.SOAP_ENVELOPE_START}
@@ -441,6 +430,21 @@ ${EasXmlTemplates.SOAP_ENVELOPE_END}"""
     }
 
     companion object {
+        private const val MAX_EAS_RESPONSE_BYTES = 16 * 1024 * 1024
+        internal const val RESPONSE_TOO_LARGE = "EAS_RESPONSE_TOO_LARGE"
+
+        internal fun readBoundedBody(body: ResponseBody?, maxBytes: Int = MAX_EAS_RESPONSE_BYTES): ByteArray? {
+            body ?: return null
+            val declared = body.contentLength()
+            if (declared > maxBytes) throw IOException("$RESPONSE_TOO_LARGE: $declared bytes (max $maxBytes)")
+            // Bound the actual (possibly chunked or decompressed) body, not just Content-Length.
+            val source = body.source()
+            if (source.request(maxBytes + 1L)) throw IOException("$RESPONSE_TOO_LARGE: max $maxBytes bytes")
+            val bytes = source.readByteArray()
+            if (declared >= 0 && declared != bytes.size.toLong()) throw IOException("Incomplete EAS response")
+            return bytes
+        }
+
         internal const val CONTENT_TYPE_WBXML = "application/vnd.ms-sync.wbxml"
         internal const val CONTENT_TYPE_XML = "text/xml; charset=utf-8"
 
@@ -459,9 +463,18 @@ ${EasXmlTemplates.SOAP_ENVELOPE_END}"""
             if (seconds <= 0L) return 0L
             return (seconds * 1000L).coerceAtMost(maxMs)
         }
-        private const val EMPTY_SYNC_RESPONSE =
-            """<?xml version="1.0" encoding="UTF-8"?><Sync><Collections><Collection><Status>1</Status></Collection></Collections></Sync>"""
         private val EWS_MESSAGE_TEXT_REGEX get() = EasPatterns.EWS_MESSAGE_TEXT
         private val EWS_RESPONSE_CODE_REGEX get() = EasPatterns.EWS_RESPONSE_CODE
     }
+}
+
+/** Do not let OkHttp replay a mutation on 408/503, disconnect, or another automatic follow-up. */
+internal fun RequestBody.withoutReplay(onWrite: () -> Unit = {}): RequestBody = object : RequestBody() {
+    override fun contentType() = this@withoutReplay.contentType()
+    override fun contentLength() = this@withoutReplay.contentLength()
+    override fun writeTo(sink: okio.BufferedSink) {
+        onWrite()
+        this@withoutReplay.writeTo(sink)
+    }
+    override fun isOneShot() = true
 }

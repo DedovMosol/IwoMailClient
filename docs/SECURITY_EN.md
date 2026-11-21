@@ -87,11 +87,7 @@ App lock restricts the UI, not the Room database or background synchronization. 
 - **`acceptAllCerts` is opt-in and off by default.** It exists for dev/test and
   self-signed servers at the user's explicit choice; it uses a separate HTTP
   client, so it never weakens validation for other accounts.
-- **Authentication.** EAS: Basic over TLS. EWS: Basic first, NTLMv2 if the
-  Basic attempt fails. On a redirect to another host OkHttp drops the
-  `Authorization` header, so credentials are presented only to the server
-  addresses configured in the account (the main one and, if set, the alternate
-  one).
+- **Authentication.** EAS: Basic over TLS. EWS starts NTLM negotiation and uses Basic only when an HTTP 401 explicitly offers it. A connection loss does not trigger a replay of a SOAP write with another authentication scheme. Automatic HTTP redirects are disabled for EWS.
 
 ## Local data
 

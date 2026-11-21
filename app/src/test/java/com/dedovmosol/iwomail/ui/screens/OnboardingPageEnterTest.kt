@@ -22,42 +22,17 @@ class OnboardingPageEnterTest {
     }
 
     @Test
-    fun `prefetch neighbor stays hidden while animations are on`() {
-        val phase = OnboardingPageEnter.content(
-            armed = false,
-            animationsEnabled = true,
-            alreadyShown = false
-        )
-        assertThat(phase).isEqualTo(OnboardingPageEnter.Content.Hidden)
+    fun `initial animated layer is visible without waiting for enter`() {
+        val start = OnboardingPageEnter.initialProgress(animationsEnabled = true, alreadyShown = false)
+        assertThat(start).isEqualTo(0f)
+        assertThat(OnboardingPageEnter.alpha(start)).isGreaterThan(0.8f)
     }
 
     @Test
-    fun `armed page with animations asks for enter, not an instant show`() {
-        val phase = OnboardingPageEnter.content(
-            armed = true,
-            animationsEnabled = true,
-            alreadyShown = false
-        )
-        assertThat(phase).isEqualTo(OnboardingPageEnter.Content.Animate)
-    }
-
-    @Test
-    fun `animations off shows immediately even for a prefetch neighbor`() {
-        val phase = OnboardingPageEnter.content(
-            armed = false,
-            animationsEnabled = false,
-            alreadyShown = false
-        )
-        assertThat(phase).isEqualTo(OnboardingPageEnter.Content.Show)
-    }
-
-    @Test
-    fun `already shown stays shown so going back does not flash`() {
-        val phase = OnboardingPageEnter.content(
-            armed = false,
-            animationsEnabled = true,
-            alreadyShown = true
-        )
-        assertThat(phase).isEqualTo(OnboardingPageEnter.Content.Show)
+    fun `animations off and revisited pages are fully visible on first frame`() {
+        val disabled = OnboardingPageEnter.initialProgress(animationsEnabled = false, alreadyShown = false)
+        val revisited = OnboardingPageEnter.initialProgress(animationsEnabled = true, alreadyShown = true)
+        assertThat(OnboardingPageEnter.alpha(disabled)).isEqualTo(1f)
+        assertThat(OnboardingPageEnter.alpha(revisited)).isEqualTo(1f)
     }
 }

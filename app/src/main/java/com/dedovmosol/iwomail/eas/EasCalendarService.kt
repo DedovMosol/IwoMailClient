@@ -38,9 +38,7 @@ class EasCalendarService internal constructor(
         val getEasVersion: () -> String,
         val isVersionDetected: () -> Boolean,
         val detectEasVersion: suspend () -> EasResult<String>,
-        val performNtlmHandshake: suspend () -> String?,
-        val executeNtlmRequest: suspend (String, String) -> String?,
-        val tryBasicAuthEws: suspend (String, String) -> String?,
+        val executeEwsEnvelope: suspend (String, String) -> EasResult<String>,
         val parseEasDate: (String?) -> Long?
     )
 
@@ -109,19 +107,8 @@ class EasCalendarService internal constructor(
 
     // === EWS Auth (shared by all services via lambda) ===
 
-    private suspend fun ewsRequest(
-        soapBody: String,
-        operation: String
-    ): EasResult<String> {
-        var response = deps.tryBasicAuthEws(soapBody, operation)
-        if (response == null) {
-            deps.performNtlmHandshake()
-                ?: return EasResult.Error("NTLM handshake failed ($operation)")
-            response = deps.executeNtlmRequest(soapBody, operation)
-                ?: return EasResult.Error("EWS request failed ($operation)")
-        }
-        return EasResult.Success(response)
-    }
+    private suspend fun ewsRequest(soapBody: String, operation: String): EasResult<String> =
+        deps.executeEwsEnvelope(soapBody, operation)
 
     // === Sync API ===
 

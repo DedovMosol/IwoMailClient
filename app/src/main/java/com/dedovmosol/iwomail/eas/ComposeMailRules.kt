@@ -7,10 +7,13 @@ package com.dedovmosol.iwomail.eas
 private val EMAIL_ADDRESS = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
 
 /**
- * Ответ ComposeMail — успех: без Status (EAS 12.x и пустое тело EAS 14), Status 1 или 118 (MessagePreviouslySent,
+ * Непустой ответ ComposeMail — успех только при Status 1 или 118 (MessagePreviouslySent,
  * MS-ASCMD 2.2.2: письмо с этим ClientId уже отправлено — повтор после потерянного ответа не дублирует письмо).
  */
-internal fun isComposeMailSuccess(status: String?): Boolean = status == null || status == "1" || status == "118"
+internal fun isComposeMailSuccess(status: String?): Boolean = status == "1" || status == "118"
+
+/** Do not switch from SmartForward to a new SendMail after an unconfirmed outcome. */
+internal const val COMPOSE_OUTCOME_UNKNOWN = "COMPOSE_OUTCOME_UNKNOWN"
 
 /** Текст ошибки HTTP команды ComposeMail (локализуется по префиксу «Ошибка отправки письма (»). */
 internal fun composeHttpError(code: Int): String = "Ошибка отправки письма (HTTP $code)"

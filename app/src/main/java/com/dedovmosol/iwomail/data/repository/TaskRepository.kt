@@ -362,10 +362,18 @@ class TaskRepository internal constructor(
      * правка со связью. Сервер отказал — запись снимается, и синхронизация вернёт его версию; связи нет — остаётся.
      */
     internal suspend fun sendPendingTask(change: PendingPimChangeEntity, resync: Boolean = true): PimSendOutcome {
+        val result = PendingPimCreateGate.send(pendingDao, change, ::sendPendingTaskMutation)
+        // Never hold the create gate while (re-)entering sync/flush.
+        if (resync && result == PimSendOutcome.DONE) syncAfterPendingSent(change.accountId)
+        return result
+    }
+
+    private suspend fun sendPendingTaskMutation(change: PendingPimChangeEntity): PimSendOutcome {
         val task = taskDao.getTask(change.itemId) ?: run {
             pendingDao.delete(change.itemId) // задачи уже нет (удалена на сервере) — отправлять нечего
             return PimSendOutcome.DONE
         }
+        if (change.awaitingCreateIdentity) return PimSendOutcome.AWAITING_IDENTITY
         if (offline.offline()) return PimSendOutcome.KEPT
         val client = accountRepo.createEasClient(task.accountId) ?: return PimSendOutcome.KEPT
         var working = task
@@ -382,6 +390,10 @@ class TaskRepository internal constructor(
             )
             when (created) {
                 is EasResult.Error -> {
+                    if (created.message.startsWith(com.dedovmosol.iwomail.eas.EwsClient.EWS_CREATE_OUTCOME_UNKNOWN)) {
+                        pendingDao.parkUnknownCreate(task.id)
+                        return PimSendOutcome.AWAITING_IDENTITY
+                    }
                     if (offline.canDefer(created.message)) return PimSendOutcome.KEPT
                     android.util.Log.w("TaskRepository", "Pending task create rejected: ${created.message}")
                     pendingDao.delete(task.id)
@@ -393,7 +405,7 @@ class TaskRepository internal constructor(
                     taskDao.delete(task.id)
                     taskDao.insert(renamed)
                     pendingDao.rename(task.id, newId)
-                    pendingDao.clearCreate(newId, change.version)
+                    pendingDao.clearCreate(newId)
                     working = renamed
                     if (renamed.reminderSet && renamed.reminderTime > 0) {
                         TaskReminderReceiver.cancelReminder(context, task.id)
@@ -442,7 +454,6 @@ class TaskRepository internal constructor(
         // Exchange 2007 после UpdateItem может выдать задаче новый ServerId: синхронизация находит её по теме в окне
         // свежей правки, поэтому время правки — сейчас. Только это поле: правку, сделанную во время отправки, не трогаем.
         taskDao.touch(working.id, System.currentTimeMillis())
-        if (resync) syncTasks(task.accountId, skipRecentDeleteCheck = true)
         return PimSendOutcome.DONE
     }
 
@@ -452,11 +463,11 @@ class TaskRepository internal constructor(
     }
 
     /** Отправить правки задач аккаунта, ждущие отправки. true — не осталось ни одной. */
-    private suspend fun flushPending(accountId: Long): Boolean = PendingPimChanges(
+    private suspend fun flushPending(accountId: Long, requireIdentity: Boolean = false): Boolean = PendingPimChanges(
         pendingDao,
         send = { sendPendingTask(it, resync = false) },
         afterSent = { account, _ -> syncAfterPendingSent(account) }
-    ).flush(accountId, PimKind.TASK)
+    ).flush(accountId, PimKind.TASK, requireIdentity)
     
     /**
      * Отметить задачу как выполненную/невыполненную
@@ -648,7 +659,7 @@ class TaskRepository internal constructor(
         return accountRepo.withEasClient(accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
                 // Корзина, ещё не отправленная на сервер, — сначала очередь (см. deleteTaskPermanently)
-                if (!flushPending(accountId)) {
+                if (!flushPending(accountId, requireIdentity = true)) {
                     return@withEasClient EasResult.Error(RepositoryErrors.PENDING_CHANGES_NOT_SENT)
                 }
                 val deletedTasks = taskDao.getDeletedTasksList(accountId)

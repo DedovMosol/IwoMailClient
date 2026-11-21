@@ -30,9 +30,7 @@ class EasDraftsServerTest {
             getEasVersion = { transport.easVersion },
             isVersionDetected = { true },
             detectEasVersion = { EasResult.Success(transport.easVersion) },
-            performNtlmHandshake = { transport.performNtlmHandshake() },
-            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
-            tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
+            executeEwsEnvelope = transport::executeEwsEnvelope,
             getDraftsFolderId = { "5" }
         ))
     }
@@ -105,6 +103,24 @@ class EasDraftsServerTest {
     }
 
     @Test
+    fun `explicit InvalidMimeContent permits one fallback CreateItem`() = runBlocking<Unit> {
+        val exchange = FakeExchange { call ->
+            when {
+                call.command == "CreateItem" && "MimeContent" in call.xml ->
+                    Reply.Text(EwsXml.error("CreateItem", "ErrorInvalidMimeContent"))
+                call.command == "CreateItem" -> Reply.Text(EwsXml.success("CreateItem", message("NewEwsId")))
+                call.command == "CreateAttachment" -> Reply.Text(EwsXml.success("CreateAttachment"))
+                else -> Reply.Http(500)
+            }
+        }
+        val file = DraftAttachmentData("file.txt", "text/plain", byteArrayOf(1))
+        assertThat(exchange.draftsService().createDraft("a@corp.example", "", "", "S", "B", listOf(file)))
+            .isEqualTo(EasResult.Success("NewEwsId"))
+        assertThat(exchange.ews("CreateItem")).hasSize(2)
+        assertThat(exchange.ews("FindItem")).isEmpty()
+    }
+
+    @Test
     fun `bcc and importance of a MIME draft are set explicitly after CreateItem`() = runBlocking<Unit> {
         val exchange = FakeExchange { call ->
             when (call.command) {
@@ -145,7 +161,7 @@ class EasDraftsServerTest {
     }
 
     @Test
-    fun `EWS draft confirmed without an id while attachments wait is not reported as saved`() = runBlocking<Unit> {
+    fun `EWS draft confirmed without an id and with pending attachments is never reuploaded as new`() = runBlocking<Unit> {
         // MIME не принят; обычный CreateItem — успех без ItemId: вложения без id не добавить.
         val exchange = FakeExchange { call ->
             when {
@@ -159,10 +175,22 @@ class EasDraftsServerTest {
 
         val id = (exchange.draftsService().createDraft("a@corp.example", "", "", "", "<p>B</p>", listOf(file)) as EasResult.Success).data
 
-        // «На сервере» (u_) значило бы: прежнюю версию с вложением можно удалять, — а новая без него.
+        // The predecessor and local attachments must remain; a later sync must not create another item.
         assertThat(DraftIds.isLocal(id)).isTrue()
-        assertThat(DraftIds.isUnconfirmed(id)).isFalse()
+        assertThat(DraftIds.isUnconfirmed(id)).isTrue()
         assertThat(exchange.ews("CreateAttachment")).isEmpty()
+    }
+
+    @Test
+    fun `ambiguous MIME create preserves locally without re-creating or finding by subject`() = runBlocking<Unit> {
+        for (reply in listOf(Reply.Disconnect, Reply.Text(""), Reply.Text("<html/>") , Reply.Http(503))) {
+            val exchange = FakeExchange { reply }
+            val file = DraftAttachmentData("report.txt", "text/plain", "data".toByteArray())
+            val result = exchange.draftsService().createDraft("a@corp.example", "", "", "Same subject", "B", listOf(file))
+            assertThat(DraftIds.isUnconfirmed((result as EasResult.Success).data)).isTrue()
+            assertThat(exchange.ews("CreateItem")).hasSize(1)
+            assertThat(exchange.ews("FindItem")).isEmpty()
+        }
     }
 
     @Test

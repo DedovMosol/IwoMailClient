@@ -1,7 +1,5 @@
 package com.dedovmosol.iwomail.ui.screens
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -120,11 +118,6 @@ fun OnboardingScreen(
         )
     }
     
-    val sharedPulse = rememberPulseScale(selectedAnimations, from = 1f, to = 1.1f, durationMs = 1000)
-    val sharedShake = rememberShake(selectedAnimations, amplitude = 10f, durationMs = 300)
-    val sharedFeatureRotation = rememberRotation(selectedAnimations, durationMs = 3000)
-    val sharedAnimRotation = rememberRotation(selectedAnimations, durationMs = 2000)
-
     // Добавляем слайды выбора языка, анимаций, темы и режима черновиков в начало для первого запуска
     val totalPages = if (isFirstLaunch) pages.size + 4 else pages.size
     val pagerState = rememberPagerState(pageCount = { totalPages })
@@ -147,7 +140,6 @@ fun OnboardingScreen(
             // Pager
             HorizontalPager(
                 state = pagerState,
-                beyondBoundsPageCount = 1,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
@@ -160,6 +152,7 @@ fun OnboardingScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .onboardingPageEnter(armed, selectedAnimations)
                         .graphicsLayer {
                             scaleX = pageScale
                             scaleY = pageScale
@@ -176,8 +169,7 @@ fun OnboardingScreen(
                                         settingsRepo.setLanguage(lang)
                                     }
                                 },
-                                colorTheme = colorTheme,
-                                armed = armed
+                                colorTheme = colorTheme
                             )
                             1 -> AnimationsSelectionPage(
                                 animationsEnabled = selectedAnimations,
@@ -189,8 +181,7 @@ fun OnboardingScreen(
                                 },
                                 colorTheme = colorTheme,
                                 isRussian = isRussian,
-                                rotation = sharedAnimRotation,
-                                armed = armed
+                                animateIcon = selectedAnimations && armed
                             )
                             2 -> ThemeSelectionPage(
                                 selectedTheme = selectedTheme,
@@ -216,9 +207,7 @@ fun OnboardingScreen(
                                     }
                                 },
                                 isRussian = isRussian,
-                                animationsEnabled = selectedAnimations,
-                                pulse = sharedPulse,
-                                armed = armed
+                                animateIcon = selectedAnimations && armed
                             )
                             3 -> DraftModeSelectionPage(
                                 selectedDraftMode = selectedDraftMode,
@@ -229,20 +218,14 @@ fun OnboardingScreen(
                                     }
                                 },
                                 colorTheme = colorTheme,
-                                isRussian = isRussian,
-                                armed = armed,
-                                animationsEnabled = selectedAnimations
+                                isRussian = isRussian
                             )
                             else -> {
                                 val pageData = pages[page - 4]
                                 FeaturePage(
                                     page = pageData,
                                     isRussian = isRussian,
-                                    animationsEnabled = selectedAnimations,
-                                    pulse = sharedPulse,
-                                    shake = sharedShake,
-                                    rotation = sharedFeatureRotation,
-                                    armed = armed
+                                    animateIcons = selectedAnimations && armed
                                 )
                             }
                         }
@@ -250,11 +233,7 @@ fun OnboardingScreen(
                         FeaturePage(
                             page = pages[page],
                             isRussian = isRussian,
-                            animationsEnabled = selectedAnimations,
-                            pulse = sharedPulse,
-                            shake = sharedShake,
-                            rotation = sharedFeatureRotation,
-                            armed = armed
+                            animateIcons = selectedAnimations && armed
                         )
                     }
                 }
@@ -350,11 +329,9 @@ fun OnboardingScreen(
 private fun LanguageSelectionPage(
     selectedLanguage: String,
     onLanguageSelected: (String) -> Unit,
-    colorTheme: AppColorTheme,
-    armed: Boolean
+    colorTheme: AppColorTheme
 ) {
     val isRussian = selectedLanguage == AppLanguage.RUSSIAN.code
-    val visible = rememberOnboardingVisible(armed = armed, animationsEnabled = true)
     
     // Адаптивные размеры для маленьких экранов
     val configuration = LocalConfiguration.current
@@ -383,14 +360,7 @@ private fun LanguageSelectionPage(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = if (isCompactHeight) Arrangement.Top else Arrangement.Center
         ) {
-        // Иконка с анимацией появления
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500)) + scaleIn(
-                initialScale = 0.5f,
-                animationSpec = tween(500)
-            )
-        ) {
+            // Иконка
             Box(modifier = Modifier.size(iconSize)) {
                 Box(
                     modifier = Modifier
@@ -411,36 +381,20 @@ private fun LanguageSelectionPage(
                     )
                 }
             }
-        }
-        
-        Spacer(modifier = Modifier.height(spacerHeight))
-        
-        // Заголовок с анимацией
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 200)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 200)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(spacerHeight))
+
+            // Заголовок
             Text(
                 text = OnboardingStrings.chooseLanguageTitle(isRussian),
                 style = if (isSmallScreen) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
-        }
-        
-        Spacer(modifier = Modifier.height(spacerHeight))
-        
-        // Кнопки выбора языка с анимацией
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 400)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 400)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(spacerHeight))
+
+            // Кнопки выбора языка
             Row(
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
@@ -457,7 +411,6 @@ private fun LanguageSelectionPage(
                     colorTheme = colorTheme
                 )
             }
-        }
 
         }
 
@@ -502,10 +455,9 @@ private fun AnimationsSelectionPage(
     onAnimationsChanged: (Boolean) -> Unit,
     colorTheme: AppColorTheme,
     isRussian: Boolean,
-    rotation: State<Float>,
-    armed: Boolean
+    animateIcon: Boolean
 ) {
-    val visible = rememberOnboardingVisible(armed = armed, animationsEnabled = animationsEnabled)
+    val rotation = rememberRotation(animateIcon, durationMs = 2000)
     
     val configuration = LocalConfiguration.current
     val isCompactHeight = configuration.screenHeightDp < 500 ||
@@ -529,14 +481,7 @@ private fun AnimationsSelectionPage(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = if (isCompactHeight) Arrangement.Top else Arrangement.Center
         ) {
-        // Иконка с анимацией появления
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500)) + scaleIn(
-                initialScale = 0.5f,
-                animationSpec = tween(500)
-            )
-        ) {
+            // Иконка
             Box(
                 modifier = Modifier
                     .size(iconSize)
@@ -556,56 +501,32 @@ private fun AnimationsSelectionPage(
                     contentDescription = null,
                     modifier = Modifier
                         .size(iconInnerSize)
-                        .graphicsLayer { rotationZ = if (animationsEnabled) rotation.value else 0f },
+                        .graphicsLayer { rotationZ = rotation.value },
                     tint = Color.White
                 )
             }
-        }
-        
-        Spacer(modifier = Modifier.height(spacerHeight))
-        
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 200)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 200)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(spacerHeight))
+
             Text(
                 text = OnboardingStrings.animationsTitle(isRussian),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
-        }
-        
-        Spacer(modifier = Modifier.height(if (isCompactHeight) 8.dp else 16.dp))
-        
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 300)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 300)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(if (isCompactHeight) 8.dp else 16.dp))
+
             Text(
                 text = OnboardingStrings.animationsDescription(isRussian),
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-        
-        Spacer(modifier = Modifier.height(spacerHeight))
-        
-        // Переключатель с анимацией
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 400)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 400)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(spacerHeight))
+
+            // Переключатель с анимацией
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -623,7 +544,6 @@ private fun AnimationsSelectionPage(
                     )
                 )
             }
-        }
 
         }
 
@@ -643,11 +563,9 @@ private fun ThemeSelectionPage(
     selectedScrollbarColor: String = "blue",
     onScrollbarColorSelected: (String) -> Unit = {},
     isRussian: Boolean,
-    animationsEnabled: Boolean,
-    pulse: State<Float>,
-    armed: Boolean
+    animateIcon: Boolean
 ) {
-    val visible = rememberOnboardingVisible(armed = armed, animationsEnabled = animationsEnabled)
+    val pulse = rememberPulseScale(animateIcon, from = 1f, to = 1.1f, durationMs = 1000)
     
     val configuration = LocalConfiguration.current
     val isCompactHeight = configuration.screenHeightDp < 500 ||
@@ -670,14 +588,7 @@ private fun ThemeSelectionPage(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = if (isCompactHeight) Arrangement.Top else Arrangement.Center
         ) {
-        // Иконка с анимацией появления
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500)) + scaleIn(
-                initialScale = 0.5f,
-                animationSpec = tween(500)
-            )
-        ) {
+            // Иконка
             Box(
                 modifier = Modifier
                     .size(if (isCompactHeight) 72.dp else 100.dp)
@@ -699,52 +610,28 @@ private fun ThemeSelectionPage(
                     tint = Color.White
                 )
             }
-        }
-        
-        Spacer(modifier = Modifier.height(if (isCompactHeight) 12.dp else 24.dp))
-        
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 200)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 200)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(if (isCompactHeight) 12.dp else 24.dp))
+
             Text(
                 text = OnboardingStrings.themeTitle(isRussian),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
-        }
-        
-        Spacer(modifier = Modifier.height(if (isCompactHeight) 8.dp else 12.dp))
-        
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 300)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 300)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(if (isCompactHeight) 8.dp else 12.dp))
+
             Text(
                 text = OnboardingStrings.themeDescription(isRussian),
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-        
-        Spacer(modifier = Modifier.height(if (isCompactHeight) 12.dp else 24.dp))
-        
-        // Цветовые кружки с горизонтальным скроллом
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 400)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 400)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(if (isCompactHeight) 12.dp else 24.dp))
+
+            // Цветовые кружки с горизонтальным скроллом
             androidx.compose.foundation.lazy.LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp)
@@ -758,7 +645,7 @@ private fun ThemeSelectionPage(
                             .size(circleSize)
                             .graphicsLayer {
                                 // Пульс читается при отрисовке слоя: без перекомпоновки списка на кадр (ONB-19)
-                                val circleScale = if (isSelected && animationsEnabled) pulse.value else 1f
+                                val circleScale = if (isSelected && animateIcon) pulse.value else 1f
                                 scaleX = circleScale
                                 scaleY = circleScale
                                 clip = false
@@ -784,18 +671,10 @@ private fun ThemeSelectionPage(
                     }
                 }
             }
-        }
-        
-        Spacer(modifier = Modifier.height(if (isCompactHeight) 12.dp else 20.dp))
-        
-        // Выбор режима темы (системный / светлая / тёмная)
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 500)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 500)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(if (isCompactHeight) 12.dp else 20.dp))
+
+            // Выбор режима темы (системный / светлая / тёмная)
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = OnboardingStrings.themeModeLabel(isRussian),
@@ -850,18 +729,10 @@ private fun ThemeSelectionPage(
                     }
                 }
             }
-        }
-        
-        Spacer(modifier = Modifier.height(if (isCompactHeight) 12.dp else 20.dp))
-        
-        // Выбор цвета скроллбара
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 600)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 600)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(if (isCompactHeight) 12.dp else 20.dp))
+
+            // Выбор цвета скроллбара
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = if (isRussian) "Цвет скроллбара" else "Scrollbar color",
@@ -898,7 +769,6 @@ private fun ThemeSelectionPage(
                     }
                 }
             }
-        }
 
         }
 
@@ -914,11 +784,8 @@ private fun DraftModeSelectionPage(
     selectedDraftMode: String,
     onDraftModeSelected: (String) -> Unit,
     colorTheme: AppColorTheme,
-    isRussian: Boolean,
-    armed: Boolean,
-    animationsEnabled: Boolean
+    isRussian: Boolean
 ) {
-    val visible = rememberOnboardingVisible(armed = armed, animationsEnabled = animationsEnabled)
     
     val configuration = LocalConfiguration.current
     val isCompactHeight = configuration.screenHeightDp < 500 ||
@@ -946,13 +813,6 @@ private fun DraftModeSelectionPage(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = if (isCompactHeight) Arrangement.Top else Arrangement.Center
         ) {
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500)) + scaleIn(
-                initialScale = 0.5f,
-                animationSpec = tween(500)
-            )
-        ) {
             Box(
                 modifier = Modifier
                     .size(iconSize)
@@ -974,51 +834,27 @@ private fun DraftModeSelectionPage(
                     tint = Color.White
                 )
             }
-        }
-        
-        Spacer(modifier = Modifier.height(spacerHeight))
-        
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 200)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 200)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(spacerHeight))
+
             Text(
                 text = OnboardingStrings.draftModeTitle(isRussian),
                 style = if (isSmallScreen) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
-        }
-        
-        Spacer(modifier = Modifier.height(if (isCompactHeight) 8.dp else 16.dp))
-        
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 300)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 300)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(if (isCompactHeight) 8.dp else 16.dp))
+
             Text(
                 text = OnboardingStrings.draftModeDescription(isRussian),
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-        
-        Spacer(modifier = Modifier.height(spacerHeight))
-        
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 400)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 400)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(spacerHeight))
+
             Column(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -1081,7 +917,6 @@ private fun DraftModeSelectionPage(
                     }
                 }
             }
-        }
 
         }
 
@@ -1096,13 +931,11 @@ private fun DraftModeSelectionPage(
 private fun FeaturePage(
     page: OnboardingPage,
     isRussian: Boolean,
-    animationsEnabled: Boolean,
-    pulse: State<Float>,
-    shake: State<Float>,
-    rotation: State<Float>,
-    armed: Boolean
+    animateIcons: Boolean
 ) {
-    val visible = rememberOnboardingVisible(armed = armed, animationsEnabled = animationsEnabled)
+    val pulse = rememberPulseScale(animateIcons && page.type != OnboardingPageType.Settings, from = 1f, to = 1.1f, durationMs = 1000)
+    val shake = rememberShake(animateIcons && page.type == OnboardingPageType.Mail, amplitude = 10f, durationMs = 300)
+    val rotation = rememberRotation(animateIcons && page.type == OnboardingPageType.Settings, durationMs = 3000)
     
     val configuration = LocalConfiguration.current
     val isCompactHeight = configuration.screenHeightDp < 500 ||
@@ -1123,14 +956,7 @@ private fun FeaturePage(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-        // Главная иконка
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(400)) + scaleIn(
-                initialScale = 0.5f,
-                animationSpec = tween(400)
-            )
-        ) {
+            // Главная иконка
             Box(
                 modifier = Modifier
                     .size(100.dp)
@@ -1145,18 +971,10 @@ private fun FeaturePage(
                     tint = Color.White
                 )
             }
-        }
-        
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        // Заголовок
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(animationSpec = tween(500, delayMillis = 150)) + slideInVertically(
-                initialOffsetY = { 50 },
-                animationSpec = tween(500, delayMillis = 150)
-            )
-        ) {
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Заголовок
             val pageTitle = when (page.type) {
                 OnboardingPageType.Mail -> OnboardingStrings.pageMailTitle(isRussian)
                 OnboardingPageType.Organizer -> OnboardingStrings.pageOrganizerTitle(isRussian)
@@ -1168,106 +986,87 @@ private fun FeaturePage(
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
-        }
-        
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        // Контент в зависимости от типа страницы
-        when (page.type) {
-            OnboardingPageType.Mail -> {
-                FeatureItem(
-                    visible = visible,
-                    delay = 200,
-                    icon = AppIcons.Email,
-                    iconModifier = if (animationsEnabled) Modifier.animatedScale(pulse) else Modifier,
-                    color = Color(0xFF1565C0),
-                    title = OnboardingStrings.mailTitle(isRussian),
-                    description = OnboardingStrings.mailDescription(isRussian)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                FeatureItem(
-                    visible = visible,
-                    delay = 350,
-                    icon = AppIcons.Notifications,
-                    iconModifier = if (animationsEnabled) Modifier.animatedRotation(shake) else Modifier,
-                    color = Color(0xFFD32F2F),
-                    title = OnboardingStrings.notificationsTitle(isRussian),
-                    description = OnboardingStrings.notificationsDescription(isRussian)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                FeatureItem(
-                    visible = visible,
-                    delay = 500,
-                    icon = AppIcons.Info,
-                    iconModifier = Modifier,
-                    color = Color(0xFFE65100),
-                    title = OnboardingStrings.exchangeTitle(isRussian),
-                    description = OnboardingStrings.exchangeDescription(isRussian)
-                )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Контент в зависимости от типа страницы
+            when (page.type) {
+                OnboardingPageType.Mail -> {
+                    FeatureItem(
+                        icon = AppIcons.Email,
+                        iconModifier = if (animateIcons) Modifier.animatedScale(pulse) else Modifier,
+                        color = Color(0xFF1565C0),
+                        title = OnboardingStrings.mailTitle(isRussian),
+                        description = OnboardingStrings.mailDescription(isRussian)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    FeatureItem(
+                        icon = AppIcons.Notifications,
+                        iconModifier = if (animateIcons) Modifier.animatedRotation(shake) else Modifier,
+                        color = Color(0xFFD32F2F),
+                        title = OnboardingStrings.notificationsTitle(isRussian),
+                        description = OnboardingStrings.notificationsDescription(isRussian)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    FeatureItem(
+                        icon = AppIcons.Info,
+                        iconModifier = Modifier,
+                        color = Color(0xFFE65100),
+                        title = OnboardingStrings.exchangeTitle(isRussian),
+                        description = OnboardingStrings.exchangeDescription(isRussian)
+                    )
+                }
+                OnboardingPageType.Organizer -> {
+                    FeatureItem(
+                        icon = AppIcons.Contacts,
+                        iconModifier = if (animateIcons) Modifier.animatedScale(pulse) else Modifier,
+                        color = Color(0xFF1565C0),
+                        title = OnboardingStrings.contactsTitle(isRussian),
+                        description = OnboardingStrings.contactsDescription(isRussian)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    FeatureItem(
+                        icon = AppIcons.CalendarMonth,
+                        iconModifier = if (animateIcons) Modifier.animatedScale(pulse) else Modifier,
+                        color = Color(0xFF2E7D32),
+                        title = OnboardingStrings.calendarTitle(isRussian),
+                        description = OnboardingStrings.calendarDescription(isRussian)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    FeatureItem(
+                        icon = AppIcons.Task,
+                        iconModifier = if (animateIcons) Modifier.animatedScale(pulse) else Modifier,
+                        color = Color(0xFF7B1FA2),
+                        title = OnboardingStrings.tasksTitle(isRussian),
+                        description = OnboardingStrings.tasksDescription(isRussian)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    FeatureItem(
+                        icon = AppIcons.StickyNote,
+                        iconModifier = if (animateIcons) Modifier.animatedScale(pulse) else Modifier,
+                        color = Color(0xFFE65100),
+                        title = OnboardingStrings.notesTitle(isRussian),
+                        description = OnboardingStrings.notesDescription(isRussian)
+                    )
+                }
+                OnboardingPageType.Settings -> {
+                    FeatureItem(
+                        icon = AppIcons.Settings,
+                        iconModifier = if (animateIcons) Modifier.animatedRotation(rotation) else Modifier,
+                        color = Color(0xFF455A64),
+                        title = OnboardingStrings.personalizationTitle(isRussian),
+                        description = OnboardingStrings.personalizationDescription(isRussian)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    FeatureItem(
+                        icon = AppIcons.Update,
+                        iconModifier = if (animateIcons) Modifier.animatedRotation(rotation) else Modifier,
+                        color = Color(0xFF00796B),
+                        title = OnboardingStrings.updatesTitle(isRussian),
+                        description = OnboardingStrings.updatesDescription(isRussian)
+                    )
+                }
             }
-            OnboardingPageType.Organizer -> {
-                FeatureItem(
-                    visible = visible,
-                    delay = 200,
-                    icon = AppIcons.Contacts,
-                    iconModifier = if (animationsEnabled) Modifier.animatedScale(pulse) else Modifier,
-                    color = Color(0xFF1565C0),
-                    title = OnboardingStrings.contactsTitle(isRussian),
-                    description = OnboardingStrings.contactsDescription(isRussian)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                FeatureItem(
-                    visible = visible,
-                    delay = 300,
-                    icon = AppIcons.CalendarMonth,
-                    iconModifier = if (animationsEnabled) Modifier.animatedScale(pulse) else Modifier,
-                    color = Color(0xFF2E7D32),
-                    title = OnboardingStrings.calendarTitle(isRussian),
-                    description = OnboardingStrings.calendarDescription(isRussian)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                FeatureItem(
-                    visible = visible,
-                    delay = 400,
-                    icon = AppIcons.Task,
-                    iconModifier = if (animationsEnabled) Modifier.animatedScale(pulse) else Modifier,
-                    color = Color(0xFF7B1FA2),
-                    title = OnboardingStrings.tasksTitle(isRussian),
-                    description = OnboardingStrings.tasksDescription(isRussian)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                FeatureItem(
-                    visible = visible,
-                    delay = 500,
-                    icon = AppIcons.StickyNote,
-                    iconModifier = if (animationsEnabled) Modifier.animatedScale(pulse) else Modifier,
-                    color = Color(0xFFE65100),
-                    title = OnboardingStrings.notesTitle(isRussian),
-                    description = OnboardingStrings.notesDescription(isRussian)
-                )
-            }
-            OnboardingPageType.Settings -> {
-                FeatureItem(
-                    visible = visible,
-                    delay = 200,
-                    icon = AppIcons.Settings,
-                    iconModifier = if (animationsEnabled) Modifier.animatedRotation(rotation) else Modifier,
-                    color = Color(0xFF455A64),
-                    title = OnboardingStrings.personalizationTitle(isRussian),
-                    description = OnboardingStrings.personalizationDescription(isRussian)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                FeatureItem(
-                    visible = visible,
-                    delay = 350,
-                    icon = AppIcons.Update,
-                    iconModifier = if (animationsEnabled) Modifier.animatedRotation(rotation) else Modifier,
-                    color = Color(0xFF00796B),
-                    title = OnboardingStrings.updatesTitle(isRussian),
-                    description = OnboardingStrings.updatesDescription(isRussian)
-                )
-            }
-        }
         }
         
         ScrollColumnScrollbar(scrollState)
@@ -1282,55 +1081,45 @@ private fun FeaturePage(
 // Переименование в `modifier` исказило бы смысл, поэтому ModifierParameter подавляется осознанно.
 @Suppress("ModifierParameter")
 private fun FeatureItem(
-    visible: Boolean,
-    delay: Int,
     icon: ImageVector,
     iconModifier: Modifier,
     color: Color,
     title: String,
     description: String
 ) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(animationSpec = tween(400, delayMillis = delay)) + slideInHorizontally(
-            initialOffsetX = { -100 },
-            animationSpec = tween(400, delayMillis = delay)
-        )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(color.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center
         ) {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(color.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    modifier = iconModifier.size(28.dp),
-                    tint = color
-                )
-            }
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                )
-            }
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = iconModifier.size(28.dp),
+                tint = color
+            )
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            )
         }
     }
 }

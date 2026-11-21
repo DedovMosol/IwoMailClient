@@ -43,9 +43,7 @@ class EasNotesSyncCompletenessTest {
             detectEasVersion = { EasResult.Success(transport.easVersion) },
             getNotesFolderId = { NOTES },
             getDeletedItemsFolderId = { DELETED },
-            performNtlmHandshake = { transport.performNtlmHandshake() },
-            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
-            tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
+            executeEwsEnvelope = transport::executeEwsEnvelope,
             findEwsNoteItemId = { _, _ -> null }
         ))
     }

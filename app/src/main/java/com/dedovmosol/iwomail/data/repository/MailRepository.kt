@@ -190,8 +190,11 @@ class MailRepository(private val context: Context) {
     ) = emailOperationsService.loadInlineAttachmentBytes(emailId, accountId, cids, attachments, maxPerImage, maxTotal, onImage)
 
     /** @see EmailOperationsService.downloadAttachmentToFile */
-    suspend fun downloadAttachmentToFile(attachment: AttachmentEntity, destFile: java.io.File) =
-        emailOperationsService.downloadAttachmentToFile(attachment, destFile)
+    suspend fun downloadAttachmentToFile(attachment: AttachmentEntity, destFile: java.io.File, owner: EmailEntity) =
+        emailOperationsService.downloadAttachmentToFile(attachment, destFile, owner)
+
+    suspend fun fetchAttachmentBytes(attachment: AttachmentEntity, owner: EmailEntity) =
+        emailOperationsService.fetchAttachmentBytes(attachment, owner)
     
     suspend fun prefetchEmailBodies(accountId: Long, count: Int = 7) = 
         emailOperationsService.prefetchEmailBodies(accountId, count)
@@ -398,7 +401,8 @@ class MailRepository(private val context: Context) {
     // Только на устройстве, без обращения к серверу (известно, что связи нет)
     forceLocal: Boolean = false,
     // Флажки «запросить отчёт»; null — не известны
-    receipts: com.dedovmosol.iwomail.eas.ReceiptRequests? = null
+    receipts: com.dedovmosol.iwomail.eas.ReceiptRequests? = null,
+    requireCompleteAttachments: Boolean = false
 ): String? {
         val account = accountRepo.getAccount(accountId) ?: return null
         val draftsFolder = folderDao.getFolderByType(accountId, FolderType.DRAFTS)
@@ -468,7 +472,11 @@ if (result is EasResult.Success) {
         // и insertAll(attachments), миграция EWS→EAS может удалить email
         // (CASCADE удалит вложения) → FK violation при вставке вложений.
         // Room transaction гарантирует: другие операции видят либо ВСЁ, либо НИЧЕГО.
-        val attEntities = prepareDraftAttachmentFiles(emailId, attachmentFiles)
+        val attEntities = prepareDraftAttachmentFiles(emailId, attachmentFiles, sync = requireCompleteAttachments)
+        if (requireCompleteAttachments && attEntities.size != attachmentFiles.size) {
+            attEntities.forEach { row -> row.localPath?.let { java.io.File(it).delete() } }
+            return null
+        }
         database.withTransaction {
             emailDao.insert(email)
             if (attEntities.isNotEmpty()) {
@@ -508,7 +516,11 @@ if (result is EasResult.Success) {
     )
     // АТОМАРНАЯ вставка: email + вложения в одной транзакции.
     // См. комментарий выше про гонку PushService/sync.
-    val attEntities = prepareDraftAttachmentFiles(emailId, attachmentFiles)
+    val attEntities = prepareDraftAttachmentFiles(emailId, attachmentFiles, sync = requireCompleteAttachments)
+    if (requireCompleteAttachments && attEntities.size != attachmentFiles.size) {
+        attEntities.forEach { row -> row.localPath?.let { java.io.File(it).delete() } }
+        return null
+    }
     database.withTransaction {
         emailDao.insert(email)
         if (attEntities.isNotEmpty()) {
@@ -540,7 +552,8 @@ if (result is EasResult.Success) {
      */
     private fun prepareDraftAttachmentFiles(
         emailId: String,
-        attachments: List<com.dedovmosol.iwomail.eas.DraftAttachmentData>
+        attachments: List<com.dedovmosol.iwomail.eas.DraftAttachmentData>,
+        sync: Boolean = false
     ): List<AttachmentEntity> {
         if (attachments.isEmpty()) return emptyList()
         val attachmentsDir = java.io.File(context.filesDir, "draft_attachments")
@@ -548,9 +561,18 @@ if (result is EasResult.Success) {
         
         return attachments.mapNotNull { att ->
             try {
-                val safeFileName = att.name.replace(SAFE_FILENAME_REGEX, "_")
-                val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
-                file.writeBytes(att.data)
+                // Each allowed character is at most two UTF-8 bytes; allow space for the UUID prefix.
+                val safeFileName = att.name.replace(SAFE_FILENAME_REGEX, "_").take(100)
+                val file = java.io.File(attachmentsDir, "${java.util.UUID.randomUUID()}_$safeFileName")
+                try {
+                    java.io.FileOutputStream(file).use { stream ->
+                        stream.write(att.data)
+                        if (sync) stream.fd.sync()
+                    }
+                } catch (e: java.io.IOException) {
+                    file.delete()
+                    throw e
+                }
                 AttachmentEntity(
                     emailId = emailId,
                     fileReference = "",
@@ -650,10 +672,6 @@ if (result is EasResult.Success) {
         }
         updateDraftsFolderCount(email.folderId)
     }
-
-    /** В папке есть другой черновик с этой темой (например, синхронизация перенесла запись под EAS ServerId). */
-    suspend fun hasOtherDraftWithSubject(folderId: String, subject: String, exceptIds: Set<String>): Boolean =
-        emailDao.hasEmailWithSubject(folderId, subject, exceptIds.toList())
 
     /**
      * Скрытые копии и флажки «запросить отчёт» серверного черновика по его id (EWS; EAS их не передаёт). Записи на

@@ -1,9 +1,13 @@
 package com.dedovmosol.iwomail.ui.components
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.style.TextAlign
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.theme.ExchangeMailTheme
@@ -55,6 +59,10 @@ class AppPermissionDialogTest {
         val later = rule.onNodeWithText("Later").fetchSemanticsNode().boundsInRoot
         val proceed = rule.onNodeWithText("Continue").fetchSemanticsNode().boundsInRoot
         val text = rule.onNodeWithText("The app needs to work in the background.").fetchSemanticsNode().boundsInRoot
+        val layouts = mutableListOf<TextLayoutResult>()
+        rule.onNodeWithText("The app needs to work in the background.")
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertThat(layouts.single().layoutInput.style.textAlign).isEqualTo(TextAlign.Center)
         // «Позже» — у левого края текста (с полем кнопки), «Продолжить» — у правого
         assertThat(later.left - text.left).isLessThan(text.width * 0.15f)
         assertThat(text.right - proceed.right).isLessThan(text.width * 0.15f)

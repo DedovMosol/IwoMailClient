@@ -16,6 +16,8 @@ object AttachmentErrors {
     const val NO_SPACE = "ATTACHMENT_NO_SPACE"
     /** Вложение больше предела чтения в память (inline-картинки, .ics) — для файла есть потоковый путь. */
     const val TOO_LARGE_FOR_MEMORY = "ATTACHMENT_TOO_LARGE_FOR_MEMORY"
+    /** EAS item metadata exceeded its response cap; independent EWS resolution can still succeed. */
+    internal const val METADATA_TOO_LARGE = "ATTACHMENT_METADATA_TOO_LARGE"
 
     private val NO_RETRY = setOf("UNAUTHORIZED", "ACCESS_DENIED", NO_SPACE, TOO_LARGE_FOR_MEMORY)
 

@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.AttachmentEntity
+import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.data.database.flag
 import com.dedovmosol.iwomail.eas.EasResult
@@ -110,28 +111,32 @@ fun EmailDetailScreen(
     )
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    /**
-     * Вложение в файл `cacheDir/[dirName]/<имя>` потоком (файлы в десятки МБ не проходят через память).
-     * Пишется во временный файл и переименовывается после успеха: открывающее приложение не увидит половину файла.
-     * Ошибка — тост на языке интерфейса и null.
-     */
-    suspend fun downloadAttachmentFile(att: AttachmentEntity, dirName: String): File? {
+    fun discardAttachmentFile(file: File) {
+        file.delete()
+        file.parentFile?.delete() // Each download owns its private subdirectory.
+    }
+
+    /** Stream into a unique cache directory so same-name downloads cannot replace a previously granted URI. */
+    suspend fun downloadAttachmentFile(att: AttachmentEntity, dirName: String, owner: EmailEntity): File? {
         if (!NetworkMonitor.isNetworkAvailable(context) && !(att.downloaded && att.localPath != null)) {
             SafeToast.short(context, if (isRussian) "Нет сети" else "No network")
             return null
         }
-        val safeFileName = att.displayName.replace(SAFE_FILENAME_REGEX, "_").ifBlank { "attachment" }
-        val (target, partial) = withContext(Dispatchers.IO) {
-            val dir = File(context.cacheDir, dirName).apply { mkdirs() }
-            File(dir, safeFileName) to File.createTempFile("att_", ".part", dir)
-        }
-        // finally: отмена на любой точке (поиск письма, создание клиента, загрузка) не оставляет .part в кэше
+        val safeFileName = att.displayName.replace(SAFE_FILENAME_REGEX, "_")
+            .takeUnless { it.isBlank() || it == "." || it == ".." } ?: "attachment"
+        var workDir: File? = null
+        var successful = false
         try {
-            return when (val result = actions.downloadAttachmentToFile(att, partial)) {
+            val (target, partial) = withContext(Dispatchers.IO) {
+                val root = File(context.cacheDir, dirName).apply { mkdirs() }
+                val dir = java.nio.file.Files.createTempDirectory(root.toPath(), "att_").toFile()
+                workDir = dir
+                File(dir, safeFileName) to File.createTempFile("att_", ".part", dir)
+            }
+            return when (val result = actions.downloadAttachmentToFile(att, partial, owner)) {
                 is EasResult.Success -> withContext(Dispatchers.IO) {
-                    target.delete()
                     if (partial.renameTo(target)) target else null
-                } ?: run {
+                }?.also { successful = true } ?: run {
                     SafeToast.long(context, NotificationStrings.getErrorWithMessage(isRussian, null))
                     null
                 }
@@ -141,7 +146,7 @@ fun EmailDetailScreen(
                 }
             }
         } finally {
-            withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { partial.delete() }
+            if (!successful) withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { workDir?.deleteRecursively() }
         }
     }
 
@@ -231,37 +236,37 @@ fun EmailDetailScreen(
     // downloadingId — UI-состояние загрузки вложения (launcher'ы/файловый I/O), остаётся в UI.
     var downloadingId by rememberSaveable { mutableStateOf<Long?>(null) }
 
-    // Save As: id вложения для сохранения через системный файл-пикер.
-    // rememberSaveable обязателен: пикер CreateDocument открыт ПОВЕРХ Activity —
-    // поворот/смерть процесса сбрасывали plain remember в null, и выбор места
-    // сохранения молча игнорировался (сам объект резолвим из attachments по id)
-    var pendingSaveAsAttachmentId by rememberSaveable { mutableStateOf<Long?>(null) }
+    // Keep attachment and owner identity across the document picker/recreation, not only a DB row ID.
+    fun attachmentIdentity(att: AttachmentEntity, owner: EmailEntity) = arrayListOf(
+        att.id.toString(), att.emailId, att.displayName, att.contentId.orEmpty(),
+        owner.id, owner.accountId.toString(), owner.folderId, owner.serverId, owner.subject, owner.from,
+        owner.dateReceived.toString(), owner.internetMessageId.orEmpty()
+    )
+    var pendingSaveAs by rememberSaveable(emailId) { mutableStateOf<ArrayList<String>?>(null) }
     var pendingPreviewFile by remember { mutableStateOf<File?>(null) }
     val previewLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
     ) {
-        pendingPreviewFile?.delete()
+        pendingPreviewFile?.let(::discardAttachmentFile)
         pendingPreviewFile = null
     }
     val saveAsLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri ->
-        val attachmentId = pendingSaveAsAttachmentId ?: return@rememberLauncherForActivityResult
-        pendingSaveAsAttachmentId = null
-        val attachment = attachments.find { it.id == attachmentId }
-            ?: return@rememberLauncherForActivityResult
+        val identity = pendingSaveAs
+        pendingSaveAs = null
         if (uri == null) return@rememberLauncherForActivityResult
+        val owner = email
+        val attachment = owner?.let { current -> attachments.singleOrNull { attachmentIdentity(it, current) == identity } }
         val savedMsg = if (isRussian) "Файл сохранён" else "File saved"
         scope.launch {
             // CreateDocument уже создал пустой файл в выбранной папке: без записи он удаляется, иначе пользователь
             // нашёл бы там файл в 0 байт с именем вложения
             var saved = false
             try {
-                val local = attachment.localPath?.let { File(it) }?.takeIf { attachment.downloaded && it.exists() }
-                val source = local ?: run {
-                    downloadingId = attachment.id
-                    downloadAttachmentFile(attachment, "email_save") ?: return@launch
-                }
+                if (owner == null || attachment == null) return@launch
+                downloadingId = attachment.id
+                val source = downloadAttachmentFile(attachment, "email_save", owner) ?: return@launch
                 try {
                     saved = withContext(Dispatchers.IO) {
                         context.contentResolver.openOutputStream(uri)?.use { out ->
@@ -270,7 +275,7 @@ fun EmailDetailScreen(
                         } ?: false
                     }
                 } finally {
-                    if (local == null) withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { source.delete() }
+                    withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { discardAttachmentFile(source) }
                 }
                 SafeToast.short(context, if (saved) savedMsg else NotificationStrings.getErrorWithMessage(isRussian, null))
             } catch (e: Exception) {
@@ -1188,15 +1193,15 @@ fun EmailDetailScreen(
                     val invitationAcceptedMsg = Strings.invitationAccepted
 
                     // Состояние для загруженных iCalendar данных из вложения
-                    var loadedIcalData by remember { mutableStateOf<String?>(null) }
-                    var isLoadingIcal by remember { mutableStateOf(false) }
-
+                    val icalIdentity = calendarAttachment?.let { attachmentIdentity(it, currentEmail) }
+                    var loadedIcalData by remember(icalIdentity) { mutableStateOf<String?>(null) }
+                    var isLoadingIcal by remember(icalIdentity, calendarAttachment?.fileReference, bodyHasVEvent) { mutableStateOf(false) }
                     // Загружаем iCalendar из вложения если нужно
-                    LaunchedEffect(calendarAttachment?.id, bodyHasVEvent) {
-                        if (!bodyHasVEvent && calendarAttachment != null && loadedIcalData == null && !isLoadingIcal) {
+                    LaunchedEffect(icalIdentity, calendarAttachment?.fileReference, bodyHasVEvent) {
+                        if (!bodyHasVEvent && calendarAttachment != null && loadedIcalData == null) {
                             isLoadingIcal = true
                             try {
-                                when (val result = actions.fetchAttachmentBytes(calendarAttachment)) {
+                                when (val result = actions.fetchAttachmentBytes(calendarAttachment, currentEmail)) {
                                     is EasResult.Success -> {
                                         loadedIcalData = String(result.data, Charsets.UTF_8)
                                     }
@@ -1476,7 +1481,7 @@ fun EmailDetailScreen(
                             scope.launch {
                                 try {
                                     downloadingId = attachment.id
-                                    val tempFile = downloadAttachmentFile(attachment, "email_preview")
+                                    val tempFile = downloadAttachmentFile(attachment, "email_preview", currentEmail)
 
                                     if (tempFile != null) {
                                         val mimeType = android.webkit.MimeTypeMap.getSingleton()
@@ -1500,13 +1505,13 @@ fun EmailDetailScreen(
                                             scope.launch {
                                                 kotlinx.coroutines.delay(60 * 60 * 1000L)
                                                 if (pendingPreviewFile?.absolutePath == tempFile.absolutePath) {
-                                                    pendingPreviewFile?.delete()
+                                                    pendingPreviewFile?.let(::discardAttachmentFile)
                                                     pendingPreviewFile = null
                                                 }
                                             }
                                         } catch (e: Exception) {
                                             if (e is kotlinx.coroutines.CancellationException) throw e
-                                            withContext(Dispatchers.IO) { tempFile.delete() }
+                                            withContext(Dispatchers.IO) { discardAttachmentFile(tempFile) }
                                             pendingPreviewFile = null
                                             val message = if (isRussian) "Нет приложения для просмотра файла" else "No app to preview this file"
                                             SafeToast.short(context, message)
@@ -1523,14 +1528,14 @@ fun EmailDetailScreen(
                         onSaveClick = { attachment ->
                             // Android 8-9: в «Загрузки» без разрешения на память пишет только системный диалог (MAIL-01)
                             if (!com.dedovmosol.iwomail.util.DownloadsSaver.isAvailable()) {
-                                pendingSaveAsAttachmentId = attachment.id
+                                pendingSaveAs = attachmentIdentity(attachment, currentEmail)
                                 saveAsLauncher.launchLeavingApp(attachment.displayName)
                                 return@AttachmentsSection
                             }
                             scope.launch {
                                 try {
                                     downloadingId = attachment.id
-                                    val downloaded = downloadAttachmentFile(attachment, "email_save")
+                                    val downloaded = downloadAttachmentFile(attachment, "email_save", currentEmail)
                                     if (downloaded != null) try {
                                         val safeFileName = downloaded.name
                                         val profilePath = withContext(Dispatchers.IO) {
@@ -1560,7 +1565,7 @@ fun EmailDetailScreen(
                                             SafeToast.long(context, NotificationStrings.getErrorWithMessage(isRussian, null))
                                         }
                                     } finally {
-                                        withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { downloaded.delete() }
+                                        withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { discardAttachmentFile(downloaded) }
                                     }
                                 } catch (e: Exception) {
                                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -1571,14 +1576,14 @@ fun EmailDetailScreen(
                             }
                         },
                         onSaveAsClick = { attachment ->
-                            pendingSaveAsAttachmentId = attachment.id
+                            pendingSaveAs = attachmentIdentity(attachment, currentEmail)
                             saveAsLauncher.launchLeavingApp(attachment.displayName)
                         },
                         onShareClick = { attachment ->
                             scope.launch {
                                 try {
                                     downloadingId = attachment.id
-                                    val shareFile = downloadAttachmentFile(attachment, "email_share")
+                                    val shareFile = downloadAttachmentFile(attachment, "email_share", currentEmail)
                                     if (shareFile != null) {
                                         val safeFileName = shareFile.name
                                         val mimeType = android.webkit.MimeTypeMap.getSingleton()
@@ -1606,7 +1611,7 @@ fun EmailDetailScreen(
                             scope.launch {
                                 try {
                                     downloadingId = attachment.id
-                                    val dragFile = downloadAttachmentFile(attachment, "email_drag")
+                                    val dragFile = downloadAttachmentFile(attachment, "email_drag", currentEmail)
                                     if (dragFile != null) {
                                         val safeFileName = dragFile.name
                                         val mimeType = android.webkit.MimeTypeMap.getSingleton()

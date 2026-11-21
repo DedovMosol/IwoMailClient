@@ -48,9 +48,7 @@ class EasNotesService internal constructor(
         val detectEasVersion: suspend () -> EasResult<String>,
         val getNotesFolderId: suspend () -> String?,
         val getDeletedItemsFolderId: suspend () -> String?,
-        val performNtlmHandshake: suspend () -> String?,
-        val executeNtlmRequest: suspend (String, String) -> String?,
-        val tryBasicAuthEws: suspend (String, String) -> String?,
+        val executeEwsEnvelope: suspend (String, String) -> EasResult<String>,
         val findEwsNoteItemId: suspend (String, Boolean) -> String?
     )
     
@@ -647,14 +645,8 @@ class EasNotesService internal constructor(
     
     // ==================== Private EWS methods ====================
     
-    private suspend fun executeEwsWithAuth(soapRequest: String, operation: String): String? {
-        var responseXml = deps.tryBasicAuthEws(soapRequest, operation)
-        if (responseXml == null) {
-            deps.performNtlmHandshake() ?: return null
-            responseXml = deps.executeNtlmRequest(soapRequest, operation)
-        }
-        return responseXml
-    }
+    private suspend fun executeEwsWithAuth(soapRequest: String, operation: String): String? =
+        (deps.executeEwsEnvelope(soapRequest, operation) as? EasResult.Success)?.data
     
     private suspend fun syncNotesEws(): EasResult<NotesSyncResult> = withContext(Dispatchers.IO) {
         try {
@@ -748,10 +740,9 @@ class EasNotesService internal constructor(
 </soap:Envelope>""".trimIndent()
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "createNoteEws: request length=${soapRequest.length}")
             
-            val responseXml = executeEwsWithAuth(soapRequest, "CreateItem")
-            if (responseXml == null) {
-                android.util.Log.e("NOT", "createNoteEws: Auth FAILED")
-                return@withContext EasResult.Error("Аутентификация не удалась")
+            val responseXml = when (val result = deps.executeEwsEnvelope(soapRequest, "CreateItem")) {
+                is EasResult.Success -> result.data
+                is EasResult.Error -> return@withContext result
             }
             
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "createNoteEws: response length=${responseXml.length}, preview=${responseXml.take(500)}")

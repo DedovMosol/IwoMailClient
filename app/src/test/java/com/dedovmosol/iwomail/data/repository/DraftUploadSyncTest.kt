@@ -238,16 +238,37 @@ class DraftUploadSyncTest {
     }
 
     @Test
-    fun `local copy of a draft the server confirmed without an id is dropped when the server copy arrives`() = runBlocking<Unit> {
-        db.emailDao().insert(draft("5:1", subject = ""))
-        val unconfirmed = draft(DraftIds.newUnconfirmed(), subject = "")
-        db.emailDao().insert(unconfirmed)
+    fun `unconfirmed create preserves its body and attachment even if a same-subject draft exists`() = runBlocking<Unit> {
+        val old = draft("5:1", subject = "").copy(body = "old")
+        val local = draft(DraftIds.newUnconfirmed(), subject = "").copy(body = "new")
+        db.emailDao().insert(old)
+        db.emailDao().insert(local)
+        val file = java.io.File.createTempFile("proof", ".txt", context.cacheDir)
+        try {
+            file.writeText("only copy")
+            db.attachmentDao().insertAll(listOf(AttachmentEntity(emailId = local.id, displayName = "proof.txt",
+                fileReference = "", contentType = "text/plain", localPath = file.absolutePath)))
+            repeat(2) { service.syncDraftsFull(accountId, folderId) }
+            assertThat(db.emailDao().getEmail(local.id)?.body).isEqualTo("new")
+            assertThat(db.emailDao().getEmail(old.id)?.body).isEqualTo("old")
+            assertThat(db.attachmentDao().getAttachmentsList(local.id).single().localPath).isEqualTo(file.absolutePath)
+            assertThat(file.readText()).isEqualTo("only copy")
+            coVerify(exactly = 0) { easClient.createDraft(any(), any(), any(), any(), any(), any(), any()) }
+        } finally { file.delete() }
+    }
 
-        service.syncDraftsFull(accountId, folderId)
-
-        // Без темы: локально "", с сервера могло прийти "(No subject)" — та же тема.
-        assertThat(drafts().map { it.id }).doesNotContain(unconfirmed.id)
-        coVerify(exactly = 0) { easClient.createDraft(any(), any(), any(), any(), any(), any(), any()) }
+    @Test
+    fun `an upload with no confirmed id preserves predecessor and never retries CreateItem`() = runBlocking<Unit> {
+        val local = draft(DraftIds.newDeviceOnly(), replaces = "5:9")
+        db.emailDao().insert(local)
+        val unknown = DraftIds.newUnconfirmed()
+        coEvery { easClient.createDraft(any(), any(), any(), any(), any(), any(), any(), any()) } returns EasResult.Success(unknown)
+        repeat(2) { service.syncDraftsFull(accountId, folderId) }
+        val copy = drafts().single { it.serverId == unknown }
+        assertThat(copy.body).isEqualTo(local.body)
+        assertThat(copy.replacesServerId).isEqualTo("5:9")
+        assertThat(deletedServerDrafts).isEmpty()
+        coVerify(exactly = 1) { easClient.createDraft(any(), any(), any(), any(), any(), any(), any(), any()) }
     }
 
     @Test

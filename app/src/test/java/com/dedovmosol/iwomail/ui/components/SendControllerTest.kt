@@ -157,7 +157,7 @@ class SendControllerTest {
     }
 
     @Test
-    fun `undo that cannot save the draft still sends the email`() = runBlocking<Unit> {
+    fun `undo that cannot save the draft keeps a copy but never queues delivery`() = runBlocking<Unit> {
         env.delayMs = 3_000
         env.draftId = null
         val outcome = start()
@@ -165,9 +165,12 @@ class SendControllerTest {
 
         controller.cancel()
 
-        assertThat(withTimeout(5_000) { outcome.await() }).isEqualTo("success")
-        // Письмо не потеряно: снова ждёт отправки воркером — и видно в списке запланированных
-        assertThat(pending().single().listed(System.currentTimeMillis())).isTrue()
+        assertThat(withTimeout(5_000) { outcome.await() }).isEqualTo("error")
+        val retained = pending().single()
+        assertThat(retained.listed(System.currentTimeMillis())).isTrue()
+        assertThat(retained.status).isEqualTo(ScheduledSend.Status.FAILED)
+        assertThat(ScheduledSend.runNow(context, retained.dir)).isEqualTo(ScheduledSend.RunResult.UNAVAILABLE)
+        assertThat(env.sent).isEmpty()
         assertThat(env.messages).contains(NotificationStrings.getUndoDraftFailed(true))
     }
 
@@ -242,7 +245,7 @@ class SendControllerTest {
         val outcome = start()
         awaitCountdown()
 
-        ScheduledSend.take(context, pending().single().dir)
+        ScheduledSend.restoreDraft(context, pending().single().dir) { true }
 
         assertThat(withTimeout(5_000) { outcome.await() }).isEqualTo("success")
         assertThat(env.sent).isEmpty()

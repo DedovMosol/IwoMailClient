@@ -46,8 +46,7 @@ class EasEmailService internal constructor(
         val wbxmlParser: WbxmlParser,
         val getFromEmail: () -> String,
         val getDeviceId: () -> String,
-        val performNtlmHandshake: suspend () -> String?,
-        val executeNtlmRequest: suspend (String, String) -> String?,
+        val executeEwsEnvelope: suspend (String, String) -> EasResult<String>,
         val getDeletedItemsFolderId: suspend () -> String?,
         val isExchange2007: () -> Boolean,
         val buildEwsSoapRequest: (String) -> String,
@@ -122,36 +121,7 @@ class EasEmailService internal constructor(
 </Sync>""".trimIndent()
         }
 
-        val result = deps.executeEasCommand("Sync", xml) { responseXml ->
-            parseSyncResponse(responseXml)
-        }
-
-        if (result is EasResult.Error && result.message.contains("Пустой ответ")) {
-            return EasResult.Success(SyncResponse(
-                syncKey = syncKey,
-                status = 1,
-                moreAvailable = false,
-                emails = emptyList()
-            ))
-        }
-
-        if (result is EasResult.Error && result.message.contains("449")) {
-            when (val provResult = deps.provision()) {
-                is EasResult.Success -> {
-                    val retryResult = deps.executeEasCommand("Sync", xml) { responseXml ->
-                        parseSyncResponse(responseXml)
-                    }
-                    if (retryResult is EasResult.Success) {
-                        return retryResult
-                    }
-                }
-                is EasResult.Error -> {
-                    android.util.Log.w("EasEmailService", "Provision after 449 failed: ${provResult.message}")
-                }
-            }
-        }
-
-        return result
+        return deps.executeEasCommand("Sync", xml, ::parseSyncResponse)
     }
 
     /**
@@ -202,17 +172,17 @@ class EasEmailService internal constructor(
             val url = deps.buildUrl(command) + if (modern) "" else legacyQuery
             val contentType = if (modern) CONTENT_TYPE_WBXML else "message/rfc822"
             val payload = if (modern) wbxml(mime) else mime
-            fun request(): Request = Request.Builder()
+            fun request(onWrite: () -> Unit): Request = Request.Builder()
                 .url(url)
-                .post(payload.toRequestBody(contentType.toMediaType()))
+                .post(payload.toRequestBody(contentType.toMediaType()).withoutReplay(onWrite))
                 .header("Authorization", deps.getAuthHeader())
                 .header("MS-ASProtocolVersion", easVersion)
                 .header("Content-Type", contentType)
                 .header("User-Agent", "Android/12-EAS-2.0")
                 .apply { deps.getPolicyKey()?.let { header("X-MS-PolicyKey", it) } }
                 .build()
-            postComposeOnce(request(), easVersion) ?: when (val provision = deps.provision()) {
-                is EasResult.Success -> postComposeOnce(request(), easVersion)
+            postComposeOnce(::request, easVersion, command) ?: when (val provision = deps.provision()) {
+                is EasResult.Success -> postComposeOnce(::request, easVersion, command)
                     ?: EasResult.Error(composeHttpError(449))
                 is EasResult.Error -> EasResult.Error("${composeHttpError(449)}: ${provision.message}")
             }
@@ -223,22 +193,38 @@ class EasEmailService internal constructor(
     }
 
     /** Один запрос ComposeMail; null — 449 (нужно согласовать политику). */
-    private suspend fun postComposeOnce(request: Request, easVersion: String): EasResult<Boolean>? =
-        deps.executeRequest(request).use { response ->
-            if (response.code == 449) return@use null
-            if (!response.isSuccessful) return@use EasResult.Error(composeHttpError(response.code))
-            val body = response.body?.bytes()
-            val status = if (body != null && body.isNotEmpty() && body[0] == 0x03.toByte()) {
-                deps.extractValue(deps.wbxmlParser.parse(body), "Status")
-            } else {
-                null
+    private suspend fun postComposeOnce(
+        request: (() -> Unit) -> Request, easVersion: String, command: String
+    ): EasResult<Boolean>? {
+        val writingBody = java.util.concurrent.atomic.AtomicBoolean(false)
+        return try {
+            deps.executeRequest(request { writingBody.set(true) }).use { response ->
+                if (response.code == 449) return@use null
+                if (response.code != 200) {
+                    val error = composeHttpError(response.code)
+                    // A timeout, gateway/server failure, or unexpected success can be returned
+                    // after Exchange has submitted the message. Do not replay it automatically.
+                    return@use if (response.code == 408 || response.code in 201..299 ||
+                        response.code in 500..599 && response.code != 501) composeOutcomeUnknown(error)
+                    else EasResult.Error(error)
+                }
+                // HTTP 200 does not prove success when the response is nonempty or cannot be read.
+                writingBody.set(true)
+                val body = EasTransport.readBoundedBody(response.body, maxBytes = 4096)
+                if (body == null || body.isEmpty()) return@use EasResult.Success(true) // MS-ASCMD 4.6.2/4.12.2.
+                val status = deps.wbxmlParser.composeMailStatus(body, command)
+                    ?: return@use composeOutcomeUnknown("Ошибка отправки: неверный WBXML-ответ $command (EAS: $easVersion)")
+                if (isComposeMailSuccess(status)) EasResult.Success(true)
+                else EasResult.Error("Ошибка отправки: ${getStatusDescription(status)} (Status: $status, EAS: $easVersion)")
             }
-            if (isComposeMailSuccess(status)) {
-                EasResult.Success(true)
-            } else {
-                EasResult.Error("Ошибка отправки: ${getStatusDescription(status!!)} (Status: $status, EAS: $easVersion)")
-            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            val error = "Ошибка отправки письма: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}"
+            if (writingBody.get()) composeOutcomeUnknown(error) else EasResult.Error(error)
         }
+    }
+
+    private fun composeOutcomeUnknown(message: String) = EasResult.Error("$message [$COMPOSE_OUTCOME_UNKNOWN]")
 
     /**
      * Пересылка письма через SmartForward (MS-ASCMD §2.2.1.19)
@@ -540,7 +526,10 @@ class EasEmailService internal constructor(
             is EasResult.Error -> result
         }
 
-    internal data class AttachmentMetadata(val subject: String?, val dateReceived: String?, val attachments: List<EasAttachment>)
+    internal data class AttachmentMetadata(
+        val subject: String?, val dateReceived: String?, val attachments: List<EasAttachment>,
+        val from: String? = null, val internetMessageId: String? = null
+    )
 
     internal fun attachmentMetadataRequest(collectionId: String, serverId: String): String = """<?xml version="1.0" encoding="UTF-8"?>
 <ItemOperations xmlns="ItemOperations">
@@ -560,10 +549,15 @@ class EasEmailService internal constructor(
     internal fun parseAttachmentMetadata(xml: String): EasResult<AttachmentMetadata> {
         val status = EasPatterns.ITEM_OPS_FETCH_STATUS.find(xml)?.groupValues?.get(1)?.toIntOrNull()
         if (status != null && status != 1) return EasResult.Error("ItemOperations Fetch status=$status")
+        val props = XmlUtils.extractTopLevelBlocks(xml, "Properties").singleOrNull()
+            ?: return EasResult.Error(AttachmentErrors.NOT_FOUND)
+        fun property(tag: String) = deps.extractValue(props, tag)?.let(XmlUtils::unescape)
         return EasResult.Success(AttachmentMetadata(
-            subject = deps.extractValue(xml, "Subject")?.let(XmlUtils::unescape),
-            dateReceived = deps.extractValue(xml, "DateReceived"),
-            attachments = parseAttachmentsFromXml(xml)
+            subject = property("Subject"),
+            dateReceived = property("DateReceived"),
+            attachments = parseAttachmentsFromXml(props),
+            from = property("From"),
+            internetMessageId = property("InternetMessageId")
         ))
     }
 
@@ -815,10 +809,8 @@ $changesXml
      * NTLM-only аутентификация для EWS SOAP запросов.
      * EasEmailService не использует Basic Auth fallback.
      */
-    private suspend fun executeEwsNtlmOnly(soapRequest: String, operation: String): String? {
-        deps.performNtlmHandshake() ?: return null
-        return deps.executeNtlmRequest(soapRequest, operation)
-    }
+    private suspend fun executeEwsWithAuth(soapRequest: String, operation: String): String? =
+        (deps.executeEwsEnvelope(soapRequest, operation) as? EasResult.Success)?.data
 
     /**
      * Помечает письмо как прочитанное/непрочитанное через EWS UpdateItem.
@@ -859,7 +851,7 @@ $changesXml
 </m:FindItem>""".trimIndent()
         val findRequest = deps.buildEwsSoapRequest(findBody)
 
-        val findResponse = executeEwsNtlmOnly(findRequest, "FindItem") ?: return
+        val findResponse = executeEwsWithAuth(findRequest, "FindItem") ?: return
 
         // Извлекаем все ItemId + ChangeKey
         val matches = EwsIds.parseAllItemIdsAndChangeKeys(findResponse)
@@ -889,7 +881,7 @@ $itemChanges
 </m:UpdateItem>""".trimIndent()
         val updateRequest = deps.buildEwsSoapRequest(updateBody)
 
-        executeEwsNtlmOnly(updateRequest, "UpdateItem")
+        executeEwsWithAuth(updateRequest, "UpdateItem")
     }
 
     /**
@@ -1022,7 +1014,7 @@ $itemChanges
 
             val soapEnvelope = deps.buildEwsSoapRequest(deleteBody)
 
-            val responseXml = executeEwsNtlmOnly(soapEnvelope, "DeleteItem")
+            val responseXml = executeEwsWithAuth(soapEnvelope, "DeleteItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить EWS DeleteItem")
 
             if (EwsClient.isEwsSuccessOrNotFound(responseXml)) {
@@ -1065,7 +1057,7 @@ $itemChanges
 </m:FindItem>""".trimIndent()
         val findRequest = deps.buildEwsSoapRequest(findBody)
 
-        val responseXml = executeEwsNtlmOnly(findRequest, "FindItem") ?: return null
+        val responseXml = executeEwsWithAuth(findRequest, "FindItem") ?: return null
 
         val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
         return itemIdPattern.find(responseXml)?.groupValues?.get(1)
@@ -1346,8 +1338,11 @@ $deleteCommands
     }
 
     private fun parseSyncResponse(xml: String): SyncResponse {
+        check(xml.substringAfter("?>", xml).startsWith("<Sync>")) { "Invalid Sync response root" }
         val syncKey = deps.extractValue(xml, "SyncKey") ?: "0"
-        val status = deps.extractValue(xml, "Status")?.toIntOrNull() ?: 1
+        val status = deps.extractValue(xml, "Status")?.toIntOrNull()
+            ?: throw IllegalArgumentException("Missing or invalid Sync Status")
+        check(status != 1 || syncKey.isNotBlank() && syncKey != "0") { "Missing or invalid SyncKey" }
         val moreAvailable = xml.contains("<MoreAvailable/>") || xml.contains("<MoreAvailable>")
 
         val emails = mutableListOf<EasEmail>()
