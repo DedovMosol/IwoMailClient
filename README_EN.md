@@ -18,7 +18,7 @@
 
 Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through **Exchange ActiveSync (EAS)** and **Exchange Web Services (EWS)**. IMAP/POP3 are present as a beta direction with limited functionality.
 
-> **Important:** 🚧 The project is under active development. The next release is **1.7.0**, coming right after 1.6.1. See the [changelog](docs/CHANGELOG_EN.md) for what changes.
+> **Important:** 🚧 The project is under active development. The next release is **1.7.0**, coming right after 1.6.1. See the [changelog](docs/CHANGELOG_EN.md) for what changes. Manual testing of the pre-release has been completed, and a list of improvements has been identified. I will try to implement them in the near future.
 
 **Version:** 1.7.0 in the [source tree](app/build.gradle.kts) (`versionCode` 27), the [update channel](update.json) lists 1.6.1 (`versionCode` 24) · **Package:** `com.dedovmosol.iwomail` · **Developer:** DedovMosol · **Telegram:** [@i_wantout](https://t.me/i_wantout) · **Email:** andreyid@outlook.com
 
