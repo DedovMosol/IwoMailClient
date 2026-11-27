@@ -49,6 +49,8 @@ fun DrawerContent(
     showAccountPicker: Boolean,
     onToggleAccountPicker: () -> Unit,
     onAccountSettingsClick: (Long) -> Unit,
+    /** Аккаунт из списка: сделать активным и показать его папки на главном экране. */
+    onAccountSelected: (Long) -> Unit,
     onAddAccount: () -> Unit,
     onFolderSelected: (FolderEntity) -> Unit,
     onFavoritesClick: () -> Unit,
@@ -81,7 +83,8 @@ fun DrawerContent(
                 AccountItem(
                     account = account,
                     isActive = account.id == activeAccount?.id,
-                    onClick = { onAccountSettingsClick(account.id) }
+                    onClick = { onAccountSelected(account.id) },
+                    onSettingsClick = { onAccountSettingsClick(account.id) }
                 )
             }
             
@@ -518,7 +521,9 @@ fun DrawerHeader(
 fun AccountItem(
     account: AccountEntity,
     isActive: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    /** Шестерёнка справа — настройки аккаунта; null — без неё. */
+    onSettingsClick: (() -> Unit)? = null
 ) {
     val accountColor = remember(account.color) {
         try { Color(account.color) } catch (_: Exception) { null }
@@ -561,11 +566,18 @@ fun AccountItem(
             }
         },
         trailingContent = {
-            if (isActive) {
-                Icon(AppIcons.Check, "Selected", tint = MaterialTheme.colorScheme.primary)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isActive) {
+                    Icon(AppIcons.Check, Strings.selected, tint = MaterialTheme.colorScheme.primary)
+                }
+                if (onSettingsClick != null) {
+                    IconButton(onClick = onSettingsClick) {
+                        Icon(AppIcons.Settings, "${Strings.accountSettings}: ${account.displayName}")
+                    }
+                }
             }
         },
-        modifier = Modifier.clickable(onClick = onClick)
+        modifier = Modifier.clickable(onClickLabel = Strings.openAccountMail, onClick = onClick)
     )
 }
 

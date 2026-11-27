@@ -83,7 +83,7 @@ fun ContactsScreen(
     // Вкладки: Личные | Exchange (папка Contacts) | GAL (адресная книга)
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
-    // Личные контакты - используем key чтобы пересоздавать Flow при смене accountId
+    // Локальные контакты (на устройстве) - используем key чтобы пересоздавать Flow при смене accountId
     val localContacts by remember(accountId) { contactRepo.getLocalContacts(accountId) }.collectAsStateWithLifecycle(initialValue = emptyList())
     var localSearchQuery by rememberSaveable { mutableStateOf("") }
     val debouncedLocalSearch by rememberDebouncedState(localSearchQuery)
@@ -231,7 +231,7 @@ fun ContactsScreen(
     var showContactDetailsId by rememberSaveable { mutableStateOf<String?>(null) }
     val contactHaptics = com.dedovmosol.iwomail.ui.utils.rememberAppHaptics()
 
-    // Одна реакция на касание строки для всех трёх списков (личные, Exchange, адресная книга). Тактильный отклик —
+    // Одна реакция на касание строки для всех трёх списков (локальные, личные Exchange, глобальные). Тактильный отклик —
     // как в письмах, заметках и задачах: тик при отметке, сильнее — при входе в выделение долгим нажатием
     fun onContactTap(contact: com.dedovmosol.iwomail.data.database.ContactEntity) {
         if (isSelectionMode) {
@@ -481,9 +481,9 @@ fun ContactsScreen(
                 Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         if (isRussian)
-                            "Из выбранных контактов $dupCount уже существуют в личных контактах."
+                            "Из выбранных контактов $dupCount уже есть в локальных контактах."
                         else
-                            "$dupCount of selected contacts already exist in personal contacts.",
+                            "$dupCount of selected contacts already exist in local contacts.",
                         modifier = Modifier.fillMaxWidth(),
                         textAlign = TextAlign.Center
                     )
@@ -696,9 +696,9 @@ fun ContactsScreen(
                 Column {
                     Text(
                         if (isRussian)
-                            "Контакт с email ${cleanContactEmail(galContact.email)} уже есть в личных контактах:"
+                            "Контакт с email ${cleanContactEmail(galContact.email)} уже есть в локальных контактах:"
                         else
-                            "A contact with email ${cleanContactEmail(galContact.email)} already exists in personal contacts:"
+                            "A contact with email ${cleanContactEmail(galContact.email)} already exists in local contacts:"
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -763,7 +763,7 @@ fun ContactsScreen(
         )
     }
 
-    // Диалог подтверждения добавления GAL-контакта в личные контакты
+    // Диалог подтверждения копирования контакта Exchange или глобального в локальные
     addToContactsConfirmContact?.let { galContact ->
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { addToContactsConfirmId = null },
@@ -1486,24 +1486,16 @@ fun ContactsScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Вкладки: Личные | Exchange | GAL
-            TabRow(selectedTabIndex = selectedTab) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = { Text("${Strings.personalContacts} (${localContacts.size})") }
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = { Text("${Strings.exchangeContacts} ($exchangeFolderCount)") }
-                )
-                Tab(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    text = { Text("${Strings.galContacts} ($galCount)") }
-                )
-            }
+            // Вкладки: Локальные (устройство) | Личные (папка «Контакты» Exchange) | Глобальные (GAL)
+            com.dedovmosol.iwomail.ui.components.ContactSourceTabs(
+                tabs = listOf(
+                    com.dedovmosol.iwomail.ui.components.ContactTab(Strings.contactsTabLocal, localContacts.size),
+                    com.dedovmosol.iwomail.ui.components.ContactTab(Strings.contactsTabPersonal, exchangeFolderCount),
+                    com.dedovmosol.iwomail.ui.components.ContactTab(Strings.contactsTabGlobal, galCount)
+                ),
+                selected = selectedTab,
+                onSelect = { selectedTab = it }
+            )
 
             // Поле поиска
             OutlinedTextField(

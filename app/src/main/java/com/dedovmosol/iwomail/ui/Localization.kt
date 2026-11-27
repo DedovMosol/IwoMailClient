@@ -828,9 +828,10 @@ object Strings {
     val themeGreen: String @Composable get() = if (isRussian()) "Зелёная" else "Green"
 
     // Контакты
-    val personalContacts: String @Composable get() = if (isRussian()) "Личные" else "Personal"
-    val exchangeContacts: String @Composable get() = if (isRussian()) "Exchange" else "Exchange"
-    val galContacts: String @Composable get() = if (isRussian()) "GAL" else "GAL"
+    // Вкладки контактов: на устройстве — «Локальные», папка «Контакты» ящика Exchange — «Личные», GAL — «Глобальные»
+    val contactsTabLocal: String @Composable get() = if (isRussian()) "Локальные" else "Local"
+    val contactsTabPersonal: String @Composable get() = if (isRussian()) "Личные" else "Personal"
+    val contactsTabGlobal: String @Composable get() = if (isRussian()) "Глобальные" else "Global"
     val organization: String @Composable get() = if (isRussian()) "Организация" else "Organization"
     val selectContacts: String @Composable get() = if (isRussian()) "Выбор контактов" else "Select contacts"
     val selectContact: String @Composable get() = if (isRussian()) "Выбрать контакт" else "Select contact"
@@ -1687,9 +1688,9 @@ object OnboardingStrings {
 
     fun contactsTitle(isRussian: Boolean): String = if (isRussian) "Контакты" else "Contacts"
     fun contactsDescription(isRussian: Boolean): String = if (isRussian)
-        "Личные и корпоративные (GAL), локальные группы контактов"
+        "Локальные с группами, личные из Exchange и глобальная адресная книга"
     else
-        "Personal and corporate (GAL), local contact groups"
+        "Local with groups, personal from Exchange and the global address list"
     fun calendarTitle(isRussian: Boolean): String = if (isRussian) "Календарь" else "Calendar"
     fun calendarDescription(isRussian: Boolean): String = if (isRussian)
         "События, повторяющиеся события, напоминания, приглашения"
@@ -2401,7 +2402,8 @@ object NotificationStrings {
     }
 
     fun getCopiedToPersonalContacts(isRussian: Boolean): String {
-        return if (isRussian) "Скопировано в личные контакты" else "Copied to personal contacts"
+        // Копия ложится на устройство — во вкладку «Локальные»
+        return if (isRussian) "Скопировано в локальные контакты" else "Copied to local contacts"
     }
 
     // Строки системного диалога BiometricPrompt (несоставные — диалог строится

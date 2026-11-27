@@ -223,32 +223,17 @@ fun ContactPickerDialog(
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 
-                // Вкладки: Личные | Exchange | GAL | Группы
-                TabRow(
-                    selectedTabIndex = selectedTab,
-                    containerColor = MaterialTheme.colorScheme.surface
-                ) {
-                    Tab(
-                        selected = selectedTab == 0,
-                        onClick = { selectedTab = 0 },
-                        text = { Text("${Strings.personalContacts} (${localContacts.size})", maxLines = 1) }
-                    )
-                    Tab(
-                        selected = selectedTab == 1,
-                        onClick = { selectedTab = 1 },
-                        text = { Text("${Strings.exchangeContacts} (${exchangeFolderContacts.size})", maxLines = 1) }
-                    )
-                    Tab(
-                        selected = selectedTab == 2,
-                        onClick = { selectedTab = 2 },
-                        text = { Text("${Strings.galContacts} (${galContactsList.size})", maxLines = 1) }
-                    )
-                    Tab(
-                        selected = selectedTab == 3,
-                        onClick = { selectedTab = 3 },
-                        text = { Text("${Strings.contactGroups} (${groups.size})", maxLines = 1) }
-                    )
-                }
+                // Вкладки: Локальные | Личные (Exchange) | Глобальные (GAL) | Группы
+                ContactSourceTabs(
+                    tabs = listOf(
+                        ContactTab(Strings.contactsTabLocal, localContacts.size),
+                        ContactTab(Strings.contactsTabPersonal, exchangeFolderContacts.size),
+                        ContactTab(Strings.contactsTabGlobal, galContactsList.size),
+                        ContactTab(Strings.contactGroups, groups.size)
+                    ),
+                    selected = selectedTab,
+                    onSelect = { selectedTab = it }
+                )
                 
                 // Список контактов / групп
                 if (isLoading) {

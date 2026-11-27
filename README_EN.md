@@ -38,7 +38,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **Mail lists:** the “Threads only” filter in folders and search hides single messages. Messages from another folder may appear as context without being added to bulk delete or move. Long lists offer a jump to the start or end, the button is hidden during selection.
 - **📝 Drafts:** server mode via Exchange/EWS and a local beta mode, selectable in onboarding and account settings.
 - **📤 Sending:** scheduled send (exact alarm + WorkManager) and a scheduled mail screen (send now, reschedule, cancel), outbox queue for offline scenarios, undo send (0/5/10/20/30 s), MDN/DSN requests.
-- **👥 Contacts:** local and Exchange contacts, GAL, groups, favorites, vCard/CSV import/export, address autocomplete.
+- **👥 Contacts:** tabs "Local" (on the device), "Personal" (the Exchange Contacts folder) and "Global" (the organization address book, GAL), groups, favorites, vCard/CSV import/export, address autocomplete.
 - **🗓 Calendar:** events, meetings, attendees, invitation responses, recurrences, exceptions, reminders, attachments, online links, category colors (Master Category List on Exchange 2010+, standard Outlook colors, manual assignment), local trash, permanent delete only after server confirmation, reset and resync.
 - **✅ Tasks:** active/completed/important/overdue tasks, due dates, priorities, assignment, reminders, trash and restore, reset and resync, edits and moves to trash made offline are kept on the device and sent when the connection is back (`pending_pim_changes`).
 - **🗒 Notes:** Exchange Notes sync, create/edit, trash and restore, reset and resync, offline edits and trash work as for tasks.
@@ -137,7 +137,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **NTLM for EAS:** the EAS transport supports Basic Auth only (NTLMv2 applies to EWS operations only), the `/Microsoft-Server-ActiveSync` virtual directory must allow Basic Auth.
 - **IMAP/POP3:** beta implementation, does not cover calendar, contacts, tasks, notes, Direct Push and EWS features. There is no SMTP sending: the outgoing server address is only stored in the account.
 - **Offline queue:** message star and read state, message moves (including to trash), creating, editing and moving tasks and notes to trash. The calendar and folder operations are still server-first and are not deferred without a connection.
-- **Exchange contacts:** read-only. They come from the server's Contacts folder (EAS Sync), edit and delete them in Outlook or OWA. In the app an Exchange contact can be copied to personal contacts, which are editable.
+- **Exchange contacts:** read-only. They come from the server's Contacts folder (EAS Sync), edit and delete them in Outlook or OWA. In the app an Exchange contact can be copied to local contacts, which are editable.
 - **S/MIME:** signing and encryption not implemented.
 - **EAS 16.x:** explicitly not a target version of the project, the code's main range is EAS 12.x-14.1.
 

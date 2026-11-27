@@ -716,13 +716,21 @@ fun MainScreen(
                     tasksCount = tasksCount,
                     showAccountPicker = showAccountPicker,
                     onToggleAccountPicker = { showAccountPicker = !showAccountPicker },
+                    // Шестерёнка у аккаунта (и нажатие на шапку): его настройки, активный аккаунт не меняется
                     onAccountSettingsClick = { accountId ->
+                        scope.launch {
+                            showAccountPicker = false
+                            drawerState.close()
+                        }
+                        onNavigateToAccountSettings(accountId)
+                    },
+                    // Аккаунт из списка: он становится активным, на этом же экране — его папки
+                    onAccountSelected = { accountId ->
                         scope.launch {
                             accountRepo.setActiveAccount(accountId)
                             showAccountPicker = false
                             drawerState.close()
                         }
-                        onNavigateToAccountSettings(accountId)
                     },
                     onAddAccount = {
                         scope.launch { drawerState.close() }

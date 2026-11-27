@@ -275,7 +275,7 @@ internal fun ContactDetailsDialog(
                         }
                     }
                 } else {
-                    // Для Exchange контактов - добавить в личные контакты
+                    // Для контактов Exchange и глобальных — копия в локальные
                     IconButton(
                         onClick = onAddToContacts,
                         modifier = Modifier.size(48.dp)
