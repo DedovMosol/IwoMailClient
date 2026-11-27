@@ -118,6 +118,8 @@ private fun vibrateDevice(context: Context) {
             context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         }
         if (vibrator == null || !vibrator.hasVibrator()) return
+        // «Тактильный отклик» выключен в приложении — без вибрации и здесь
+        if (!com.dedovmosol.iwomail.data.repository.SettingsRepository.getInstance(context).getHapticsEnabledSync()) return
         // minSdk 26 (O): VibrationEffect доступен всегда.
         vibrator.vibrate(
             VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE)

@@ -41,6 +41,9 @@ class MailApplication : Application() {
     
     override fun onCreate() {
         super.onCreate()
+        // Compose-состояние объекта на весь процесс — здесь, на главном потоке до первой композиции: созданное внутри
+        // кадра или из фона после снимка композиции роняет её ("Reading a state that was created after the snapshot…")
+        com.dedovmosol.iwomail.ui.components.SendController.shared
         initConscrypt()
         registerServiceWatchdog()
         // Единый источник истины о видимости приложения (ProcessLifecycleOwner).
@@ -88,7 +91,9 @@ class MailApplication : Application() {
                 val accounts = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(this@MailApplication)
                     .accountDao().getAllAccountsList().map { it.id to it.email }
                 val ru = settingsRepository.language.first() == "ru"
+                // Каналы аккаунтов (и удаление канала «Важные отправители») — вместе со стиранием их списка
                 com.dedovmosol.iwomail.sync.MailNotificationChannels.sync(this@MailApplication, accounts, ru)
+                settingsRepository.removeLegacyVipSenders()
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.w(TAG, "Mail notification channels sync failed", e)

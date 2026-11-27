@@ -297,7 +297,7 @@ MIME body extraction (`MimeHtmlProcessor.extractHtmlFromMime`) splits the messag
 
 1. `MailApplication.onCreate()` installs Conscrypt, registers `ServiceWatchdogReceiver` dynamically and starts `AppForegroundTracker` (`ProcessLifecycleOwner`).
 2. `AppLockManager.init()` evaluates the lock state (cold start with a password set = locked); the app locks again when the whole process goes to the background (short trips to system pickers excepted).
-3. Notification channels are created for sync, sync status, calendar and task reminders, outbox, scheduled send, updates and connection status. Mail channels are per account (`MailNotificationChannels`: a channel group per account with "new mail" and "VIP senders" channels).
+3. Notification channels are created for sync, sync status, calendar and task reminders, outbox, scheduled send, updates and connection status. Mail channels are per account (`MailNotificationChannels`: a channel group per account with a "New emails" channel; the "Important senders" channel of the betas is deleted at startup). `SendController.shared` is created here too, on the main thread before the first composition.
 4. Stale temp files (including `LargeStateSaver` files older than 24 h in `cacheDir`) and old attachments are removed; duplicate message records are cleaned once; a legacy outbox queue from earlier versions is drained; if anything is left in `pending_email_changes`, `PendingMailChangesWorker` is enqueued.
 5. Periodic sync is scheduled.
 6. `PushService` is started when at least one Exchange account is in Push mode; server health is observed for connection-loss notifications (`ServerHealthNotifier`); dynamic app shortcuts are kept up to date.
@@ -420,7 +420,7 @@ An edit of a task (done, subject, dates) or note and a move to trash made withou
 2. `SyncWorker` also checks notifications during periodic and manual sync.
 3. Both use `NotificationHelper.notificationMutex` to avoid duplicate notification races.
 4. Notification queries use lightweight projections (`NotificationEmailSummary`) and bounded action batches (up to 20 messages shown, up to 25 messages per "mark read" action).
-5. Mail notifications go to per-account channels (`MailNotificationChannels`); sound, importance and Do Not Disturb are set per account in system settings. Quiet hours and VIP senders (`domain/MailAlerts`, global settings) make mail silent during quiet hours unless the sender is a VIP.
+5. Mail notifications go to per-account channels (`MailNotificationChannels`); sound, importance and Do Not Disturb are set per account in system settings. Quiet hours (`domain/MailAlerts`, a global setting) make notifications silent with no exceptions. The same section has the "Haptic feedback" switch (`AppHaptics`): vibration is marked as touch feedback (`USAGE_TOUCH` on Android 13+, `USAGE_ASSISTANCE_SONIFICATION` below) and ticks are at most one per 50 ms.
 6. `ServerHealthNotifier` posts one notification per account when the connection to the server is lost; flag reminders are delivered by `FlagReminderReceiver`.
 
 ### Home-screen widget

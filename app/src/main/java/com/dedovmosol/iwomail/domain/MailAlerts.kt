@@ -1,7 +1,5 @@
 package com.dedovmosol.iwomail.domain
 
-import com.dedovmosol.iwomail.util.RemoteImages
-
 /**
  * Тихие часы: окно в минутах от полуночи по местному времени; может переходить через полночь (22:00–07:00).
  * Начало равно концу — окно пустое: так почту нельзя заглушить на сутки по ошибке.
@@ -34,15 +32,11 @@ data class QuietHours(val enabled: Boolean, val startMinutes: Int, val endMinute
 }
 
 /**
- * Как уведомить о новых письмах аккаунта.
- * - [vip] — среди них письмо важного отправителя: канал «Важные отправители», звук и в тихие часы.
- * - [silent] — без звука и вибрации (тихие часы, важных писем нет); уведомление всё равно появляется в шторке.
+ * Как уведомить о новых письмах аккаунта: [silent] — без звука и вибрации (тихие часы); уведомление всё равно
+ * появляется в шторке.
  */
-data class MailAlert(val vip: Boolean, val silent: Boolean) {
+data class MailAlert(val silent: Boolean) {
     companion object {
-        fun of(senders: List<String>, vipSenders: Set<String>, quiet: QuietHours, minuteOfDay: Int): MailAlert {
-            val vip = vipSenders.isNotEmpty() && senders.any { RemoteImages.senderKey(it) in vipSenders }
-            return MailAlert(vip = vip, silent = !vip && quiet.isActive(minuteOfDay))
-        }
+        fun of(quiet: QuietHours, minuteOfDay: Int): MailAlert = MailAlert(silent = quiet.isActive(minuteOfDay))
     }
 }

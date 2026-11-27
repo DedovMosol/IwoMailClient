@@ -84,6 +84,7 @@ object AppIcons {
     val MoreVert: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_more_vert)
     val NightsStay: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_nights_stay)
     val Notifications: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_notifications)
+    val Vibration: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_vibration)
     val OpenInNew: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_open_in_new)
     val Outbox: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_outbox)
     val Palette: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_palette)

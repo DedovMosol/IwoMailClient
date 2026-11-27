@@ -2,7 +2,6 @@ package com.dedovmosol.iwomail.ui.screens
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -24,7 +23,7 @@ import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import kotlinx.coroutines.launch
 
-/** Уведомления о почте: тихие часы, важные отправители, звук и вибрация каждого аккаунта (каналы системы). */
+/** Уведомления о почте: тихие часы, тактильный отклик, звук и вибрация каждого аккаунта (каналы системы). */
 @Composable
 internal fun MailAlertsSettingsSection(
     settingsRepo: SettingsRepository,
@@ -67,26 +66,23 @@ internal fun MailAlertsSettingsSection(
                 onClick = { picking = "end" })
         }
 
-        val vip = prefs?.vipSenders.orEmpty().sorted()
-        SettingsNavRow(
-            title = Strings.vipSenders,
-            subtitle = if (vip.isEmpty()) Strings.vipSendersHint else null,
-            icon = AppIcons.Star,
-            trailingIcon = null,
-            highlightId = "vipSenders",
-            highlight = highlight
-        )
-        for (address in vip) {
-            SettingsNavRow(
-                title = address,
-                trailingIcon = null,
-                trailing = {
-                    IconButton(onClick = { scope.launch { settingsRepo.setVipSender(address, vip = false) } }) {
-                        Icon(AppIcons.Close, Strings.removeVipSender)
-                    }
+        // Тактильный отклик приложения: выделение, свайпы, долгое нажатие (AppHaptics). Системные настройки — сверху.
+        val haptics by settingsRepo.hapticsEnabled.collectAsStateWithLifecycle(initialValue = settingsRepo.getHapticsEnabledSync())
+        SettingsSwitchRow(
+            title = Strings.hapticsSetting,
+            description = Strings.hapticsSettingDesc,
+            icon = { Icon(AppIcons.Vibration, null) },
+            checked = haptics,
+            highlightId = "haptics",
+            highlight = highlight,
+            onChange = { enabled ->
+                scope.launch {
+                    settingsRepo.setHapticsEnabled(enabled)
+                    // Включили — короткое подтверждение, что отклик работает
+                    if (enabled) com.dedovmosol.iwomail.ui.utils.AppHaptics.from(context).confirm()
                 }
-            )
-        }
+            }
+        )
 
         // Звук, вибрация и важность — у каждого аккаунта свои, в настройках системы (канал аккаунта)
         for (account in accounts) {

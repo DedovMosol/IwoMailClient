@@ -4,9 +4,12 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ScrollState
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.withFrameNanos
@@ -16,6 +19,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.ui.utils.rememberAppHaptics
@@ -222,27 +226,48 @@ fun BoxScope.LazyColumnScrollbar(
                     end = ScrollbarDefaults.PADDING_END.dp
                 )
         ) {
-            val totalItems = listState.layoutInfo.totalItemsCount.toFloat()
-            val visibleItems = listState.layoutInfo.visibleItemsInfo.size.toFloat()
-
-            if (totalItems > 0 && visibleItems < totalItems) {
-                val firstVisible = listState.firstVisibleItemIndex.toFloat()
-                val thumbHeight = ((visibleItems / totalItems) * size.height)
-                    .coerceAtLeast(thumbMinHeight.dp.toPx())
-                val scrollRange = size.height - thumbHeight
-                val thumbY = if (totalItems - visibleItems > 0)
-                    (firstVisible / (totalItems - visibleItems)) * scrollRange
-                else 0f
-
-                drawRoundRect(
-                    color = scrollbarColor.copy(alpha = alpha),
-                    topLeft = Offset(0f, thumbY.coerceIn(0f, scrollRange)),
-                    size = Size(thumbWidth.dp.toPx(), thumbHeight),
-                    cornerRadius = CornerRadius(thumbWidth.dp.toPx() / 2)
-                )
-            }
+            val thumb = lazyListThumb(
+                listState.layoutInfo,
+                canScrollBackward = listState.canScrollBackward,
+                canScrollForward = listState.canScrollForward
+            ) ?: return@Canvas
+            val thumbHeight = (thumb.lengthFraction * size.height).coerceAtLeast(thumbMinHeight.dp.toPx())
+            val scrollRange = size.height - thumbHeight
+            drawRoundRect(
+                color = scrollbarColor.copy(alpha = alpha),
+                topLeft = Offset(0f, (thumb.positionFraction * scrollRange).coerceIn(0f, scrollRange)),
+                size = Size(thumbWidth.dp.toPx(), thumbHeight),
+                cornerRadius = CornerRadius(thumbWidth.dp.toPx() / 2)
+            )
         }
     }
+}
+
+/** Ползунок: доля длины дорожки и положение (0 — верх, 1 — низ). */
+internal data class ScrollThumb(val lengthFraction: Float, val positionFraction: Float)
+
+/**
+ * Ползунок списка в пикселях, а не в числе элементов. Высота содержимого — средний размер видимых элементов × их
+ * число: для экранов из одного-двух высоких элементов (разделы настроек) счёт по элементам ползунок не рисовал вовсе
+ * или рисовал на пол-экрана, прыгающим между двумя положениями. У самого верха и низа положение точное (0 и 1).
+ * null — прокручивать нечего.
+ */
+internal fun lazyListThumb(info: LazyListLayoutInfo, canScrollBackward: Boolean, canScrollForward: Boolean): ScrollThumb? {
+    val visible = info.visibleItemsInfo
+    if (visible.isEmpty() || (!canScrollBackward && !canScrollForward)) return null
+    val viewport = (info.viewportEndOffset - info.viewportStartOffset).toFloat()
+    if (viewport <= 0f) return null
+    val averageItem = visible.sumOf { it.size + info.mainAxisItemSpacing }.toFloat() / visible.size
+    val content = averageItem * info.totalItemsCount + info.beforeContentPadding + info.afterContentPadding
+    if (content <= viewport) return null
+    val first = visible.first()
+    val scrolled = first.index * averageItem - first.offset
+    val position = when {
+        !canScrollBackward -> 0f
+        !canScrollForward -> 1f
+        else -> (scrolled / (content - viewport)).coerceIn(0f, 1f)
+    }
+    return ScrollThumb(lengthFraction = (viewport / content).coerceIn(0f, 1f), positionFraction = position)
 }
 
 /**
@@ -316,14 +341,12 @@ fun rememberDragSelectModifier(
 ): Modifier {
     val haptic = rememberAppHaptics()
     val scope = rememberCoroutineScope()
-    var dragStartIndex by remember { mutableIntStateOf(-1) }
-    var dragCurrentIndex by remember { mutableIntStateOf(-1) }
-    var initialSelection by remember { mutableStateOf(setOf<String>()) }
-    var lastPointerY by remember { mutableFloatStateOf(Float.NaN) }
-    var autoScrollDelta by remember { mutableFloatStateOf(0f) }
-    var autoScrollJob by remember { mutableStateOf<Job?>(null) }
+    // Состояние жеста читают только обработчики ввода, не композиция — обычные поля, без snapshot-записей на кадр
+    val drag = remember { DragSelectState() }
 
-    // rememberUpdatedState — closure всегда видит актуальные значения
+    // rememberUpdatedState — обработчики жеста видят актуальные значения, а сам жест не перезапускается
+    // при новых ключах (синхронизация добавила или убрала письмо посреди протягивания)
+    val currentKeys by rememberUpdatedState(itemKeys)
     val currentSelectedIds by rememberUpdatedState(selectedIds)
     val currentOnChange by rememberUpdatedState(onSelectionChange)
     val currentExpand by rememberUpdatedState(expand)
@@ -331,95 +354,129 @@ fun rememberDragSelectModifier(
     val indexMap = remember(itemKeys) {
         itemKeys.withIndex().associate { (index, key) -> key to index }
     }
+    val currentIndexMap by rememberUpdatedState(indexMap)
 
     fun updateDraggedSelection(pointerY: Float) {
-        if (dragStartIndex < 0 || pointerY.isNaN()) return
-        val index = findItemIndexAtY(listState, indexMap, pointerY)
-        if (index >= 0 && index != dragCurrentIndex) {
-            dragCurrentIndex = index
-            haptic.tick()
-            val start = minOf(dragStartIndex, dragCurrentIndex)
-            val end = minOf(maxOf(dragStartIndex, dragCurrentIndex), itemKeys.size - 1)
-            val rangeIds = itemKeys.subList(start, end + 1).flatMapTo(HashSet()) { currentExpand(it) }
-            currentOnChange(initialSelection + rangeIds)
-        }
+        val startKey = drag.startKey ?: return
+        if (pointerY.isNaN()) return
+        val keys = currentKeys
+        if (keys.isEmpty()) return
+        // Начало — по ключу: если над ним появились или исчезли строки, его индекс сдвинулся
+        val startIndex = (currentIndexMap[startKey] ?: drag.startIndex).coerceIn(0, keys.size - 1)
+        val index = findItemIndexAtY(listState, currentIndexMap, pointerY)
+        if (index < 0) return
+        val key = keys[index]
+        if (key == drag.currentKey && startIndex == drag.startIndex) return
+        if (key != drag.currentKey) haptic.tick()
+        drag.startIndex = startIndex
+        drag.currentKey = key
+        val start = minOf(startIndex, index)
+        val end = maxOf(startIndex, index)
+        val rangeIds = keys.subList(start, end + 1).flatMapTo(HashSet()) { currentExpand(it) }
+        currentOnChange(drag.initialSelection + rangeIds)
     }
 
     fun stopAutoScroll() {
-        autoScrollDelta = 0f
-        autoScrollJob?.cancel()
-        autoScrollJob = null
+        drag.autoScrollDelta = 0f
+        drag.autoScrollJob?.cancel()
+        drag.autoScrollJob = null
     }
 
     fun ensureAutoScroll() {
-        if (autoScrollJob?.isActive == true) return
-        autoScrollJob = scope.launch {
+        if (drag.autoScrollJob?.isActive == true) return
+        drag.autoScrollJob = scope.launch {
             try {
                 while (isActive) {
-                    val delta = autoScrollDelta
-                    val pointerY = lastPointerY
-                    if (delta == 0f || pointerY.isNaN() || dragStartIndex < 0) break
+                    val delta = drag.autoScrollDelta
+                    val pointerY = drag.lastPointerY
+                    if (delta == 0f || pointerY.isNaN() || drag.startKey == null) break
+                    // У края списка прокручивать некуда — цикл не крутится каждый кадр впустую; следующее движение
+                    // пальца запустит его снова
+                    if (delta < 0f && !listState.canScrollBackward || delta > 0f && !listState.canScrollForward) break
                     listState.scrollBy(delta)
                     updateDraggedSelection(pointerY)
                     withFrameNanos { }
                 }
             } finally {
-                autoScrollJob = null
+                drag.autoScrollJob = null
             }
         }
+    }
+
+    fun endDrag() {
+        drag.startKey = null
+        drag.currentKey = null
+        drag.startIndex = -1
+        drag.lastPointerY = Float.NaN
+        stopAutoScroll()
     }
 
     DisposableEffect(Unit) {
         onDispose {
-            autoScrollJob?.cancel()
+            drag.autoScrollJob?.cancel()
         }
     }
 
-    return Modifier.pointerInput(itemKeys) {
-        detectDragGesturesAfterLongPress(
-            onDragStart = { offset ->
-                val index = findItemIndexAtY(listState, indexMap, offset.y)
-                if (index >= 0 && index < itemKeys.size) {
-                    haptic.confirm()
-                    dragStartIndex = index
-                    dragCurrentIndex = index
-                    initialSelection = currentSelectedIds
-                    lastPointerY = offset.y
-                    currentOnChange(initialSelection + currentExpand(itemKeys[index]))
-                }
-            },
-            onDrag = { change, _ ->
-                if (dragStartIndex >= 0) {
-                    change.consume()
-                    lastPointerY = change.position.y
-                    updateDraggedSelection(change.position.y)
-
-                    // Авто-скролл при приближении к краям с плавной скоростью
-                    val viewportHeight = listState.layoutInfo.viewportSize.height.toFloat()
-                    autoScrollDelta = calculateDragAutoScrollDelta(
-                        pointerY = change.position.y,
-                        viewportHeight = viewportHeight
-                    )
-                    when {
-                        autoScrollDelta == 0f -> stopAutoScroll()
-                        else -> ensureAutoScroll()
-                    }
-                }
-            },
-            onDragEnd = {
-                dragStartIndex = -1
-                dragCurrentIndex = -1
-                lastPointerY = Float.NaN
-                stopAutoScroll()
-            },
-            onDragCancel = {
-                dragStartIndex = -1
-                dragCurrentIndex = -1
-                lastPointerY = Float.NaN
-                stopAutoScroll()
-            }
-        )
+    fun startDrag(y: Float): Boolean {
+        val keys = currentKeys
+        val index = findItemIndexAtY(listState, currentIndexMap, y)
+        if (index !in keys.indices) return false
+        haptic.confirm()
+        val key = keys[index]
+        drag.startKey = key
+        drag.currentKey = key
+        drag.startIndex = index
+        drag.initialSelection = currentSelectedIds
+        drag.lastPointerY = y
+        currentOnChange(drag.initialSelection + currentExpand(key))
+        return true
     }
+
+    fun moveDrag(y: Float) {
+        drag.lastPointerY = y
+        updateDraggedSelection(y)
+        // Авто-скролл при приближении к краям с плавной скоростью
+        drag.autoScrollDelta = calculateDragAutoScrollDelta(
+            pointerY = y,
+            viewportHeight = listState.layoutInfo.viewportSize.height.toFloat()
+        )
+        if (drag.autoScrollDelta == 0f) stopAutoScroll() else ensureAutoScroll()
+    }
+
+    // После долгого нажатия палец ведёт этот обработчик в проходе Initial — раньше вложенных: прокрутки самого
+    // списка и строк. detectDragGesturesAfterLongPress читает движения в проходе Main, где их первой видит прокрутка
+    // списка: в прокручиваемой папке (под pull-to-refresh) она забирала жест на первом движении, и протягивание
+    // обрывалось, выделялось одно письмо. До долгого нажатия ничего не поглощается — обычная прокрутка не меняется.
+    return Modifier.pointerInput(listState) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val longPress = awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
+            if (!startDrag(longPress.position.y)) return@awaitEachGesture
+            try {
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.firstOrNull { it.id == longPress.id } ?: break
+                    // Отпускание тоже поглощаем: строка под пальцем не получит «нажатие» и не переключит выбор
+                    change.consume()
+                    if (!change.pressed) break
+                    if (change.previousPosition != change.position) moveDrag(change.position.y)
+                }
+            } finally {
+                endDrag()
+            }
+        }
+    }
+}
+
+/** Состояние одного жеста протягивания; живёт в remember, меняется только на главном потоке. */
+private class DragSelectState {
+    var startKey: String? = null
+    var currentKey: String? = null
+    var startIndex = -1
+    var initialSelection: Set<String> = emptySet()
+    var lastPointerY = Float.NaN
+    var autoScrollDelta = 0f
+    var autoScrollJob: Job? = null
 }
 
 private fun calculateDragAutoScrollDelta(

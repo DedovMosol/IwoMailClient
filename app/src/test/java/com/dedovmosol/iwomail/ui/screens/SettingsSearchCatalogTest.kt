@@ -117,7 +117,9 @@ class SettingsSearchCatalogTest {
     fun `nested settings have targets and respect visible options`() {
         val (off, on) = catalogs(SettingsSearchState(), SettingsSearchState(trustedSenderCount = 2,
             quietHoursEnabled = true, storageDegraded = true, dailyThemesEnabled = true))
-        assertThat(off.map { it.focus }).containsAtLeast("overview", "updates", "autoUpdateCheck", "addAccount")
+        assertThat(off.map { it.focus }).containsAtLeast("overview", "updates", "autoUpdateCheck", "addAccount", "haptics")
+        // «Важные отправители» удалены: в поиске их нет
+        assertThat(off.map { it.focus }).doesNotContain("vipSenders")
         assertThat(off.map { it.focus }).containsNoneOf("quietStart", "quietEnd", "failClosed", "trustedSenders")
         assertThat(on.map { it.focus }).containsAtLeast("quietStart", "quietEnd", "failClosed", "trustedSenders")
         assertThat(filterSettingsEntries("Monday", on)).hasSize(2)

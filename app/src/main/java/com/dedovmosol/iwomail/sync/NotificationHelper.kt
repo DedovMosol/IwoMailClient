@@ -153,11 +153,8 @@ object NotificationHelper {
                     appInForeground = AppForegroundTracker.isInForeground()
                 )
                 if (showNotification) {
-                    // Важные отправители и тихие часы — по всем новым письмам, а не только показанным в уведомлении
                     val alertPrefs = settingsRepo.mailAlertPrefs.first()
                     val alert = com.dedovmosol.iwomail.domain.MailAlert.of(
-                        senders = filtered.map { it.from },
-                        vipSenders = alertPrefs.vipSenders,
                         quiet = alertPrefs.quietHours,
                         minuteOfDay = com.dedovmosol.iwomail.domain.QuietHours.minuteOfDay(System.currentTimeMillis())
                     )
@@ -198,7 +195,7 @@ object NotificationHelper {
         accountId: Long,
         accountEmail: String,
         settingsRepo: SettingsRepository,
-        alert: com.dedovmosol.iwomail.domain.MailAlert = com.dedovmosol.iwomail.domain.MailAlert(vip = false, silent = false)
+        alert: com.dedovmosol.iwomail.domain.MailAlert = com.dedovmosol.iwomail.domain.MailAlert(silent = false)
     ) {
         val count = totalCount
         if (displayEmails.isEmpty()) return
@@ -238,8 +235,8 @@ object NotificationHelper {
 
         val notificationManager = context.getSystemService(NotificationManager::class.java)
 
-        // Свой канал на аккаунт (звук и важность — в настройках системы); важные отправители — отдельный канал
-        val channelId = MailNotificationChannels.channelFor(context, accountId, accountEmail, alert.vip, isRussian)
+        // Свой канал на аккаунт (звук и важность — в настройках системы)
+        val channelId = MailNotificationChannels.channelFor(context, accountId, accountEmail, isRussian)
         val builder = NotificationCompat.Builder(context, channelId)
             // Монохромный vector — корректный status-bar/lock-screen small icon (best practice).
             // Android 5.0+ рендерит small icon по alpha-каналу: цветная framework-иконка

@@ -4,7 +4,7 @@ import com.google.common.truth.Truth.assertThat
 import org.junit.Test
 import java.util.TimeZone
 
-/** Тихие часы (в том числе через полночь) и важные отправители. */
+/** Тихие часы (в том числе через полночь). */
 class MailAlertsTest {
 
     private fun at(hour: Int, minute: Int = 0) = hour * 60 + minute
@@ -55,17 +55,10 @@ class MailAlertsTest {
     private val night = QuietHours(enabled = true, startMinutes = at(22), endMinutes = at(7))
 
     @Test
-    fun `quiet hours mute ordinary mail`() {
-        assertThat(MailAlert.of(listOf("a@corp.example"), emptySet(), night, at(23)))
-            .isEqualTo(MailAlert(vip = false, silent = true))
-        assertThat(MailAlert.of(listOf("a@corp.example"), emptySet(), night, at(12)))
-            .isEqualTo(MailAlert(vip = false, silent = false))
-    }
-
-    @Test
-    fun `important sender alerts even at night, matched by address regardless of name and case`() {
-        val alert = MailAlert.of(listOf("x@corp.example", "\"Boss\" <Boss@Corp.Example>"), setOf("boss@corp.example"), night, at(3))
-
-        assertThat(alert).isEqualTo(MailAlert(vip = true, silent = false))
+    fun `quiet hours mute all mail - there are no exceptions`() {
+        assertThat(MailAlert.of(night, at(23))).isEqualTo(MailAlert(silent = true))
+        assertThat(MailAlert.of(night, at(3))).isEqualTo(MailAlert(silent = true))
+        assertThat(MailAlert.of(night, at(12))).isEqualTo(MailAlert(silent = false))
+        assertThat(MailAlert.of(night.copy(enabled = false), at(23))).isEqualTo(MailAlert(silent = false))
     }
 }

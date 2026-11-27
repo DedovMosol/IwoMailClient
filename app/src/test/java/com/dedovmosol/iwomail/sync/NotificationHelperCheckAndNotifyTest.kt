@@ -52,7 +52,7 @@ class NotificationHelperCheckAndNotifyTest {
         every { database.emailDao() } returns emailDao
         // По умолчанию Inbox пуст (клэмп не срабатывает); тесты переопределяют при необходимости.
         coEvery { emailDao.getMaxInboxDateReceived(accountId) } returns 0L
-        every { settingsRepo.mailAlertPrefs } returns flowOf(SettingsRepository.MailAlertPrefs(QuietHours(enabled = false, startMinutes = 0, endMinutes = 0), emptySet()))
+        every { settingsRepo.mailAlertPrefs } returns flowOf(SettingsRepository.MailAlertPrefs(QuietHours(enabled = false, startMinutes = 0, endMinutes = 0)))
 
         // Изолируем побочные эффекты Android/SharedPreferences.
         mockkObject(NotificationHelper)
@@ -88,31 +88,30 @@ class NotificationHelperCheckAndNotifyTest {
         coEvery { settingsRepo.getLastNotificationCheckTime(accountId) } returns 1_000L
         coEvery { emailDao.getNewEmailsForNotification(accountId, 1_000L) } returns listOf(summary("1_a", 3_000L))
         every { settingsRepo.notificationsEnabled } returns flowOf(true)
-        every { settingsRepo.mailAlertPrefs } returns flowOf(SettingsRepository.MailAlertPrefs(quietNow(), emptySet()))
+        every { settingsRepo.mailAlertPrefs } returns flowOf(SettingsRepository.MailAlertPrefs(quietNow()))
 
         NotificationHelper.checkAndNotifyNewMail(context, database, settingsRepo, accountId, accountEmail)
 
         coVerify(exactly = 1) {
             NotificationHelper.showNewMailNotification(
-                context, any(), 1, any(), accountId, accountEmail, settingsRepo, MailAlert(vip = false, silent = true)
+                context, any(), 1, any(), accountId, accountEmail, settingsRepo, MailAlert(silent = true)
             )
         }
     }
 
     @Test
-    fun `important sender alerts even in quiet hours, found among all new emails`() = runTest {
+    fun `quiet hours mute a batch of many new emails, whoever sent them`() = runTest {
         coEvery { settingsRepo.getLastNotificationCheckTime(accountId) } returns 1_000L
         val many = (1..30).map { summary("1_$it", 2_000L + it) } + summary("1_boss", 1_500L, from = "Boss <BOSS@corp.example>")
         coEvery { emailDao.getNewEmailsForNotification(accountId, 1_000L) } returns many
         every { settingsRepo.notificationsEnabled } returns flowOf(true)
-        every { settingsRepo.mailAlertPrefs } returns
-            flowOf(SettingsRepository.MailAlertPrefs(quietNow(), setOf("boss@corp.example")))
+        every { settingsRepo.mailAlertPrefs } returns flowOf(SettingsRepository.MailAlertPrefs(quietNow()))
 
         NotificationHelper.checkAndNotifyNewMail(context, database, settingsRepo, accountId, accountEmail)
 
         coVerify(exactly = 1) {
             NotificationHelper.showNewMailNotification(
-                context, any(), 31, any(), accountId, accountEmail, settingsRepo, MailAlert(vip = true, silent = false)
+                context, any(), 31, any(), accountId, accountEmail, settingsRepo, MailAlert(silent = true)
             )
         }
     }

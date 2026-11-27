@@ -185,10 +185,6 @@ fun EmailDetailScreen(
         }
     }
 
-    // Важный отправитель: уведомления о его письмах звучат и в тихие часы
-    val mailAlertPrefs by settingsRepo.mailAlertPrefs.collectAsStateWithLifecycle(initialValue = null)
-    val senderMarkedVipText = Strings.senderMarkedVip
-    val senderUnmarkedVipText = Strings.senderUnmarkedVip
 
     // Печать / PDF — системный диалог печати; .eml — файл в выбранном пользователем месте (SAF)
     val printer = com.dedovmosol.iwomail.ui.components.rememberEmailPrinter()
@@ -556,23 +552,6 @@ fun EmailDetailScreen(
                                         },
                                         leadingIcon = { Icon(AppIcons.Download, null) },
                                         enabled = !uiState.isSavingEml
-                                    )
-                                }
-                                val senderKey = com.dedovmosol.iwomail.util.RemoteImages.senderKey(target.from)
-                                val alertPrefs = mailAlertPrefs
-                                if (!isInSent && !isInDrafts && senderKey.isNotEmpty() && alertPrefs != null) {
-                                    val isVip = senderKey in alertPrefs.vipSenders
-                                    DropdownMenuItem(
-                                        text = { Text(Strings.makeSenderVip) },
-                                        onClick = {
-                                            showOverflowMenu = false
-                                            scope.launch {
-                                                settingsRepo.setVipSender(senderKey, vip = !isVip)
-                                                SafeToast.short(context, if (isVip) senderUnmarkedVipText else senderMarkedVipText)
-                                            }
-                                        },
-                                        leadingIcon = { Icon(if (isVip) AppIcons.Star else AppIcons.StarOutline, null) },
-                                        trailingIcon = { androidx.compose.material3.Checkbox(checked = isVip, onCheckedChange = null) }
                                     )
                                 }
                             }

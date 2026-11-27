@@ -695,6 +695,43 @@ class EmailListViewModelTest {
         return received
     }
 
+    // ===================== стабильность списка во время синхронизации (drag selection) =====================
+
+    @Test
+    fun `an equal re-emission from Room keeps the same list instance`() = runTest(dispatcher) {
+        val inbox = kotlinx.coroutines.flow.MutableSharedFlow<List<EmailEntity>>(replay = 1)
+        every { mailRepo.getEmails(INBOX_ID) } returns inbox
+        inbox.emit(listOf(email("a"), email("b")))
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val before = vm.uiState.value.emails
+        inbox.emit(listOf(email("a"), email("b"))) // запись в таблицу без изменений этой папки
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.emails).isSameInstanceAs(before)
+    }
+
+    @Test
+    fun `folder row writes during sync neither replace the mail list nor restart the paired folder query`() = runTest(dispatcher) {
+        val folders = kotlinx.coroutines.flow.MutableStateFlow(listOf(
+            folderMock(INBOX_ID, FolderType.INBOX), folderMock("sent", FolderType.SENT_ITEMS)
+        ))
+        every { mailRepo.getFolders(ACCOUNT_ID) } returns folders
+        every { mailRepo.getEmails("sent") } returns flowOf(listOf(email("peer").copy(folderId = "sent")))
+        val vm = createViewModel()
+        vm.setOnlyThreads(true)
+        advanceUntilIdle()
+        val mail = vm.uiState.value.emails
+        val peer = vm.uiState.value.peerEmails
+        // Каждый батч синхронизации пишет SyncKey и счётчики папки: новая выдача тех же папок
+        repeat(3) {
+            folders.value = listOf(folderMock(INBOX_ID, FolderType.INBOX), folderMock("sent", FolderType.SENT_ITEMS))
+            advanceUntilIdle()
+        }
+        verify(exactly = 1) { mailRepo.getEmails("sent") }
+        assertThat(vm.uiState.value.emails).isSameInstanceAs(mail)
+        assertThat(vm.uiState.value.peerEmails).isSameInstanceAs(peer)
+    }
+
     private fun accountMock(id: Long): AccountEntity {
         val account = mockk<AccountEntity>()
         every { account.id } returns id

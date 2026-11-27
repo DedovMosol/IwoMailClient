@@ -1,9 +1,6 @@
 package com.dedovmosol.iwomail.sync
 
 import android.content.Context
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import com.dedovmosol.iwomail.data.model.classifyError
 import com.dedovmosol.iwomail.data.repository.AccountServerHealthRepository
 import com.dedovmosol.iwomail.eas.EasResult
@@ -11,12 +8,18 @@ import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 /**
  * Orchestrates initial and manual sync on app launch.
  *
- * Reactive state ([isSyncing], [syncDone], [noNetwork]) is exposed via
- * Compose [mutableStateOf] so UI recomposes automatically.
+ * Reactive state is exposed as [status] ([StateFlow]); the UI collects it. It is deliberately not Compose
+ * `mutableStateOf`: this object is first touched from background threads (PushService, SyncWorker) while the main
+ * thread may be composing a frame, and a snapshot state created after a composition snapshot was taken crashes that
+ * composition ("Reading a state that was created after the snapshot was taken…").
  *
  * Thread-safe: all mutable collections are concurrent.
  */
@@ -29,12 +32,17 @@ object InitialSyncController {
     private val syncAttempts = java.util.concurrent.ConcurrentHashMap<Long, Int>()
     private const val MAX_SYNC_ATTEMPTS = 3
 
-    var isSyncing by mutableStateOf(false)
-        private set
-    var syncDone by mutableStateOf(false)
-        private set
-    var noNetwork by mutableStateOf(false)
-        private set
+    /** Состояние синхронизации для UI. */
+    data class Status(val isSyncing: Boolean = false, val syncDone: Boolean = false, val noNetwork: Boolean = false)
+
+    private val _status = MutableStateFlow(Status())
+    val status: StateFlow<Status> = _status.asStateFlow()
+
+    val isSyncing: Boolean get() = _status.value.isSyncing
+    val syncDone: Boolean get() = _status.value.syncDone
+    var noNetwork: Boolean
+        get() = _status.value.noNetwork
+        private set(value) = _status.update { it.copy(noNetwork = value) }
 
     private fun isNetworkAvailable(context: Context): Boolean {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
@@ -47,8 +55,7 @@ object InitialSyncController {
     fun isSyncedAccount(accountId: Long): Boolean = accountId in syncedAccounts
 
     private fun updateState() {
-        isSyncing = syncingAccounts.isNotEmpty()
-        syncDone = syncedAccounts.isNotEmpty()
+        _status.update { it.copy(isSyncing = syncingAccounts.isNotEmpty(), syncDone = syncedAccounts.isNotEmpty()) }
     }
 
     fun startSyncIfNeeded(

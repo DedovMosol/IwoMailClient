@@ -491,7 +491,7 @@ internal fun rememberSettingsHighlight(id: String, highlight: String): Pair<Modi
 /** Stable semantic accents for child rows; destructive/status icons keep their own colours. */
 @Composable
 private fun rowHue(id: String): ScrollbarColor = when (id) {
-    "signature", "compose", "overview", "vipSenders" -> ScrollbarColor.ORANGE
+    "signature", "compose", "overview", "haptics" -> ScrollbarColor.ORANGE
     "remoteImages", "trustedSenders", "galPhotos", "colorTheme" -> ScrollbarColor.GREEN
     "quietHours", "quietStart", "quietEnd", "nightMode", "undoSend" -> ScrollbarColor.PURPLE
     "syncMode", "syncInterval", "autoUpdateCheck", "updates", "credentials" -> ScrollbarColor.BLUE

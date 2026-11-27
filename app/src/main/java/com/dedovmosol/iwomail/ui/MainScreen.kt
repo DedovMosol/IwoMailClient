@@ -159,7 +159,8 @@ fun MainScreen(
     var dataLoaded by remember { mutableStateOf(folders.isNotEmpty()) }
 
     // Состояние синхронизации из контроллера
-    val isSyncing = InitialSyncController.isSyncing
+    val syncStatus by InitialSyncController.status.collectAsStateWithLifecycle()
+    val isSyncing = syncStatus.isSyncing
 
     // Время последней синхронизации (для обновления статистики)
     val lastSyncTime by settingsRepo.lastSyncTime.collectAsStateWithLifecycle(initialValue = 0L)
@@ -829,7 +830,7 @@ fun MainScreen(
                 todayTasksCount = todayTasksCount,
                 isLoading = isLoading,
                 isSyncing = isSyncing,
-                noNetwork = InitialSyncController.noNetwork,
+                noNetwork = syncStatus.noNetwork,
                 onSyncFolders = { syncFolders() },
                 onFolderClick = onNavigateToEmailList,
                 onContactsClick = onNavigateToContacts,

@@ -102,6 +102,9 @@ class SettingsRepository private constructor(
     private val cachedLastUpdateCheckTime = AtomicReference<Long?>(null)
     private val cachedUpdateDismissedVersion = AtomicReference<Int?>(null)
     private val cachedSoundEnabled = AtomicReference<Boolean?>(null)
+    private val cachedHapticsEnabled = AtomicReference<Boolean?>(null)
+    // Гвард «сеттер → устаревшая эмиссия» (как у themeMode): ключ пишет только сеттер, после него кэш верен
+    private val hapticsWrittenBySetter = java.util.concurrent.atomic.AtomicBoolean(false)
     private val cachedScrollbarColor = AtomicReference<String?>(null)
     private val cachedDefaultDraftMode = AtomicReference<String?>(null)
     private val cachedConversationView = AtomicReference<Boolean?>(null)
@@ -163,6 +166,7 @@ class SettingsRepository private constructor(
                     cachedLastUpdateCheckTime.set(prefs[Keys.LAST_UPDATE_CHECK_TIME] ?: 0L)
                     cachedUpdateDismissedVersion.set(prefs[Keys.UPDATE_DISMISSED_VERSION] ?: 0)
                     cachedSoundEnabled.set(prefs[Keys.SOUND_ENABLED] ?: true)
+                    if (!hapticsWrittenBySetter.get()) cachedHapticsEnabled.set(prefs[Keys.HAPTICS_ENABLED] ?: true)
                     cachedScrollbarColor.set(prefs[Keys.SCROLLBAR_COLOR] ?: "blue")
                     cachedConversationView.set(prefs[Keys.CONVERSATION_VIEW] ?: false)
                     // Флаги блокировки: гвард «сеттер → устаревшая эмиссия» (паттерн
@@ -234,7 +238,8 @@ class SettingsRepository private constructor(
         val CONVERSATION_VIEW = booleanPreferencesKey("conversation_view")
         val QUIET_HOURS_START = intPreferencesKey("quiet_hours_start_minutes")
         val QUIET_HOURS_END = intPreferencesKey("quiet_hours_end_minutes")
-        val VIP_SENDERS = stringSetPreferencesKey("vip_senders")
+        /** «Важные отправители» (удалено в 1.7.0) — только чтобы стереть сохранённый список. */
+        val LEGACY_VIP_SENDERS = stringSetPreferencesKey("vip_senders")
         val SWIPE_START_ACTION = stringPreferencesKey("swipe_start_action")
         val SWIPE_END_ACTION = stringPreferencesKey("swipe_end_action")
         val UPDATE_CHECK_INTERVAL = stringPreferencesKey("update_check_interval")
@@ -243,6 +248,7 @@ class SettingsRepository private constructor(
         val LAST_APP_VERSION = intPreferencesKey("last_app_version")
         val LAST_INSTALL_TIME = longPreferencesKey("last_install_time")
         val SOUND_ENABLED = booleanPreferencesKey("sound_enabled")
+        val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
         val SCROLLBAR_COLOR = stringPreferencesKey("scrollbar_color")
         val SCROLLBAR_MONDAY = stringPreferencesKey("scrollbar_monday")
         val SCROLLBAR_TUESDAY = stringPreferencesKey("scrollbar_tuesday")
@@ -577,6 +583,19 @@ class SettingsRepository private constructor(
     fun getSoundEnabledSync(): Boolean {
         return cachedSoundEnabled.get() ?: true
     }
+
+    /** Тактильный отклик приложения (выделение, свайпы, долгое нажатие). Системные настройки вибрации — сверху. */
+    val hapticsEnabled: Flow<Boolean> = dataStore.data.map { prefs -> prefs[Keys.HAPTICS_ENABLED] ?: true }.distinctUntilChanged()
+
+    suspend fun setHapticsEnabled(enabled: Boolean) {
+        // Кэш — сразу: отклик читается на каждый тик, асинхронное эхо коллектора не должно давать вибрацию после «выкл»
+        hapticsWrittenBySetter.set(true)
+        cachedHapticsEnabled.set(enabled)
+        dataStore.edit { prefs -> prefs[Keys.HAPTICS_ENABLED] = enabled }
+    }
+
+    /** Без обращения к DataStore — читается на каждый тик протягивания. */
+    fun getHapticsEnabledSync(): Boolean = cachedHapticsEnabled.get() ?: true
     
     // Цвет скроллбара
     val scrollbarColor: Flow<String> = dataStore.data.map { prefs ->
@@ -975,9 +994,9 @@ class SettingsRepository private constructor(
     /** Начальное значение для списка писем — без перестройки списка в первом кадре. */
     fun getConversationViewSync(): Boolean = cachedConversationView.get() ?: false
 
-    // === Уведомления о почте: тихие часы и важные отправители ===
+    // === Уведомления о почте: тихие часы ===
 
-    data class MailAlertPrefs(val quietHours: com.dedovmosol.iwomail.domain.QuietHours, val vipSenders: Set<String>)
+    data class MailAlertPrefs(val quietHours: com.dedovmosol.iwomail.domain.QuietHours)
 
     val mailAlertPrefs: Flow<MailAlertPrefs> = dataStore.data.map { prefs ->
         val quiet = com.dedovmosol.iwomail.domain.QuietHours
@@ -986,10 +1005,14 @@ class SettingsRepository private constructor(
                 enabled = prefs[Keys.QUIET_HOURS_ENABLED] ?: false,
                 startMinutes = quiet.sanitize(prefs[Keys.QUIET_HOURS_START], quiet.DEFAULT_START),
                 endMinutes = quiet.sanitize(prefs[Keys.QUIET_HOURS_END], quiet.DEFAULT_END)
-            ),
-            vipSenders = prefs[Keys.VIP_SENDERS].orEmpty()
+            )
         )
     }.distinctUntilChanged()
+
+    /** Убрать список «Важных отправителей» (функция удалена в 1.7.0); без ключа DataStore файл не перезаписывает. */
+    suspend fun removeLegacyVipSenders() {
+        dataStore.edit { prefs -> prefs.remove(Keys.LEGACY_VIP_SENDERS) }
+    }
 
     suspend fun setQuietHours(hours: com.dedovmosol.iwomail.domain.QuietHours) {
         val quiet = com.dedovmosol.iwomail.domain.QuietHours
@@ -1000,15 +1023,7 @@ class SettingsRepository private constructor(
         }
     }
 
-    /** Отправитель [senderKey] (адрес без имени, в нижнем регистре) — важный: уведомление громче и в тихие часы. */
-    suspend fun setVipSender(senderKey: String, vip: Boolean) {
-        if (senderKey.isBlank()) return
-        dataStore.edit { prefs ->
-            val current = prefs[Keys.VIP_SENDERS].orEmpty()
-            prefs[Keys.VIP_SENDERS] = if (vip) current + senderKey else current - senderKey
-        }
-    }
-    
+
     // Режим черновиков по умолчанию (для новых аккаунтов)
     suspend fun setDefaultDraftMode(mode: String) {
         dataStore.edit { prefs ->

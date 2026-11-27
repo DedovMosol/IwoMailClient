@@ -506,7 +506,8 @@ object Strings {
 
     // EmailListScreen - фильтры
     val allMail: String @Composable get() = if (isRussian()) "Вся почта" else "All mail"
-    val starred: String @Composable get() = if (isRussian()) "Помеченные" else "Starred"
+    // Флажок письма везде называется одинаково — как папка «Избранные письма»
+    val starred: String @Composable get() = if (isRussian()) "Избранные" else "Favorites"
     val allDates: String @Composable get() = if (isRussian()) "Все" else "All"
     val week: String @Composable get() = if (isRussian()) "Неделя" else "Week"
     val month: String @Composable get() = if (isRussian()) "Месяц" else "Month"
@@ -761,28 +762,22 @@ object Strings {
     val unsubscribeOpeningPage: String @Composable get() =
         if (isRussian()) "Отписаться сразу не вышло — открываем страницу отписки" else "Couldn't unsubscribe directly — opening the unsubscribe page"
 
-    // Уведомления о почте: тихие часы, важные отправители, каналы аккаунтов
+    // Уведомления о почте: тихие часы, тактильный отклик, каналы аккаунтов
     val mailAlertsSection: String @Composable get() = if (isRussian()) "Уведомления о почте" else "Mail notifications"
     val quietHours: String @Composable get() = if (isRussian()) "Тихие часы" else "Quiet hours"
     @Composable
     fun quietHoursDesc(range: String): String =
-        if (isRussian()) "$range — без звука и вибрации; важные отправители — как обычно"
-        else "$range — no sound or vibration; important senders still alert"
+        if (isRussian()) "$range — уведомления без звука и вибрации" else "$range — notifications without sound or vibration"
+    val hapticsSetting: String @Composable get() = if (isRussian()) "Тактильный отклик" else "Haptic feedback"
+    val hapticsSettingDesc: String @Composable get() =
+        if (isRussian()) "Лёгкая вибрация при выделении, свайпах и долгом нажатии"
+        else "Light vibration when selecting, swiping and long-pressing"
     val quietHoursSameTime: String @Composable get() =
         if (isRussian()) "Начало и конец тихих часов совпадают — выберите другое время" else "Quiet hours can't start and end at the same time"
     @Composable
     fun quietFrom(time: String): String = if (isRussian()) "С $time" else "From $time"
     @Composable
     fun quietUntil(time: String): String = if (isRussian()) "До $time" else "Until $time"
-    val vipSenders: String @Composable get() = if (isRussian()) "Важные отправители" else "Important senders"
-    val vipSendersHint: String @Composable get() =
-        if (isRussian()) "Отметьте отправителя в меню письма: его письма звучат и в тихие часы"
-        else "Mark a sender from the email menu: their emails alert even during quiet hours"
-    val removeVipSender: String @Composable get() = if (isRussian()) "Убрать из важных" else "Remove from important"
-    val makeSenderVip: String @Composable get() = if (isRussian()) "Важный отправитель" else "Important sender"
-    val senderMarkedVip: String @Composable get() =
-        if (isRussian()) "Письма этого отправителя будут звучать и в тихие часы" else "This sender's emails will alert even during quiet hours"
-    val senderUnmarkedVip: String @Composable get() = if (isRussian()) "Отправитель больше не важный" else "Sender is no longer important"
     val accountNotificationSettings: String @Composable get() =
         if (isRussian()) "Звук и вибрация уведомлений" else "Notification sound and vibration"
 

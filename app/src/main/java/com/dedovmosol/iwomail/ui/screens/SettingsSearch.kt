@@ -75,7 +75,7 @@ fun rememberSettingsCatalog(state: SettingsSearchState): List<SettingsSearchEntr
         SettingsSearchEntry(Strings.swipeEnd, mail, SettingsSearchDest.Mail, "swipeEnd"),
         SettingsSearchEntry(alerts, alerts, SettingsSearchDest.Alerts),
         SettingsSearchEntry(Strings.quietHours, alerts, SettingsSearchDest.Alerts, "quietHours"),
-        SettingsSearchEntry(Strings.vipSenders, alerts, SettingsSearchDest.Alerts, "vipSenders"),
+        SettingsSearchEntry(Strings.hapticsSetting, alerts, SettingsSearchDest.Alerts, "haptics", contextTerms = Strings.hapticsSettingDesc),
         SettingsSearchEntry(appearance, appearance, SettingsSearchDest.Appearance, contextTerms = Strings.interfacePersonalization),
         SettingsSearchEntry(Strings.language, appearance, SettingsSearchDest.Appearance, "language"),
         SettingsSearchEntry(Strings.fontSize, appearance, SettingsSearchDest.Appearance, "fontSize"),

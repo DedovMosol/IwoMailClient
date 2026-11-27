@@ -28,15 +28,29 @@ class MailNotificationChannelsTest {
     }
 
     @Test
-    fun `each account gets its own group with mail and important-senders channels`() {
-        val channel = MailNotificationChannels.channelFor(context, 7L, "me@corp.example", vip = false, ru = true)
-        val vip = MailNotificationChannels.channelFor(context, 7L, "me@corp.example", vip = true, ru = true)
+    fun `each account gets its own group with a single mail channel`() {
+        val channel = MailNotificationChannels.channelFor(context, 7L, "me@corp.example", ru = true)
 
         assertThat(channel).isEqualTo("mail_7")
-        assertThat(vip).isEqualTo("mail_vip_7")
         assertThat(manager.getNotificationChannelGroup("account_7").name.toString()).isEqualTo("me@corp.example")
         assertThat(manager.getNotificationChannel("mail_7").group).isEqualTo("account_7")
-        assertThat(manager.getNotificationChannel("mail_vip_7").importance).isEqualTo(NotificationManager.IMPORTANCE_HIGH)
+        assertThat(manager.getNotificationChannel("mail_vip_7")).isNull()
+    }
+
+    @Test
+    fun `the important-senders channel of the beta is removed on update, the mail channel keeps user settings`() {
+        manager.createNotificationChannelGroup(android.app.NotificationChannelGroup("account_8", "h@corp.example"))
+        manager.createNotificationChannel(
+            NotificationChannel("mail_8", "Новые письма", NotificationManager.IMPORTANCE_LOW).apply { group = "account_8" }
+        )
+        manager.createNotificationChannel(
+            NotificationChannel("mail_vip_8", "Важные отправители", NotificationManager.IMPORTANCE_HIGH).apply { group = "account_8" }
+        )
+
+        MailNotificationChannels.sync(context, listOf(8L to "h@corp.example"), ru = true)
+
+        assertThat(manager.getNotificationChannel("mail_vip_8")).isNull()
+        assertThat(manager.getNotificationChannel("mail_8").importance).isEqualTo(NotificationManager.IMPORTANCE_LOW)
     }
 
     @Test
@@ -75,7 +89,6 @@ class MailNotificationChannelsTest {
         MailNotificationChannels.ensure(context, 3L, "c@corp.example", ru = false)
 
         assertThat(manager.getNotificationChannel("mail_3").name.toString()).isEqualTo("New emails")
-        assertThat(manager.getNotificationChannel("mail_vip_3").name.toString()).isEqualTo("Important senders")
     }
 
     @Test
@@ -85,6 +98,5 @@ class MailNotificationChannelsTest {
         MailNotificationChannels.deleteForAccount(context, 4L)
 
         assertThat(manager.getNotificationChannel("mail_4")).isNull()
-        assertThat(manager.getNotificationChannel("mail_vip_4")).isNull()
     }
 }

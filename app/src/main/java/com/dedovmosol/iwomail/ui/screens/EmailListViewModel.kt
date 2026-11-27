@@ -161,30 +161,34 @@ class EmailListViewModel(
                         )
                     }
 
-                    val emailsFlow = when {
+                    val sourceFlow = when {
                         isFavorites -> if (id > 0L) mailRepo.getFlaggedEmails(id) else flowOf(emptyList())
                         isTodayAll -> if (id > 0L) mailRepo.getTodayEmailsAcrossFolders(id) else flowOf(emptyList())
                         else -> mailRepo.getEmails(folderId)
                             .map { emails -> emails.filter { it.accountId == id } }
                             .flowOn(ioDispatcher)
                     }
+                    // Room re-emits on every write to the table (sync keys, other folders): an equal list keeps its
+                    // instance, so the screen does not rebuild the list model and selection is not disturbed.
+                    val emailsFlow = sourceFlow.distinctUntilChanged().flowOn(ioDispatcher)
                     val foldersFlow = if (id > 0L) mailRepo.getFolders(id) else flowOf(emptyList())
 
                     val threadsEnabled = combine(conversationView, uiState.map { it.onlyThreads }.distinctUntilChanged()) { setting, only ->
                         setting || only
                     }.distinctUntilChanged()
-                    // A new local mail emission must not cancel and restart the paired-folder query.
-                    val foldersWithPeer = combine(foldersFlow, threadsEnabled) { folders, threaded ->
-                        folders to threaded
-                    }.flatMapLatest { (folders, threaded) ->
+                    // The paired-folder query restarts only when the paired folder itself changes: a folder row write
+                    // (SyncKey, counters — every sync batch) or a new local mail emission must not restart it.
+                    val peerEmailsFlow = combine(foldersFlow, threadsEnabled) { folders, threaded ->
                         val folder = if (isFavorites || isTodayAll) null else folders.find { it.id == folderId }
-                        val peerId = if (threaded) peerMailboxId(folder, folders) else null
-                        if (peerId == null) flowOf(folders to emptyList())
+                        if (threaded) peerMailboxId(folder, folders) else null
+                    }.distinctUntilChanged().flatMapLatest { peerId ->
+                        if (peerId == null) flowOf(emptyList())
                         else mailRepo.getEmails(peerId)
-                            .map { peer -> folders to peer.filter { it.accountId == id } }
+                            .map { peer -> peer.filter { it.accountId == id } }
+                            .distinctUntilChanged()
                             .flowOn(ioDispatcher)
                     }
-                    combine(emailsFlow, foldersWithPeer) { emails, (folders, peer) -> Triple(emails, folders, peer) }
+                    combine(emailsFlow, foldersFlow, peerEmailsFlow) { emails, folders, peer -> Triple(emails, folders, peer) }
                         .collect { (emails, folders, peer) ->
                             val folder = if (isFavorites || isTodayAll) null else folders.find { it.id == folderId }
                             _uiState.update { s ->

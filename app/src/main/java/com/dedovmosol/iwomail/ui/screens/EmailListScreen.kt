@@ -189,10 +189,14 @@ fun EmailListScreen(
     var previousList by remember(uiState.accountId, folderId, folder?.type) { mutableStateOf<FolderMailList?>(null) }
     SideEffect { if (folderList != null) previousList = folderList }
     val visibleList = folderList ?: previousList
+    // Действия (перенос, удаление, флажок, свайп, открытие) — только по готовой модели текущего снимка: [mailScope],
+    // [displayEmails]. Показ, счётчики и выделение — по последней готовой модели [shownScope]: пока новая строится
+    // в фоне (каждый батч синхронизации), выделение и жест протягивания не сбрасываются, «Всего: 0» не мигает.
     val displayEmails = folderList?.displayEmails.orEmpty()
     val mailScope = folderList?.scope
-    val selectedIds = remember(mailScope, uiState.selectedIds) {
-        mailScope?.selectOnly(uiState.selectedIds).orEmpty()
+    val shownScope = visibleList?.scope
+    val selectedIds = remember(shownScope, uiState.selectedIds) {
+        shownScope?.selectOnly(uiState.selectedIds).orEmpty()
     }
     val isSelectionMode = selectedIds.isNotEmpty()
     val swipeRules = remember(swipeSettings, folders, isSelectionMode) {
@@ -210,13 +214,16 @@ fun EmailListScreen(
         }
         if (emptyTrashConfirmation != null && !isTrashFolder) emptyTrashConfirmation = null
     }
+    // Выделение — не действие: не сверяем снимок, иначе обновления протягивания между публикацией состояния VM и
+    // перекомпоновкой терялись. Ушедшие с сервера письма отсечёт свежая модель (SideEffect выше), действия сверяют
+    // снимок сами ([withSelection]).
     fun updateSelection(ids: Set<String>) {
-        if (viewModel.uiState.value === uiState && mailScope != null) viewModel.setSelection(mailScope.selectOnly(ids))
+        shownScope?.let { viewModel.setSelection(it.selectOnly(ids)) }
     }
     fun withSelection(confirmation: MailConfirmation? = null, action: () -> Unit) {
         // If the VM has published a new source/filter/selection and Compose hasn't rendered it yet,
         // fail closed. In particular a confirmation must not follow a replaced ServerId.
-        if (viewModel.uiState.value === uiState && selectedIds.isNotEmpty() && selectedIds == uiState.selectedIds &&
+        if (mailScope != null && viewModel.uiState.value === uiState && selectedIds.isNotEmpty() && selectedIds == uiState.selectedIds &&
             (confirmation == null || confirmation.matches(selectedIds, displayEmails))) action()
     }
     val activeFiltersCount = listOf(mailFilter != MailFilter.ALL, dateFilter != EmailDateFilter.ALL, onlyThreads).count { it }
@@ -609,8 +616,8 @@ fun EmailListScreen(
                 onToggleThreads = if (isDraftsFolder) null else ({ viewModel.setOnlyThreads(!onlyThreads) }),
                 activeFiltersCount = activeFiltersCount,
                 onClearFilters = { viewModel.clearFilters() },
-                totalCount = displayEmails.size,
-                filteredCount = mailScope?.selectableIds?.size ?: 0
+                totalCount = visibleList?.displayEmails?.size ?: 0,
+                filteredCount = shownScope?.selectableIds?.size ?: 0
             )
 
             // Список писем
@@ -627,18 +634,14 @@ fun EmailListScreen(
                 isSent = isSentFolder,
                 recipientFolderIds = recipientFolderIds,
                 onEmailClick = click@{ email ->
-                    if (mailScope == null || viewModel.uiState.value !== uiState) return@click
                     if (isSelectionMode) {
                         hapticScreen.tick()
                         updateSelection(MailRow.toggleThread(selectedIds, listOf(email.id)))
-                    } else {
-                        // Для черновиков открываем ComposeScreen, для остальных - EmailDetailScreen
-                        if (isDraftsFolder) {
-                            onDraftClick(email.id)
-                        } else {
-                            onEmailClick(email.id)
-                        }
+                        return@click
                     }
+                    if (mailScope == null || viewModel.uiState.value !== uiState) return@click
+                    // Для черновиков открываем ComposeScreen, для остальных - EmailDetailScreen
+                    if (isDraftsFolder) onDraftClick(email.id) else onEmailClick(email.id)
                 },
                 onLongClick = { email ->
                     updateSelection(selectedIds + email.id)
@@ -649,14 +652,16 @@ fun EmailListScreen(
                 onFlagChosen = { email, flag ->
                     if (viewModel.uiState.value === uiState && email.id in mailScope?.selectableIds.orEmpty()) viewModel.setFlag(email.id, flag)
                 },
-                swipeRules = if (folderList == null) SwipeRules.NONE else swipeRules,
+                // Свайп сверяет снимок сам (onSwipe ниже) и строку всегда возвращает: отключать свайпы на кадр
+                // перестройки модели не нужно — это пересоздавало строки и обрывало жесты
+                swipeRules = swipeRules,
                 onSwipe = swipe@{ email, action ->
                     if (viewModel.uiState.value !== uiState || email.id !in mailScope?.selectableIds.orEmpty()) return@swipe
                     if (action == SwipeAction.DELETE) com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                     viewModel.swipe(email, action)
                 },
                 onSelectAll = {
-                    val all = mailScope?.selectableIds.orEmpty()
+                    val all = shownScope?.selectableIds.orEmpty()
                     updateSelection(if (selectedIds == all) emptySet() else all)
                 },
                 onRetry = { refresh() },
@@ -1404,10 +1409,13 @@ private fun EmailListItem(
             Box(
                 modifier = Modifier
                     .size(44.dp)
-                    .then(if (contextOnly) Modifier else Modifier.combinedClickable(
-                        onClick = onClick,
-                        onLongClick = longClickHandler
-                    ))
+                    // Как у строки: в режиме выбора — без долгого нажатия. Иначе после него обработчик аватара
+                    // поглощал движения пальца, и протягивание, начатое на аватаре, обрывалось.
+                    .then(when {
+                        contextOnly -> Modifier
+                        isSelectionMode -> Modifier.clickable(onClick = onClick)
+                        else -> Modifier.combinedClickable(onClick = onClick, onLongClick = longClickHandler)
+                    })
             ) {
                 com.dedovmosol.iwomail.ui.components.SenderAvatar(
                     accountId = email.accountId,

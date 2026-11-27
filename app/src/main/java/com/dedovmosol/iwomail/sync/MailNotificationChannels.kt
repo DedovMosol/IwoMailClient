@@ -11,8 +11,7 @@ import com.dedovmosol.iwomail.MailApplication
 
 /**
  * Каналы уведомлений о почте — своя группа на каждый аккаунт (NotificationChannelGroup): звук, важность и режим
- * «Не беспокоить» пользователь настраивает в системе для каждого аккаунта отдельно. В группе два канала:
- * «Новые письма» и «Важные отправители» (звучит и в тихие часы приложения).
+ * «Не беспокоить» пользователь настраивает в системе для каждого аккаунта отдельно. В группе канал «Новые письма».
  *
  * Прежний общий канал «new_mail»: его настройки (важность, звук, вибрация, индикатор) переносятся в каналы
  * аккаунтов при их создании, затем он удаляется. Звук и важность канала после создания меняет только пользователь,
@@ -22,25 +21,24 @@ object MailNotificationChannels {
 
     private const val GROUP_PREFIX = "account_"
     private const val MAIL_PREFIX = "mail_"
-    private const val VIP_PREFIX = "mail_vip_"
+    private const val LEGACY_VIP_PREFIX = "mail_vip_"
 
     fun groupId(accountId: Long): String = "$GROUP_PREFIX$accountId"
     fun mailChannelId(accountId: Long): String = "$MAIL_PREFIX$accountId"
-    fun vipChannelId(accountId: Long): String = "$VIP_PREFIX$accountId"
+    internal fun legacyVipChannelId(accountId: Long): String = "$LEGACY_VIP_PREFIX$accountId"
 
-    /** Канал уведомления о письмах аккаунта; группа и каналы создаются при первом обращении. */
-    fun channelFor(context: Context, accountId: Long, accountEmail: String, vip: Boolean, ru: Boolean): String {
+    /** Канал уведомления о письмах аккаунта; группа и канал создаются при первом обращении. */
+    fun channelFor(context: Context, accountId: Long, accountEmail: String, ru: Boolean): String {
         ensure(context, accountId, accountEmail, ru)
-        return if (vip) vipChannelId(accountId) else mailChannelId(accountId)
+        return mailChannelId(accountId)
     }
 
-    /** Группа и оба канала аккаунта; уже есть — обновляются только названия. */
+    /** Группа и канал аккаунта; уже есть — обновляется только название. */
     fun ensure(context: Context, accountId: Long, accountEmail: String, ru: Boolean) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         val group = groupId(accountId)
         manager.createNotificationChannelGroup(NotificationChannelGroup(group, accountEmail.ifBlank { "#$accountId" }))
         val mailName = if (ru) "Новые письма" else "New emails"
-        val vipName = if (ru) "Важные отправители" else "Important senders"
         val legacy = manager.getNotificationChannel(MailApplication.CHANNEL_NEW_MAIL)
 
         val mail = manager.getNotificationChannel(mailChannelId(accountId))
@@ -70,21 +68,9 @@ object MailNotificationChannels {
             manager.createNotificationChannel(mail)
         }
 
-        val vip = manager.getNotificationChannel(vipChannelId(accountId))
-        if (vip == null) {
-            manager.createNotificationChannel(
-                NotificationChannel(vipChannelId(accountId), vipName, NotificationManager.IMPORTANCE_HIGH).apply {
-                    this.group = group
-                    description = if (ru) "Письма от отправителей, отмеченных как важные" else "Emails from senders marked as important"
-                    enableVibration(true)
-                    enableLights(true)
-                    setShowBadge(true)
-                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                }
-            )
-        } else if (vip.name != vipName) {
-            vip.name = vipName
-            manager.createNotificationChannel(vip)
+        // Канал «Важные отправители» из 1.7.0-бета: функция убрана — пустой канал не должен висеть в системе
+        if (manager.getNotificationChannel(legacyVipChannelId(accountId)) != null) {
+            manager.deleteNotificationChannel(legacyVipChannelId(accountId))
         }
     }
 

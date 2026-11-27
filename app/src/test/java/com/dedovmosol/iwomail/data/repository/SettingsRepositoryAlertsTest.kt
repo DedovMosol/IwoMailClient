@@ -9,6 +9,7 @@ import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -18,18 +19,15 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/** Настройки уведомлений о почте: тихие часы и важные отправители. */
+/** Настройки уведомлений о почте: тихие часы, тактильный отклик, стирание списка «Важных отправителей». */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SettingsRepositoryAlertsTest {
 
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val repo = SettingsRepository.createForTesting(
-        context,
-        PreferenceDataStoreFactory.create(scope = scope) { context.dataStoreFile("alerts_${System.nanoTime()}.preferences_pb") },
-        startCacheCollector = false
-    )
+    private val store = PreferenceDataStoreFactory.create(scope = scope) { context.dataStoreFile("alerts_${System.nanoTime()}.preferences_pb") }
+    private val repo = SettingsRepository.createForTesting(context, store, startCacheCollector = false)
 
     @After
     fun tearDown() {
@@ -42,7 +40,6 @@ class SettingsRepositoryAlertsTest {
         val prefs = repo.mailAlertPrefs.first()
 
         assertThat(prefs.quietHours).isEqualTo(QuietHours(false, QuietHours.DEFAULT_START, QuietHours.DEFAULT_END))
-        assertThat(prefs.vipSenders).isEmpty()
     }
 
     @Test
@@ -56,13 +53,25 @@ class SettingsRepositoryAlertsTest {
     }
 
     @Test
-    fun `important senders are added and removed`() = runBlocking<Unit> {
-        repo.setVipSender("boss@corp.example", vip = true)
-        repo.setVipSender("cto@corp.example", vip = true)
-        repo.setVipSender("", vip = true)
-        assertThat(repo.mailAlertPrefs.first().vipSenders).containsExactly("boss@corp.example", "cto@corp.example")
+    fun `the removed important senders list is erased from storage and other settings stay`() = runBlocking<Unit> {
+        val legacy = androidx.datastore.preferences.core.stringSetPreferencesKey("vip_senders")
+        store.edit { it[legacy] = setOf("boss@corp.example") }
+        repo.setQuietHours(QuietHours(enabled = true, startMinutes = 23 * 60, endMinutes = 7 * 60))
 
-        repo.setVipSender("boss@corp.example", vip = false)
-        assertThat(repo.mailAlertPrefs.first().vipSenders).containsExactly("cto@corp.example")
+        repo.removeLegacyVipSenders()
+        repo.removeLegacyVipSenders() // повторный запуск приложения — без ошибок
+
+        assertThat(store.data.first()[legacy]).isNull()
+        assertThat(repo.mailAlertPrefs.first().quietHours).isEqualTo(QuietHours(true, 23 * 60, 7 * 60))
+    }
+
+    @Test
+    fun `haptic feedback is on by default and the switch is stored`() = runBlocking<Unit> {
+        assertThat(repo.hapticsEnabled.first()).isTrue()
+        assertThat(repo.getHapticsEnabledSync()).isTrue()
+
+        repo.setHapticsEnabled(false)
+        assertThat(repo.hapticsEnabled.first()).isFalse()
+        assertThat(repo.getHapticsEnabledSync()).isFalse()
     }
 }
