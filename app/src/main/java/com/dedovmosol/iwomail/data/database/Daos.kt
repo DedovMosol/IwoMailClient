@@ -32,6 +32,17 @@ interface AccountDao {
         activate(id)
     }
 
+    /**
+     * Сделать активным, только если аккаунт ещё есть: проверка и смена — одна транзакция, удаление аккаунта
+     * между ними не оставит приложение без активного. false — аккаунта нет, ничего не изменено.
+     */
+    @Transaction
+    suspend fun setActiveAccountIfExists(id: Long): Boolean {
+        if (getAccount(id) == null) return false
+        setActiveAccount(id)
+        return true
+    }
+
     @Query("UPDATE accounts SET folderSyncKey = :syncKey WHERE id = :id")
     suspend fun updateFolderSyncKey(id: Long, syncKey: String)
 
@@ -506,12 +517,13 @@ interface EmailDao {
         SELECT e.id, e.`from`, e.fromName, e.subject, e.preview, e.folderId, e.dateReceived
         FROM emails e
         INNER JOIN folders f ON e.folderId = f.id
-        WHERE e.read = 0
+        WHERE e.accountId = :accountId
+        AND e.read = 0
         AND f.type = 2
         ORDER BY e.dateReceived DESC
         LIMIT :limit
     """)
-    suspend fun getRecentUnreadInboxGlobal(limit: Int = 3): List<WidgetRecentEmailSummary>
+    suspend fun getWidgetRecentUnreadInbox(accountId: Long, limit: Int = 3): List<WidgetRecentEmailSummary>
 
     @Query("""
         SELECT folderId,

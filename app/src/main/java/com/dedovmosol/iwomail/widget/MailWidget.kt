@@ -73,7 +73,7 @@ class MailWidget : GlanceAppWidget() {
         }
     }
 
-    private suspend fun loadWidgetData(context: Context): WidgetData {
+    internal suspend fun loadWidgetData(context: Context): WidgetData {
         val db = try {
             MailDatabase.getInstance(context)
         } catch (e: Exception) {
@@ -100,11 +100,14 @@ class MailWidget : GlanceAppWidget() {
             val unread = unreadByAccountId[account.id] ?: 0
             AccountUnread(account.id, account.displayName, account.color, unread, account.isActive)
         }
+        // исьма, события, задачи и заметки — активного аккаунта: виджет меняется вместе с выбором аккаунта. ет
+        // активного (сбой при удалении) — первый, как и в приложении
+        val activeId = widgetActiveAccountId(accountsWithUnread)
 
         val now = System.currentTimeMillis()
         val nextEvent = try {
-            db.calendarEventDao().getCurrentEventGlobalSync(now)
-                ?: db.calendarEventDao().getNextUpcomingEventGlobalSync(now)
+            db.calendarEventDao().getWidgetCurrentEvent(activeId, now)
+                ?: db.calendarEventDao().getWidgetNextEvent(activeId, now)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; null
         }
@@ -127,15 +130,15 @@ class MailWidget : GlanceAppWidget() {
         cal.set(Calendar.SECOND, 59)
         cal.set(Calendar.MILLISECOND, 999)
         val endOfDay = cal.timeInMillis
-        val todayTasksCount = try { db.taskDao().getTodayTasksCountGlobal(endOfDay) } catch (e: Exception) {
+        val todayTasksCount = try { db.taskDao().getTodayTasksCount(activeId, endOfDay) } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; 0
         }
-        val activeTasksCount = try { db.taskDao().getActiveTasksCountGlobal() } catch (e: Exception) {
+        val activeTasksCount = try { db.taskDao().getWidgetActiveTasksCount(activeId) } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; 0
         }
         val nextTask = try {
-            db.taskDao().getNextDatedTaskGlobalSync()
-                ?: db.taskDao().getFirstUndatedTaskGlobalSync()
+            db.taskDao().getWidgetNextDatedTask(activeId)
+                ?: db.taskDao().getWidgetFirstUndatedTask(activeId)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; null
         }
@@ -143,7 +146,7 @@ class MailWidget : GlanceAppWidget() {
 
         val noSubjectText = context.getString(R.string.widget_no_subject)
         val recentEmails = if (contentHidden) emptyList() else try {
-            db.emailDao().getRecentUnreadInboxGlobal(3).map { email ->
+            db.emailDao().getWidgetRecentUnreadInbox(activeId, 3).map { email ->
                 RecentEmail(
                     id = email.id,
                     sender = email.fromName.ifBlank { email.from },
@@ -156,12 +159,12 @@ class MailWidget : GlanceAppWidget() {
             if (e is kotlinx.coroutines.CancellationException) throw e; emptyList()
         }
 
-        val totalUnread = unreadCounts.sumOf { it.unreadCount }
+        // епрочитанные активного аккаунта; у каждого аватара — свои
 
-        val notesCount = try { db.noteDao().getNotesCountGlobal() } catch (e: Exception) {
+        val notesCount = try { db.noteDao().getNotesCountSync(activeId) } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; 0
         }
-        val calendarEventsCount = try { db.calendarEventDao().getEventsCountGlobal() } catch (e: Exception) {
+        val calendarEventsCount = try { db.calendarEventDao().getWidgetEventsCount(activeId) } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; 0
         }
 
@@ -179,7 +182,7 @@ class MailWidget : GlanceAppWidget() {
             todayTasksCount = todayTasksCount,
             activeTasksCount = activeTasksCount,
             recentEmails = recentEmails,
-            totalUnread = totalUnread,
+            totalUnread = unreadByAccountId[activeId] ?: 0,
             notesCount = notesCount,
             lastSyncStr = lastSyncStr,
             calendarEventsCount = calendarEventsCount,
@@ -237,6 +240,10 @@ data class AccountUnread(val id: Long, val name: String, val color: Int, val unr
  * аккаунт не виден): если он дальше [max], он встаёт на место последнего. Порядок остальных не меняется, поэтому
  * аватары не прыгают при выборе другого аккаунта.
  */
+/** ккаунт, чьё содержимое показывает виджет: активный, а если активного нет — первый; нет аккаунтов — -1. */
+internal fun widgetActiveAccountId(accounts: List<AccountUnread>): Long =
+    (accounts.firstOrNull { it.isActive } ?: accounts.firstOrNull())?.id ?: -1L
+
 internal fun widgetAvatars(accounts: List<AccountUnread>, max: Int): List<AccountUnread> {
     if (max <= 0) return emptyList()
     val shown = accounts.take(max)
@@ -652,7 +659,8 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                 Spacer(modifier = GlanceModifier.height(6.dp))
             } else if (isLarge && data.contentHidden && data.totalUnread > 0) {
                 // Only counts leave the app. Each row goes to its own mailbox, never to a guessed message.
-                data.accounts.filter { it.unreadCount > 0 }.sortedByDescending { it.unreadCount }.take(3).forEach { account ->
+                // Только активный аккаунт, как и остальное содержимое виджета; остальные видны на аватарах
+                data.accounts.filter { it.isActive && it.unreadCount > 0 }.forEach { account ->
                     Box(
                         modifier = GlanceModifier.fillMaxWidth().cornerRadius(12.dp)
                             .background(ColorProvider(Color(0x1AFFFFFF)))
@@ -916,10 +924,7 @@ class SelectWidgetAccountAction : ActionCallback {
         val accountId = parameters[ACCOUNT_ID] ?: return
         val app = context.applicationContext
         try {
-            val accounts = com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(app)
-            withContext(Dispatchers.IO) {
-                if (accounts.getAccount(accountId) != null) accounts.setActiveAccount(accountId)
-            }
+            withContext(Dispatchers.IO) { MailDatabase.getInstance(app).accountDao().setActiveAccountIfExists(accountId) }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.w("MailWidget", "Select account $accountId failed", e)

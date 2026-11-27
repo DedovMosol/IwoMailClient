@@ -112,21 +112,16 @@ interface TaskDao {
     """)
     suspend fun getTodayTasksCount(accountId: Long, endOfDay: Long): Int
 
-    @Query("SELECT COUNT(*) FROM tasks WHERE complete = 0 AND isDeleted = 0")
-    suspend fun getActiveTasksCountGlobal(): Int
+    // иджет показывает активный аккаунт: запросы виджета — по accountId (индекс accountId, isDeleted, complete, dueDate, subject)
+    @Query("SELECT COUNT(*) FROM tasks WHERE accountId = :accountId AND complete = 0 AND isDeleted = 0")
+    suspend fun getWidgetActiveTasksCount(accountId: Long): Int
 
-    @Query("""
-        SELECT COUNT(*) FROM tasks 
-        WHERE complete = 0 AND isDeleted = 0
-        AND dueDate > 0 AND dueDate < :endOfDay
-    """)
-    suspend fun getTodayTasksCountGlobal(endOfDay: Long): Int
 
-    @Query("SELECT subject FROM tasks WHERE complete = 0 AND isDeleted = 0 AND dueDate > 0 ORDER BY dueDate ASC LIMIT 1")
-    suspend fun getNextDatedTaskGlobalSync(): WidgetTaskSummary?
+    @Query("SELECT subject FROM tasks WHERE accountId = :accountId AND complete = 0 AND isDeleted = 0 AND dueDate > 0 ORDER BY dueDate ASC LIMIT 1")
+    suspend fun getWidgetNextDatedTask(accountId: Long): WidgetTaskSummary?
 
-    @Query("SELECT subject FROM tasks WHERE complete = 0 AND isDeleted = 0 AND dueDate = 0 ORDER BY subject ASC LIMIT 1")
-    suspend fun getFirstUndatedTaskGlobalSync(): WidgetTaskSummary?
+    @Query("SELECT subject FROM tasks WHERE accountId = :accountId AND complete = 0 AND isDeleted = 0 AND dueDate = 0 ORDER BY subject ASC LIMIT 1")
+    suspend fun getWidgetFirstUndatedTask(accountId: Long): WidgetTaskSummary?
 }
 
 data class WidgetTaskSummary(

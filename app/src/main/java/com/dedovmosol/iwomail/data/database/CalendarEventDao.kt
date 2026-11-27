@@ -42,14 +42,15 @@ interface CalendarEventDao {
     @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND endTime > :now ORDER BY startTime ASC LIMIT 1")
     suspend fun getNextEventSync(accountId: Long, now: Long): CalendarEventEntity?
 
-    @Query("SELECT COUNT(*) FROM calendar_events WHERE isDeleted = 0")
-    suspend fun getEventsCountGlobal(): Int
+    // иджет показывает активный аккаунт: запросы виджета — по accountId (индексы с accountId впереди)
+    @Query("SELECT COUNT(*) FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0")
+    suspend fun getWidgetEventsCount(accountId: Long): Int
 
-    @Query("SELECT subject, startTime, endTime, location FROM calendar_events WHERE isDeleted = 0 AND startTime <= :now AND endTime > :now ORDER BY endTime ASC LIMIT 1")
-    suspend fun getCurrentEventGlobalSync(now: Long): WidgetCalendarEventSummary?
+    @Query("SELECT subject, startTime, endTime, location FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND startTime <= :now AND endTime > :now ORDER BY endTime ASC LIMIT 1")
+    suspend fun getWidgetCurrentEvent(accountId: Long, now: Long): WidgetCalendarEventSummary?
 
-    @Query("SELECT subject, startTime, endTime, location FROM calendar_events WHERE isDeleted = 0 AND startTime > :now ORDER BY startTime ASC LIMIT 1")
-    suspend fun getNextUpcomingEventGlobalSync(now: Long): WidgetCalendarEventSummary?
+    @Query("SELECT subject, startTime, endTime, location FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND startTime > :now ORDER BY startTime ASC LIMIT 1")
+    suspend fun getWidgetNextEvent(accountId: Long, now: Long): WidgetCalendarEventSummary?
     
     @Query("""
         SELECT * FROM calendar_events 

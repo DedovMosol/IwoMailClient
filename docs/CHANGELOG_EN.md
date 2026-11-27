@@ -124,7 +124,7 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 - `data_extraction_rules.xml` excludes all private storage from device-to-device transfer on Android 12+, including client certificates, attachments and the outbox queue.
 
 ### Notifications and widget
-- The widget shows the active account in a white ring. Tapping another avatar makes it active right on the home screen (compose and search from the widget then use it), tapping the active one opens its mail. The active account is always among the shown avatars, and the widget redraws when the account is switched in the app.
+- The widget shows the active account in a white ring. Tapping another avatar makes it active right on the home screen, tapping the active one opens its mail. Mail, unread count, events, tasks and notes on the widget belong to the selected account and change with it, while each avatar shows its own unread count. The active account is always among the shown avatars, and the widget redraws when the account is switched in the app.
 - When app lock is enabled, the large widget replaces the hidden-content notice with unread Inbox counts for up to three accounts. These rows contain no message subjects, senders or previews. Tapping a row requires unlocking and opens that account’s unread Inbox, zero unread shows “No new mail”.
 - While the app is open, no new mail notifications are shown, and the message appears in the list at once. These messages do not pop up as notifications after the app goes to the background either.
 - A tap on an event, task or flag reminder switches to the right mailbox and opens that item, even if another account was on screen.
@@ -172,7 +172,7 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 - The security policy with the threat model (`docs/SECURITY_RU.md`, `docs/SECURITY_EN.md`, index `docs/SECURITY.md`) and the privacy policy are kept in Russian and English, and About opens the policy in the UI language.
 - The changelog and the architecture description are kept as separate Russian and English files, outdated documents are removed, and `docs/XMLPULLPARSER_MIGRATION_PLAN.md` describes the move of parsers to `EasXmlParser`. The README states the published version 1.6.1, EAS versions 12.0–14.1 and the recommended OS, Android 13+ (minimum 8.0).
 - GitHub Actions runs the debug tests, generates the Kover report, checks Android Lint and builds the R8 release. The [local tests](../app/src/test/README.md) include Robolectric, Compose UI and an HTTP-level fake Exchange. Live Exchange, ServerId renumbering and lock-recovery checks are [opt-in](../CONTRIBUTING.md#live-tests-against-a-real-exchange-server).
-- CI keeps the release build `mapping.txt` (artifact `release-mapping`, 90 days) to retrace crash stack traces. Database migration tests cover 51 → 55 on frozen schemas of each version.
+- CI keeps the release build `mapping.txt` (artifact `release-mapping`, 90 days) to retrace crash stack traces. CI jobs have time limits: a hung test stops the run after 25 minutes instead of holding it for up to 6 hours, and thread dumps go into the report. Database migration tests cover 51 → 55 on frozen schemas of each version.
 
 ## v1.6.1 (09.02.2026) — Package rename → "com.dedovmosol.iwomail", reinstall required
 

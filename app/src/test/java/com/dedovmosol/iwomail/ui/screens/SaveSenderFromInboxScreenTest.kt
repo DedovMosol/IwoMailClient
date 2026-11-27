@@ -1,6 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
-import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -50,7 +50,7 @@ class SaveSenderFromInboxScreenTest {
                     RepositoryProvider.getSettingsRepository(context).setAppLockEnabled(false)
                     val db = MailDatabase.getInstance(context)
                     accountId = db.accountDao().insert(
-                        AccountEntity(email = "me@corp.example", displayName = "Me", serverUrl = "mail.corp.example", username = "me")
+                        AccountEntity(email = "me@corp.example", displayName = "Me", serverUrl = "127.0.0.1:9" /* без DNS и сети: тихая синхронизация при входе в папку сразу получает отказ */, username = "me")
                     )
                     RepositoryProvider.getAccountRepository(context).setActiveAccount(accountId)
                     val inbox = "${accountId}_inbox"
@@ -80,14 +80,26 @@ class SaveSenderFromInboxScreenTest {
         RepositoryProvider.resetForTesting()
     }
 
-    private fun waitFor(timeout: Long = 60_000, condition: () -> Boolean) {
+    /**
+     * учные часы после появления списка (как в EmailListDragSelectionScreenTest): с autoAdvance waitForIdle внутри
+     * performClick крутит часы, пока Compose не простаивает, а бесконечная анимация (индикатор загрузки/синхронизации)
+     * не простаивает никогда — на CI это висело без конца. аждое ожидание — с дедлайном по настенному времени.
+     */
+    private fun pump(frames: Int) = repeat(frames) {
+        compose.mainClock.advanceTimeByFrame()
         shadowOf(android.os.Looper.getMainLooper()).idle()
-        compose.waitUntil(timeout) {
-            shadowOf(android.os.Looper.getMainLooper()).idle()
-            condition()
+        Thread.sleep(5) // Room и подготовка модели списка — на своих потоках
+    }
+
+    private fun pumpUntil(what: String, timeoutMs: Long = 30_000, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000
+        while (!condition()) {
+            if (System.nanoTime() > deadline) throw AssertionError("е дождались: $what за $timeoutMs мс")
+            pump(2)
         }
     }
 
+    private fun hasText(text: String) = compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
     private fun localContacts() = runBlocking {
         MailDatabase.getInstance(context).contactDao().getContactsByAccountList(accountId).filter { it.source == ContactSource.LOCAL }
     }
@@ -101,18 +113,33 @@ class SaveSenderFromInboxScreenTest {
                 }
             }
         }
-        waitFor { compose.onAllNodesWithText("Отчёт за квартал").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("Отчёт за квартал").performTouchInput { longClick() }
-        waitFor(10_000) { compose.onAllNodesWithContentDescription("Ещё").fetchSemanticsNodes().isNotEmpty() }
+        // Первый кадр и загрузка списка — с автоматическими часами; waitUntil сам ограничен по времени
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        compose.waitUntil(60_000) {
+            shadowOf(android.os.Looper.getMainLooper()).idle()
+            hasText("Отчёт за квартал")
+        }
+        compose.mainClock.autoAdvance = false
+        pump(10)
+
+        // Долгое нажатие: палец держим дольше таймаута долгого нажатия, часы ведём сами
+        val row = compose.onNodeWithText("Отчёт за квартал").fetchSemanticsNode().boundsInRoot.center
+        compose.onRoot().performTouchInput { down(row) }
+        pump(60)
+        compose.onRoot().performTouchInput { up() }
+        pumpUntil("панель выбора") { compose.onAllNodesWithContentDescription("Ещё").fetchSemanticsNodes().isNotEmpty() }
+
         compose.onAllNodesWithContentDescription("Ещё")[0].performClick()
-        waitFor(10_000) { compose.onAllNodesWithText("Отправителя в контакты").fetchSemanticsNodes().isNotEmpty() }
+        pumpUntil("меню выбора") { hasText("Отправителя в контакты") }
         compose.onNodeWithText("Отправителя в контакты").performClick()
 
-        waitFor(10_000) { localContacts().isNotEmpty() }
+        pumpUntil("контакт в базе") { localContacts().isNotEmpty() }
         val saved = localContacts().single()
         assertThat(saved.email).isEqualTo("petrov@corp.example")
         assertThat(saved.displayName).isEqualTo("Петров Пётр")
-        // Действие снимает выделение: панель выбора закрылась
-        waitFor(10_000) { compose.onAllNodesWithText("Отправителя в контакты").fetchSemanticsNodes().isEmpty() }
+        // Действие снимает выделение: меню и панель выбора закрылись
+        pumpUntil("выход из выделения") {
+            !hasText("Отправителя в контакты") && compose.onAllNodesWithContentDescription("Ещё").fetchSemanticsNodes().isEmpty()
+        }
     }
 }
