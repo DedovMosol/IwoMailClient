@@ -125,7 +125,10 @@ class EmailListDragSelectionScreenTest {
     @Test
     fun `new mail arriving mid-drag does not stop the selection in Inbox`() {
         // Запуск: навигация по ярлыку ждёт аккаунт и папку (IO) — часы идут сами, пока не появится список
-        compose.waitUntil(20_000) {
+        // Первый кадр — вне ожидания: в холодной JVM (forkEvery) он один грузит классы Compose и нативную графику,
+        // на CI это 10–15 с, и waitUntil засчитывал их в таймаут. Таймаут — потолок, а не пауза: ждём, пока список не появится
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        compose.waitUntil(60_000) {
             shadowOf(android.os.Looper.getMainLooper()).idle()
             compose.onAllNodesWithText("Тема 3").fetchSemanticsNodes().isNotEmpty()
         }
