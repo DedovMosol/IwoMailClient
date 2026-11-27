@@ -67,7 +67,7 @@ import kotlinx.coroutines.flow.first
 private data class FolderDisplayData(val id: String, val name: String, val count: Int, val unreadCount: Int, val type: Int)
 private data class FolderColorsData(val icon: ImageVector, val gradientColors: List<Color>)
 
-private val TaskCardColor = Color(0xFF006D77)
+private val TaskCardColor = com.dedovmosol.iwomail.ui.theme.AppColors.tasks
 private val TaskCardColorDark = Color(0xFF005F73)
 
 /**

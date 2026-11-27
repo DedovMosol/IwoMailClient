@@ -34,6 +34,7 @@ import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.OnboardingStrings
 import com.dedovmosol.iwomail.ui.theme.AppColorTheme
+import com.dedovmosol.iwomail.ui.theme.AppColors
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import com.dedovmosol.iwomail.ui.utils.animatedRotation
@@ -1018,9 +1019,9 @@ private fun FeaturePage(
                 }
                 OnboardingPageType.Organizer -> {
                     FeatureItem(
-                        icon = AppIcons.Contacts,
+                        icon = AppIcons.People,
                         iconModifier = if (animateIcons) Modifier.animatedScale(pulse) else Modifier,
-                        color = Color(0xFF1565C0),
+                        color = AppColors.contacts,
                         title = OnboardingStrings.contactsTitle(isRussian),
                         description = OnboardingStrings.contactsDescription(isRussian)
                     )
@@ -1028,7 +1029,7 @@ private fun FeaturePage(
                     FeatureItem(
                         icon = AppIcons.CalendarMonth,
                         iconModifier = if (animateIcons) Modifier.animatedScale(pulse) else Modifier,
-                        color = Color(0xFF2E7D32),
+                        color = AppColors.calendar,
                         title = OnboardingStrings.calendarTitle(isRussian),
                         description = OnboardingStrings.calendarDescription(isRussian)
                     )
@@ -1036,7 +1037,7 @@ private fun FeaturePage(
                     FeatureItem(
                         icon = AppIcons.Task,
                         iconModifier = if (animateIcons) Modifier.animatedScale(pulse) else Modifier,
-                        color = Color(0xFF7B1FA2),
+                        color = AppColors.tasks,
                         title = OnboardingStrings.tasksTitle(isRussian),
                         description = OnboardingStrings.tasksDescription(isRussian)
                     )
@@ -1044,7 +1045,7 @@ private fun FeaturePage(
                     FeatureItem(
                         icon = AppIcons.StickyNote,
                         iconModifier = if (animateIcons) Modifier.animatedScale(pulse) else Modifier,
-                        color = Color(0xFFE65100),
+                        color = AppColors.notes,
                         title = OnboardingStrings.notesTitle(isRussian),
                         description = OnboardingStrings.notesDescription(isRussian)
                     )

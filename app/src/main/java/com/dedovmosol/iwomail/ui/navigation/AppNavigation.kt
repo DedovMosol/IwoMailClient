@@ -1144,6 +1144,12 @@ fun AppNavigation(
             SettingsAccountsScreen(
                 onBackClick = { navController.popBackStack() },
                 onAddAccount = { navController.navigate(Screen.Setup.createRoute()) },
+                // Аккаунт уже активен: на главный экран с его папками, настройки уходят из стека «Назад»
+                onAccountOpened = {
+                    if (!navController.popBackStack(Screen.Main.route, inclusive = false)) {
+                        navController.navigate(Screen.Main.route) { launchSingleTop = true }
+                    }
+                },
                 onNavigateToAccountSettings = { accountId ->
                     navController.navigate(Screen.AccountSettings.createRoute(accountId))
                 }

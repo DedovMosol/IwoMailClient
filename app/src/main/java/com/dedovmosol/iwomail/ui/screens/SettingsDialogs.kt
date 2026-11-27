@@ -58,6 +58,7 @@ import kotlin.coroutines.resume
  */
 fun getContactsSyncIntervalText(days: Int, isRu: Boolean): String {
     return when (days) {
+        com.dedovmosol.iwomail.domain.PimSyncInterval.WITH_MAIL -> if (isRu) "Вместе с основной" else "With mail sync"
         0 -> NotificationStrings.getNever(isRu)
         1 -> NotificationStrings.getDaily(isRu)
         7 -> NotificationStrings.getWeekly(isRu)

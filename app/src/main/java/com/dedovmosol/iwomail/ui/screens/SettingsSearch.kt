@@ -76,7 +76,7 @@ fun rememberSettingsCatalog(state: SettingsSearchState): List<SettingsSearchEntr
         SettingsSearchEntry(alerts, alerts, SettingsSearchDest.Alerts),
         SettingsSearchEntry(Strings.quietHours, alerts, SettingsSearchDest.Alerts, "quietHours"),
         SettingsSearchEntry(Strings.hapticsSetting, alerts, SettingsSearchDest.Alerts, "haptics", contextTerms = Strings.hapticsSettingDesc),
-        SettingsSearchEntry(appearance, appearance, SettingsSearchDest.Appearance, contextTerms = Strings.interfacePersonalization),
+        SettingsSearchEntry(appearance, appearance, SettingsSearchDest.Appearance, contextTerms = Strings.appearanceSearchTerms),
         SettingsSearchEntry(Strings.language, appearance, SettingsSearchDest.Appearance, "language"),
         SettingsSearchEntry(Strings.fontSize, appearance, SettingsSearchDest.Appearance, "fontSize"),
         SettingsSearchEntry(Strings.colorTheme, appearance, SettingsSearchDest.Appearance, "colorTheme"),

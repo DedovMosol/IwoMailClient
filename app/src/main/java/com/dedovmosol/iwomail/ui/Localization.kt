@@ -178,17 +178,27 @@ object Strings {
         "Аккаунт и его данные будут удалены с устройства. Почтовый ящик на сервере не затрагивается."
         else "The account and its data will be removed from this device. Mail on the server is not affected."
     val general: String @Composable get() = if (isRussian()) "Общие" else "General"
-    val appearance: String @Composable get() = if (isRussian()) "Внешний вид" else "Appearance"
-    val settingsHubMailDesc: String @Composable get() = if (isRussian()) "Цепочки, свайпы, картинки" else "Conversations, swipes, images"
-    val settingsHubAlertsDesc: String @Composable get() = if (isRussian()) "Тихие часы, звук" else "Quiet hours, sound"
-    val settingsHubAppearanceDesc: String @Composable get() = if (isRussian()) "Тема, размер текста" else "Theme, text size"
-    val settingsHubAboutDesc: String @Composable get() = if (isRussian()) "Версия, политика конфиденциальности" else "Version, privacy policy"
+    // Одно название у строки в корне настроек и у заголовка её экрана
+    val appearance: String @Composable get() = if (isRussian()) "Персонализация" else "Personalization"
+    /** Синонимы для поиска настроек. */
+    val appearanceSearchTerms: String @Composable get() =
+        if (isRussian()) "Внешний вид оформление интерфейс" else "Appearance look interface"
+    val settingsHubMailDesc: String @Composable get() =
+        if (isRussian()) "Цепочки, свайпы, картинки, отмена отправки" else "Conversations, swipes, images, undo send"
+    val settingsHubAlertsDesc: String @Composable get() =
+        if (isRussian()) "Тихие часы, звук и вибрация аккаунтов, тактильный отклик"
+        else "Quiet hours, account sound and vibration, haptic feedback"
+    val settingsHubAppearanceDesc: String @Composable get() =
+        if (isRussian()) "Язык, тема, шрифт, анимации" else "Language, theme, font, animations"
+    val settingsHubSecurityDesc: String @Composable get() =
+        if (isRussian()) "Блокировка паролем и отпечатком пальца" else "Lock with a password and fingerprint"
+    val settingsHubAboutDesc: String @Composable get() =
+        if (isRussian()) "Версия, обновления, политика конфиденциальности" else "Version, updates, privacy policy"
+    val openAccountMail: String @Composable get() = if (isRussian()) "Открыть почту" else "Open mail"
     val searchSettings: String @Composable get() = if (isRussian()) "Поиск настроек" else "Search settings"
     val settingsPerAccountHint: String @Composable get() = if (isRussian())
-        "Подпись, черновики, синхронизация, автоочистка и сертификаты задаются у каждого аккаунта: " +
-            "«Аккаунты» → аккаунт. Звук — в «Уведомлениях о почте». Остальное общее для всех аккаунтов."
-        else "Signature, drafts, sync, auto-cleanup and certificates are set per account: " +
-            "Accounts → account. Sound is in Mail notifications. Everything else applies to all accounts."
+        "Подпись, черновики, синхронизация, автоочистка и сертификаты задаются у каждого аккаунта."
+        else "Signature, drafts, sync, auto-cleanup and certificates are set per account."
     val syncSettings: String @Composable get() = if (isRussian()) "Синхронизация" else "Sync"
     val sync: String @Composable get() = if (isRussian()) "Синхронизация" else "Sync"
     val serverCertificate: String @Composable get() = if (isRussian()) "Сертификат сервера" else "Server certificate"
@@ -205,10 +215,6 @@ object Strings {
     // Анимации
     val animations: String @Composable get() = if (isRussian()) "Анимации" else "Animations"
     val animationsDesc: String @Composable get() = if (isRussian()) "Анимированные элементы интерфейса" else "Animated UI elements"
-
-    // Персонализация интерфейса
-    val interfacePersonalization: String @Composable get() = if (isRussian()) "Персонализация интерфейса" else "Interface personalization"
-    val interfacePersonalizationDesc: String @Composable get() = if (isRussian()) "Язык, темы, шрифты, анимации" else "Language, themes, fonts, animations"
 
     // Дни недели
     val monday: String @Composable get() = if (isRussian()) "Понедельник" else "Monday"

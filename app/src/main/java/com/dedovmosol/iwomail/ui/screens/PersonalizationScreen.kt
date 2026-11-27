@@ -142,7 +142,7 @@ fun PersonalizationScreen(
     }
 
     SettingsPageScaffold(
-        title = Strings.interfacePersonalization,
+        title = Strings.appearance,
         onBackClick = onBackClick,
         hue = SettingsSearchDest.Appearance.hue
     ) {

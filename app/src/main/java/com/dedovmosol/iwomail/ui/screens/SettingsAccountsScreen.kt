@@ -8,13 +8,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -28,23 +31,45 @@ import com.dedovmosol.iwomail.data.database.AccountType
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.AppIcons
+import kotlinx.coroutines.launch
 
+/**
+ * Аккаунты в настройках. Нажатие на аккаунт делает его активным и открывает главный экран с его папками
+ * ([onAccountOpened]); шестерёнка справа — настройки аккаунта.
+ */
 @Composable
 internal fun SettingsAccountsScreen(
     onBackClick: () -> Unit,
     onAddAccount: () -> Unit,
+    onAccountOpened: () -> Unit,
     onNavigateToAccountSettings: (Long) -> Unit
 ) {
     val context = LocalContext.current
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val accounts by accountRepo.accounts.collectAsStateWithLifecycle(initialValue = emptyList())
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
+    // Двойное нажатие — одно переключение и один переход
+    var opening by remember { mutableStateOf(false) }
 
     SettingsPageScaffold(title = Strings.accounts, onBackClick = onBackClick, hue = SettingsSearchDest.Accounts.hue) {
         items(accounts, key = { it.id }) { account ->
             SettingsGroup {
                 AccountCard(
                     account = account,
-                    onOpenClick = { onNavigateToAccountSettings(account.id) }
+                    onOpenClick = {
+                        if (opening) return@AccountCard
+                        opening = true
+                        scope.launch {
+                            try {
+                                // Переход — после записи: главный экран сразу показывает папки этого аккаунта
+                                accountRepo.setActiveAccount(account.id)
+                                onAccountOpened()
+                            } finally {
+                                opening = false
+                            }
+                        }
+                    },
+                    onSettingsClick = { onNavigateToAccountSettings(account.id) }
                 )
             }
         }
@@ -65,7 +90,8 @@ internal fun SettingsAccountsScreen(
 @Composable
 private fun AccountCard(
     account: AccountEntity,
-    onOpenClick: () -> Unit
+    onOpenClick: () -> Unit,
+    onSettingsClick: () -> Unit
 ) {
     val accountType = AccountType.fromStored(account.accountType)
     val accountColor = Color(account.color)
@@ -73,7 +99,7 @@ private fun AccountCard(
     ListItem(
         modifier = Modifier.clickable(
             role = androidx.compose.ui.semantics.Role.Button,
-            onClickLabel = account.displayName,
+            onClickLabel = Strings.openAccountMail,
             onClick = onOpenClick
         ),
         headlineContent = {
@@ -107,7 +133,11 @@ private fun AccountCard(
                 )
             }
         },
-        trailingContent = { Icon(AppIcons.ChevronRight, contentDescription = null) },
+        trailingContent = {
+            IconButton(onClick = onSettingsClick) {
+                Icon(AppIcons.Settings, contentDescription = "${Strings.accountSettings}: ${account.displayName}")
+            }
+        },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent)
     )
 }

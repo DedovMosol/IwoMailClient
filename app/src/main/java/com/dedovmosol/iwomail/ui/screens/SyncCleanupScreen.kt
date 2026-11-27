@@ -16,8 +16,8 @@ import com.dedovmosol.iwomail.ui.theme.AppIcons
 /** Интервалы фоновой синхронизации почты, минуты. */
 private val SYNC_INTERVALS_MINUTES = listOf(1, 2, 3, 5, 10, 15, 30)
 
-/** Как часто синхронизировать контакты, заметки, календарь и задачи, дни (0 — никогда). */
-private val DATA_SYNC_DAYS = listOf(0, 1, 7, 14, 30)
+/** Как часто синхронизировать контакты, заметки, календарь и задачи: «Вместе с основной», «Никогда» или дни. */
+private val DATA_SYNC_DAYS = com.dedovmosol.iwomail.domain.PimSyncInterval.OPTIONS
 
 /**
  * Синхронизация и очистка аккаунта. [highlight] — id строки из поиска настроек ([rememberSettingsCatalog]): она

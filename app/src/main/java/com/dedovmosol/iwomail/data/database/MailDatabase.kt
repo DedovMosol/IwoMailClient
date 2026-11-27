@@ -491,17 +491,17 @@ data class AccountEntity(
     val autoCleanupTrashDays: Int = 0,
     val autoCleanupDraftsDays: Int = 0,
     val autoCleanupSpamDays: Int = 0,
-    // Синхронизация контактов Exchange (0 = никогда, иначе интервал в днях)
+    // Синхронизация контактов Exchange (PimSyncInterval: -1 — вместе с основной, 0 — никогда, иначе дни)
     val contactsSyncIntervalDays: Int = 1, // По умолчанию каждый день
     // Ключ синхронизации для папки контактов
     val contactsSyncKey: String = "0",
-    // Синхронизация заметок Exchange (0 = никогда, иначе интервал в днях)
+    // Синхронизация заметок Exchange (PimSyncInterval: -1 — вместе с основной, 0 — никогда, иначе дни)
     val notesSyncIntervalDays: Int = 1,
     val notesSyncKey: String = "0",
-    // Синхронизация календаря Exchange (0 = никогда, иначе интервал в днях)
+    // Синхронизация календаря Exchange (PimSyncInterval: -1 — вместе с основной, 0 — никогда, иначе дни)
     val calendarSyncIntervalDays: Int = 1,
     val calendarSyncKey: String = "0",
-    // Синхронизация задач Exchange (0 = никогда, иначе интервал в днях)
+    // Синхронизация задач Exchange (PimSyncInterval: -1 — вместе с основной, 0 — никогда, иначе дни)
     val tasksSyncIntervalDays: Int = 1,
     val tasksSyncKey: String = "0",
     // Ночной режим синхронизации (per-account)

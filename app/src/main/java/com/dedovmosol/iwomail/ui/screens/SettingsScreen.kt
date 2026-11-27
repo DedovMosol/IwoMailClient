@@ -192,7 +192,7 @@ fun SettingsScreen(
                     )
                     SettingsHubRow(
                         title = Strings.appLockSection,
-                        subtitle = Strings.appLockDesc,
+                        subtitle = Strings.settingsHubSecurityDesc,
                         icon = SettingsSearchDest.Security.icon,
                         hue = SettingsSearchDest.Security.hue,
                         onClick = { onNavigateToSecurity("") }

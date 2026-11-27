@@ -27,6 +27,7 @@ import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.ui.OnboardingStrings
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.isRussian
+import com.dedovmosol.iwomail.ui.components.ScrollbarColor
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
@@ -140,7 +141,7 @@ fun UpdatesScreen(
     }
 
     Scaffold(
-        topBar = { SettingsTopBar(title = OnboardingStrings.updatesTitle(isRu), onBackClick = onBackClick) }
+        topBar = { SettingsHeaderBar(title = OnboardingStrings.updatesTitle(isRu), onBackClick = onBackClick) }
     ) { padding ->
         val scrollState = rememberScrollState()
 
@@ -173,13 +174,8 @@ fun UpdatesScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // Иконка и версия
-                    Icon(
-                        AppIcons.PhoneAndroid,
-                        contentDescription = null,
-                        modifier = Modifier.size(48.dp),
-                        tint = colorTheme.gradientStart
-                    )
+                    // Иконка — плитка как у раздела «О приложении», и версия
+                    SettingsIconTile(AppIcons.PhoneAndroid, hue = SettingsSearchDest.About.hue, filled = true)
 
                     Text(
                         if (isRu) "Версия ${BuildConfig.VERSION_NAME}" else "Version ${BuildConfig.VERSION_NAME}",
@@ -313,35 +309,19 @@ fun UpdatesScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // Иконка
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .background(
-                                when (rollbackState) {
-                                    is RollbackCheckState.Available -> MaterialTheme.colorScheme.error.copy(alpha = 0.1f)
-                                    else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
-                                },
-                                shape = RoundedCornerShape(12.dp)
-                            ),
-                        contentAlignment = Alignment.Center
+                    // Иконка — плитка как у разделов настроек; откат к прежней версии — красная
+                    SettingsIconTile(
+                        hue = if (rollbackState is RollbackCheckState.Available) ScrollbarColor.RED else ScrollbarColor.GRAY,
+                        filled = true
                     ) {
                         if (rollbackState is RollbackCheckState.Checking) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(24.dp),
-                                strokeWidth = 2.dp
+                                strokeWidth = 2.dp,
+                                color = Color.White
                             )
                         } else {
-                            Icon(
-                                AppIcons.Restore,
-                                contentDescription = null,
-                                modifier = Modifier.size(24.dp),
-                                tint = when (rollbackState) {
-                                    is RollbackCheckState.Available -> MaterialTheme.colorScheme.error
-                                    is RollbackCheckState.NotAvailable, is RollbackCheckState.Error -> MaterialTheme.colorScheme.onSurfaceVariant
-                                    else -> MaterialTheme.colorScheme.onSurface
-                                }
-                            )
+                            Icon(AppIcons.Restore, contentDescription = null, modifier = Modifier.size(28.dp))
                         }
                     }
 

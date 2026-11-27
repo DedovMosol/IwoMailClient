@@ -8,6 +8,7 @@ import androidx.work.*
 import com.dedovmosol.iwomail.MailApplication
 import com.dedovmosol.iwomail.data.database.AccountType
 import com.dedovmosol.iwomail.data.database.MailDatabase
+import com.dedovmosol.iwomail.domain.PimSyncInterval
 import com.dedovmosol.iwomail.data.database.SyncMode
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
@@ -427,19 +428,19 @@ class SyncWorker(
             // Только для Exchange аккаунтов
             if (account.accountType != AccountType.EXCHANGE.name) continue
             
-            // Проверяем интервал синхронизации контактов (0 = отключено)
-            if (account.contactsSyncIntervalDays <= 0) continue
-            
-            // Проверяем когда была последняя синхронизация
+            // Интервал: «Никогда», «Вместе с основной» или дни (PimSyncInterval)
+            val days = account.contactsSyncIntervalDays
             val lastSync = settingsRepo.getLastContactsSyncTimeSync(account.id)
-            val intervalMs = account.contactsSyncIntervalDays * ONE_DAY_MS
-            if (System.currentTimeMillis() - lastSync < intervalMs) continue
+            val now = System.currentTimeMillis()
+            if (!PimSyncInterval.isDue(days, lastSync, now)) continue
             
             try {
                 contactRepo.syncExchangeContacts(account.id)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
             }
+            // GAL — полная выгрузка: «вместе с основной» — не чаще раза в сутки; время отмечает только GAL
+            if (!PimSyncInterval.isGalDue(days, lastSync, now)) continue
             try {
                 val result = contactRepo.syncGalContactsToDb(account.id)
                 if (result is EasResult.Success) {
@@ -461,13 +462,8 @@ class SyncWorker(
             // Только для Exchange аккаунтов
             if (account.accountType != AccountType.EXCHANGE.name) continue
             
-            // Проверяем интервал синхронизации заметок (0 = отключено)
-            if (account.notesSyncIntervalDays <= 0) continue
-            
-            // Проверяем когда была последняя синхронизация
             val lastSync = settingsRepo.getLastNotesSyncTimeSync(account.id)
-            val intervalMs = account.notesSyncIntervalDays * ONE_DAY_MS
-            if (System.currentTimeMillis() - lastSync < intervalMs) continue
+            if (!PimSyncInterval.isDue(account.notesSyncIntervalDays, lastSync, System.currentTimeMillis())) continue
             
             // Синхронизируем заметки
             try {
@@ -492,13 +488,8 @@ class SyncWorker(
             // Только для Exchange аккаунтов
             if (account.accountType != AccountType.EXCHANGE.name) continue
             
-            // Проверяем интервал синхронизации календаря (0 = отключено)
-            if (account.calendarSyncIntervalDays <= 0) continue
-            
-            // Проверяем когда была последняя синхронизация
             val lastSync = settingsRepo.getLastCalendarSyncTimeSync(account.id)
-            val intervalMs = account.calendarSyncIntervalDays * ONE_DAY_MS
-            if (System.currentTimeMillis() - lastSync < intervalMs) continue
+            if (!PimSyncInterval.isDue(account.calendarSyncIntervalDays, lastSync, System.currentTimeMillis())) continue
             
             // Синхронизируем календарь
             try {
@@ -523,13 +514,8 @@ class SyncWorker(
             // Только для Exchange аккаунтов
             if (account.accountType != AccountType.EXCHANGE.name) continue
             
-            // Проверяем интервал синхронизации задач (0 = отключено)
-            if (account.tasksSyncIntervalDays <= 0) continue
-            
-            // Проверяем когда была последняя синхронизация
             val lastSync = settingsRepo.getLastTasksSyncTimeSync(account.id)
-            val intervalMs = account.tasksSyncIntervalDays * ONE_DAY_MS
-            if (System.currentTimeMillis() - lastSync < intervalMs) continue
+            if (!PimSyncInterval.isDue(account.tasksSyncIntervalDays, lastSync, System.currentTimeMillis())) continue
             
             // Синхронизируем задачи
             try {

@@ -14,6 +14,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -156,34 +157,36 @@ class SettingsChoiceUiTest {
     }
 
     @Test
-    fun `large title collapses when the page scrolls`() {
+    fun `title sits in one line with the back arrow from the first frame and stays there on scroll`() {
         content {
             SettingsPageScaffold(title = "Appearance", onBackClick = {}) {
                 items(60) { i -> Text("Row $i") }
             }
         }
-        val expanded = rule.onNodeWithTag(SETTINGS_TOP_BAR_TAG).fetchSemanticsNode().size.height
+        val density = rule.density.density
+        val bar = rule.onNodeWithTag(SETTINGS_TOP_BAR_TAG).fetchSemanticsNode()
+        // Одна строка 56 dp сразу, без крупного блока названия под стрелкой
+        assertThat(bar.size.height / density).isWithin(1f).of(SettingsTokens.TopBarHeight.value)
+        val title = rule.onNodeWithText("Appearance").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val back = rule.onNodeWithContentDescription("Back").fetchSemanticsNode().boundsInRoot
+        // Название справа от стрелки на той же высоте
+        assertThat(title.left).isGreaterThan(back.right - 1f)
+        assertThat(title.center.y).isWithin(4f * density).of(back.center.y)
+
         rule.onRoot().performTouchInput { swipeUp() }
         rule.waitForIdle()
-        val collapsed = rule.onNodeWithTag(SETTINGS_TOP_BAR_TAG).fetchSemanticsNode().size.height
-        assertThat(collapsed).isLessThan(expanded)
-        // Свёрнуто — только панель со стрелкой; название по-прежнему одно для TalkBack и видно
-        val density = rule.density.density
-        assertThat(collapsed / density).isWithin(1f).of(SettingsTokens.TopBarHeight.value)
+        val after = rule.onNodeWithTag(SETTINGS_TOP_BAR_TAG).fetchSemanticsNode().size.height
+        assertThat(after).isEqualTo(bar.size.height)
         rule.onNodeWithText("Appearance").assertIsDisplayed()
     }
 
     @Test
-    fun `large title sits right under the back arrow, no empty band above it`() {
+    fun `title is announced once as a heading`() {
         content {
             SettingsPageScaffold(title = "Settings", onBackClick = {}) {
                 items(3) { i -> Text("Row $i") }
             }
         }
-        val headerDp = rule.onNodeWithTag(SETTINGS_TOP_BAR_TAG).fetchSemanticsNode().size.height / rule.density.density
-        // Панель 56 dp + строка крупного названия (36 dp) + 16 dp снизу; у M3 LargeTopAppBar было 152 dp
-        assertThat(headerDp).isWithin(2f).of(56f + 36f + 16f)
-        // Одно название для TalkBack, отмечено заголовком
         rule.onAllNodes(hasText("Settings")).assertCountEquals(1)
         rule.onNode(hasText("Settings") and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).assertExists()
     }

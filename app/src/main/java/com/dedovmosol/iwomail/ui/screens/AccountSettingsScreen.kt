@@ -743,7 +743,7 @@ fun AccountSettingsScreen(
                 SettingsNavRow(
                     title = Strings.deleteAccountAction,
                     titleColor = MaterialTheme.colorScheme.error,
-                    leading = { SettingsIconTile(AppIcons.Delete, hue = ScrollbarColor.RED) },
+                    leading = { SettingsIconTile(AppIcons.Delete, hue = ScrollbarColor.RED, filled = true, hub = false) },
                     trailingIcon = null,
                     highlightId = "deleteAccount",
                     highlight = highlight,
