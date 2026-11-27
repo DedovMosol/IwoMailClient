@@ -1,7 +1,5 @@
 package com.dedovmosol.iwomail.ui.screens
 
-import android.content.Intent
-import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -9,8 +7,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
-import androidx.test.ext.junit.rules.ActivityScenarioRule
-import com.dedovmosol.iwomail.MainActivity
 import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.ContactSource
 import com.dedovmosol.iwomail.data.database.EmailEntity
@@ -32,7 +28,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Настоящий экран «Входящих»: выделить письмо долгим нажатием, «Ещё» → «Отправителя в контакты» — отправитель
+ * Экран «Входящих» на настоящей БД: выделить письмо долгим нажатием, «Ещё» → «Отправителя в контакты» — отправитель
  * появляется в локальных контактах аккаунта (адрес из формы Exchange 2007 `"Имя" <адрес>`), выделение снимается.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -72,15 +68,9 @@ class SaveSenderFromInboxScreenTest {
         }
     }
 
-    private val activityRule = ActivityScenarioRule<MainActivity>(
-        Intent(context, MainActivity::class.java).setAction(MainActivity.ACTION_SHORTCUT_INBOX)
-    )
-    private val compose = AndroidComposeTestRule(activityRule) { rule ->
-        var activity: MainActivity? = null
-        rule.scenario.onActivity { activity = it }
-        activity!!
-    }
-
+    // Экран списка напрямую, без MainActivity: навигация по ярлыку ждёт аккаунт с таймаутами и на CI нестабильна,
+    // а проверяем мы меню выделения и сохранение. Данные — настоящая Room через RepositoryProvider, как в приложении
+    private val compose = androidx.compose.ui.test.junit4.createAndroidComposeRule<androidx.activity.ComponentActivity>()
     @get:Rule
     val chain: RuleChain = RuleChain.outerRule(seed).around(compose)
 
@@ -104,6 +94,13 @@ class SaveSenderFromInboxScreenTest {
 
     @Test
     fun `selection menu saves the sender to local contacts`() {
+        compose.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(com.dedovmosol.iwomail.ui.LocalLanguage provides com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) {
+                com.dedovmosol.iwomail.ui.theme.ExchangeMailTheme(darkTheme = false, dynamicColor = false) {
+                    EmailListScreen(folderId = "${accountId}_inbox", onEmailClick = {}, onBackClick = {}, onComposeClick = {})
+                }
+            }
+        }
         waitFor { compose.onAllNodesWithText("Отчёт за квартал").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Отчёт за квартал").performTouchInput { longClick() }
         waitFor(10_000) { compose.onAllNodesWithContentDescription("Ещё").fetchSemanticsNodes().isNotEmpty() }
