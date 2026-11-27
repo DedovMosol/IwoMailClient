@@ -13,6 +13,7 @@ import com.dedovmosol.iwomail.sync.SyncWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -103,6 +104,7 @@ class MailApplication : Application() {
         startPushService()
         observeServerConnectionHealth()
         observeAppShortcuts()
+        observeWidgetAccounts()
     }
     
     // Держим ссылку на процесс-lifetime ресивер watchdog'а PushService.
@@ -379,6 +381,21 @@ class MailApplication : Application() {
                 .collect { (hasAccounts, language) ->
                     com.dedovmosol.iwomail.util.AppShortcuts.update(this@MailApplication, hasAccounts, language)
                 }
+        }
+    }
+
+    /**
+     * Виджет показывает аккаунты и кольцо на активном: перерисовываем его при смене активного аккаунта (боковое
+     * меню, «Аккаунты», уведомление), имени, цвета и состава аккаунтов — но не на каждое обновление строки
+     * аккаунта (SyncKey, policyKey). Первое значение пропускаем: при запуске виджет рисуется сам.
+     */
+    private fun observeWidgetAccounts() {
+        applicationScope.launch(Dispatchers.IO) {
+            MailDatabase.getInstance(this@MailApplication).accountDao().getAllAccounts()
+                .map { accounts -> accounts.map { listOf(it.id, it.displayName, it.color, it.isActive) } }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { com.dedovmosol.iwomail.widget.updateMailWidget(this@MailApplication) }
         }
     }
 

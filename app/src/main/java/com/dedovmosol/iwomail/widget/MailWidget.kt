@@ -12,7 +12,11 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.*
+import androidx.glance.action.ActionParameters
+import androidx.glance.action.actionParametersOf
 import androidx.glance.action.clickable
+import androidx.glance.appwidget.action.ActionCallback
+import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.*
 import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.action.actionSendBroadcast
@@ -94,7 +98,7 @@ class MailWidget : GlanceAppWidget() {
         val unreadByAccountId = unreadCounts.associate { it.accountId to it.unreadCount }
         val accountsWithUnread = accounts.map { account ->
             val unread = unreadByAccountId[account.id] ?: 0
-            AccountUnread(account.id, account.displayName, account.color, unread)
+            AccountUnread(account.id, account.displayName, account.color, unread, account.isActive)
         }
 
         val now = System.currentTimeMillis()
@@ -226,7 +230,19 @@ internal fun privateInboxIntent(context: Context, accountId: Long) = Intent(cont
     putExtra(MainActivity.EXTRA_OPEN_INBOX_UNREAD, true)
 }
 
-data class AccountUnread(val id: Long, val name: String, val color: Int, val unreadCount: Int)
+data class AccountUnread(val id: Long, val name: String, val color: Int, val unreadCount: Int, val isActive: Boolean = false)
+
+/**
+ * Аватары в строке виджета: первые [max] по порядку аккаунтов, но активный — всегда среди них (иначе выбранный
+ * аккаунт не виден): если он дальше [max], он встаёт на место последнего. Порядок остальных не меняется, поэтому
+ * аватары не прыгают при выборе другого аккаунта.
+ */
+internal fun widgetAvatars(accounts: List<AccountUnread>, max: Int): List<AccountUnread> {
+    if (max <= 0) return emptyList()
+    val shown = accounts.take(max)
+    val active = accounts.firstOrNull { it.isActive } ?: return shown
+    return if (active in shown) shown else shown.dropLast(1) + active
+}
 data class EventInfo(val title: String, val time: String)
 data class RecentEmail(val id: String, val sender: String, val preview: String, val folderId: String = "", val dateReceived: Long = 0L)
 data class WidgetData(
@@ -296,7 +312,7 @@ private val accentBlue = Color(0xFF448AFF)
 private val widgetUpdateMutex = Mutex()
 
 @Composable
-private fun MailWidgetContent(data: WidgetData, context: Context) {
+internal fun MailWidgetContent(data: WidgetData, context: Context) {
     // Внешний Box — скруглённые углы, сплошной фон темы.
     // ImageProvider как background создаёт FrameLayout+ImageView в RemoteViews,
     // что крашит лаунчер HyperOS 2.0. ColorProvider = простой setBackgroundColor().
@@ -670,7 +686,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                 // синхронизации; сами аватары масштабируем вместе с остальным UI (было — фикс. 48dp).
                 val isWide = size.width >= 300.dp
                 val maxAvatars = if (isWide) 4 else 2
-                data.accounts.take(maxAvatars).forEach { acc ->
+                widgetAvatars(data.accounts, maxAvatars).forEach { acc ->
                     AccountAvatar(acc, context, scale)
                     Spacer(modifier = GlanceModifier.width(4.dp))
                 }
@@ -801,46 +817,67 @@ private fun AccountAvatar(account: AccountUnread, context: Context, scale: Float
     val circleSize = (34 * scale).dp
     val letterSize = (15 * scale).sp
 
-    // Для TalkBack: на круге видна только первая буква (SET-12)
-    val description = if (account.unreadCount > 0) {
+    // Для TalkBack: на круге видна только первая буква (SET-12), активный аккаунт отмечен словами
+    val base = if (account.unreadCount > 0) {
         context.getString(R.string.widget_account_unread, account.name, account.unreadCount)
     } else {
         context.getString(R.string.widget_account, account.name)
+    }
+    val description = if (account.isActive) context.getString(R.string.widget_account_active, base)
+        else context.getString(R.string.widget_account_select, base)
+
+    // Активный — открыть его почту (как раньше); другой — сделать активным, не уходя с рабочего стола: писать
+    // и искать с виджета будут уже от него, кольцо переходит на выбранный аватар
+    val onClick = if (account.isActive) {
+        actionStartActivity(
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                this.data = android.net.Uri.parse("iwomail://account/${account.id}")
+                putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, account.id)
+                // Если есть непрочитанные → фильтр непрочитанных, иначе → просто входящие
+                if (account.unreadCount > 0) {
+                    putExtra(MainActivity.EXTRA_OPEN_INBOX_UNREAD, true)
+                }
+            }
+        )
+    } else {
+        actionRunCallback<SelectWidgetAccountAction>(actionParametersOf(SelectWidgetAccountAction.ACCOUNT_ID to account.id))
     }
 
     Box(
         modifier = GlanceModifier
             .size(boxSize)
-            .clickable(actionStartActivity(
-                Intent(context, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                    this.data = android.net.Uri.parse("iwomail://account/${account.id}")
-                    putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, account.id)
-                    // Если есть непрочитанные → фильтр непрочитанных, иначе → просто входящие
-                    if (account.unreadCount > 0) {
-                        putExtra(MainActivity.EXTRA_OPEN_INBOX_UNREAD, true)
-                    }
-                }
-            ))
+            .clickable(onClick)
             .semantics { contentDescription = description },
         contentAlignment = Alignment.TopStart
     ) {
-        // Аватар (круг) — размер масштабируется вместе с виджетом
+        // Аватар (круг) — размер масштабируется вместе с виджетом. Активный — в белом кольце: у Glance нет рамки,
+        // кольцо — белый круг под аватаром на 2 dp шире с каждой стороны
+        val ring = 2.dp
         Box(
             modifier = GlanceModifier
                 .size(circleSize)
                 .cornerRadius(circleSize / 2)
-                .background(ColorProvider(accountColor)),
+                .background(ColorProvider(if (account.isActive) Color.White else accountColor)),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = account.name.firstOrNull()?.uppercase() ?: "?",
-                style = TextStyle(
-                    color = ColorProvider(Color.White),
-                    fontSize = letterSize,
-                    fontWeight = FontWeight.Bold
+            val inner = if (account.isActive) circleSize - ring * 2 else circleSize
+            Box(
+                modifier = GlanceModifier
+                    .size(inner)
+                    .cornerRadius(inner / 2)
+                    .background(ColorProvider(accountColor)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = account.name.firstOrNull()?.uppercase() ?: "?",
+                    style = TextStyle(
+                        color = ColorProvider(Color.White),
+                        fontSize = letterSize,
+                        fontWeight = FontWeight.Bold
+                    )
                 )
-            )
+            }
         }
         
         // Бейдж непрочитанных (справа внизу)
@@ -866,6 +903,34 @@ private fun AccountAvatar(account: AccountUnread, context: Context, scale: Float
                 }
             }
         }
+    }
+}
+
+/**
+ * Нажатие на неактивный аватар: аккаунт становится активным, виджет перерисовывается с кольцом на нём. Аккаунт
+ * мог быть удалён, пока виджет показывал старый снимок, — тогда ничего не меняем: иначе deactivateAll оставил бы
+ * приложение без активного аккаунта.
+ */
+class SelectWidgetAccountAction : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        val accountId = parameters[ACCOUNT_ID] ?: return
+        val app = context.applicationContext
+        try {
+            val accounts = com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(app)
+            withContext(Dispatchers.IO) {
+                if (accounts.getAccount(accountId) != null) accounts.setActiveAccount(accountId)
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.w("MailWidget", "Select account $accountId failed", e)
+        }
+        // Явно, не только через наблюдатель в MailApplication: процесс мог стартовать ради этого нажатия, и
+        // первое значение наблюдателя (оно пропускается) уже содержит новый активный аккаунт
+        updateMailWidget(app)
+    }
+
+    companion object {
+        val ACCOUNT_ID = ActionParameters.Key<Long>("accountId")
     }
 }
 

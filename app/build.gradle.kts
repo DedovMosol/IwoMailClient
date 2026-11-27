@@ -196,6 +196,9 @@ dependencies {
     
     // Testing
     testImplementation("junit:junit:4.13.2")
+    // Glance: проверка дерева виджета и действий нажатий без лаунчера
+    testImplementation("androidx.glance:glance-testing:1.1.1")
+    testImplementation("androidx.glance:glance-appwidget-testing:1.1.1")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("io.mockk:mockk:1.13.8")
     testImplementation("com.google.truth:truth:1.1.5")

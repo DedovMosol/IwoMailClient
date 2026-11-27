@@ -835,6 +835,8 @@ object Strings {
     val organization: String @Composable get() = if (isRussian()) "Организация" else "Organization"
     val selectContacts: String @Composable get() = if (isRussian()) "Выбор контактов" else "Select contacts"
     val selectContact: String @Composable get() = if (isRussian()) "Выбрать контакт" else "Select contact"
+    val addSenderToContacts: String @Composable get() = if (isRussian()) "Отправителя в контакты" else "Save sender to contacts"
+    val addSendersToContacts: String @Composable get() = if (isRussian()) "Отправителей в контакты" else "Save senders to contacts"
     val addContact: String @Composable get() = if (isRussian()) "Добавить контакт" else "Add contact"
     val editContact: String @Composable get() = if (isRussian()) "Редактировать контакт" else "Edit contact"
     val deleteContact: String @Composable get() = if (isRussian()) "Удалить контакт?" else "Delete contact?"
@@ -2399,6 +2401,23 @@ object NotificationStrings {
 
     fun getSynced(count: Int, isRussian: Boolean): String {
         return if (isRussian) "Синхронизировано: $count" else "Synced: $count"
+    }
+
+    /** Итог «Добавить отправителя в контакты»: одно письмо или выделение в папке. */
+    fun sendersSaved(added: Int, existing: Int, isRussian: Boolean): String = when {
+        added == 0 && existing == 0 ->
+            if (isRussian) "У отправителя нет адреса для контакта" else "The sender has no address to save"
+        added == 0 && existing == 1 ->
+            if (isRussian) "Отправитель уже есть в локальных контактах" else "The sender is already in local contacts"
+        added == 0 ->
+            if (isRussian) "Все отправители уже есть в локальных контактах" else "All senders are already in local contacts"
+        added == 1 && existing == 0 ->
+            if (isRussian) "Отправитель добавлен в локальные контакты" else "Sender added to local contacts"
+        existing == 0 ->
+            if (isRussian) "Добавлено в локальные контакты: $added" else "Added to local contacts: $added"
+        else ->
+            if (isRussian) "Добавлено в локальные контакты: $added, уже были: $existing"
+            else "Added to local contacts: $added, already there: $existing"
     }
 
     fun getCopiedToPersonalContacts(isRussian: Boolean): String {

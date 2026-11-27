@@ -151,6 +151,7 @@ fun EmailListScreen(
     val isTrashFolder = folder?.type == FolderType.DELETED_ITEMS
     val isDraftsFolder = folder?.type == FolderType.DRAFTS
     val isSentFolder = folder?.type == FolderType.SENT_ITEMS
+    val saveSenders = com.dedovmosol.iwomail.ui.components.rememberSaveSendersToContacts()
     val recipientFolderIds = remember(folders) {
         folders.filter { com.dedovmosol.iwomail.ui.screens.emaillist.folderShowsRecipient(it.type) }
             .mapTo(HashSet()) { it.id }
@@ -528,6 +529,15 @@ fun EmailListScreen(
                     isSpamFolder = isSpamFolder,
                     isTrashFolder = isTrashFolder,
                     isDraftsFolder = isDraftsFolder,
+                    onSaveSenders = if (isSentFolder || isDraftsFolder || folder?.type == FolderType.OUTBOX) null else {
+                        {
+                            withSelection {
+                                val ids = selectedIds
+                                saveSenders(displayEmails.filter { it.id in ids })
+                                viewModel.clearSelection()
+                            }
+                        }
+                    },
                     showMoreMenu = showMoreMenu,
                     onToggleMoreMenu = { showMoreMenu = it }
                 )
@@ -801,6 +811,8 @@ private fun SelectionTopBar(
     isSpamFolder: Boolean,
     isTrashFolder: Boolean,
     isDraftsFolder: Boolean = false,
+    /** «Отправителей в контакты»; null — пункта нет (свои письма: «Отправленные», черновики, «Исходящие»). */
+    onSaveSenders: (() -> Unit)? = null,
     showMoreMenu: Boolean,
     onToggleMoreMenu: (Boolean) -> Unit
 ) {
@@ -849,6 +861,13 @@ private fun SelectionTopBar(
                                 leadingIcon = { Icon(AppIcons.MarkEmailUnread, null) }
                             )
                         }
+                    }
+                    if (onSaveSenders != null) {
+                        DropdownMenuItem(
+                            text = { Text(if (selectedCount == 1) Strings.addSenderToContacts else Strings.addSendersToContacts) },
+                            onClick = { onToggleMoreMenu(false); onSaveSenders() },
+                            leadingIcon = { Icon(AppIcons.PersonAdd, null) }
+                        )
                     }
                     // В спаме - "Удалить окончательно", в корзине и обычных папках - "В спам"
                     if (isSpamFolder) {

@@ -30,6 +30,8 @@
     <string name="widget_sync_now">Синхронизировать</string>
     <string name="widget_account">Аккаунт %1$s</string>
     <string name="widget_account_unread">Аккаунт %1$s, непрочитанных: %2$d</string>
+    <string name="widget_account_active">%1$s, активный</string>
+    <string name="widget_account_select">%1$s. Нажмите, чтобы сделать активным</string>
 
     <!-- L-7: Предупреждения безопасности для небезопасного хранения паролей -->
     <string name="security_warning_insecure_storage_title">⚠️ Предупреждение безопасности</string>

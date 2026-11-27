@@ -32,6 +32,16 @@ private fun extractCleanEmail(raw: String): String {
     return raw.trim()
 }
 
+/**
+ * Имя отправителя для контакта: fromName, иначе часть from до `<`; кавычки снимаются. Имя, совпадающее с адресом,
+ * не имя — тогда пусто, и контакт назовётся адресом.
+ */
+internal fun senderDisplayName(from: String, fromName: String, address: String): String {
+    val raw = fromName.ifBlank { if ('<' in from) from.substringBefore('<') else "" }
+    val name = raw.trim().trim('"', '\'').trim()
+    return if (name.equals(address, ignoreCase = true)) "" else name
+}
+
 /** GAL/EAS REPLACE не должен сбрасывать избранное и локальную группу. */
 internal fun keepLocalContactOverlay(incoming: ContactEntity, existing: ContactEntity?): ContactEntity =
     if (existing == null) incoming
@@ -358,6 +368,39 @@ class ContactRepository internal constructor(
         }
     }
     
+    /** Итог «Добавить отправителя в контакты»: [added] новых, [existing] уже были в локальных. */
+    data class SendersSaved(val added: Int, val existing: Int)
+
+    /**
+     * Отправители писем → локальные контакты (письмо и выделение в папке, DRY). [senders] — пары (from, fromName)
+     * из письма: from на Exchange 2007 бывает `"Имя" <адрес>`. Пропускаются пустые и не-адреса (например, X.500 без @),
+     * свой адрес [ownAddress] и повторы в пачке; уже сохранённые не дублируются. Проверка и вставка — одна транзакция,
+     * поэтому двойное нажатие не создаёт два одинаковых контакта.
+     */
+    suspend fun addSendersToLocal(accountId: Long, senders: List<Pair<String, String>>, ownAddress: String?): SendersSaved {
+        val own = ownAddress?.let { extractCleanEmail(it) }?.lowercase()
+        val unique = LinkedHashMap<String, Pair<String, String>>()
+        for ((from, fromName) in senders) {
+            val address = extractCleanEmail(from)
+            if (!SIMPLE_EMAIL_RE.matches(address)) continue
+            val key = address.lowercase()
+            if (key == own) continue
+            unique.putIfAbsent(key, address to senderDisplayName(from, fromName, address))
+        }
+        if (unique.isEmpty()) return SendersSaved(0, 0)
+        return withContext(Dispatchers.IO) {
+            database.withTransaction {
+                var added = 0
+                var existing = 0
+                for ((address, name) in unique.values) {
+                    if (contactDao.findLocalByEmail(accountId, address) != null) existing++
+                    else { addContact(accountId, displayName = name, email = address); added++ }
+                }
+                SendersSaved(added, existing)
+            }
+        }
+    }
+
     // === Добавление/редактирование ===
     
     suspend fun addContact(

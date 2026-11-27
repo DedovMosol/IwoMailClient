@@ -157,6 +157,7 @@ fun EmailDetailScreen(
     val isInTrash = uiState.isInTrash
     val isInSent = uiState.isInSent
     val isInDrafts = uiState.isInDrafts
+    val saveSenders = com.dedovmosol.iwomail.ui.components.rememberSaveSendersToContacts()
     val isLoadingBody = uiState.isLoadingBody
     val inlineImages = uiState.inlineImages
     val isMoving = uiState.isMoving
@@ -536,6 +537,14 @@ fun EmailDetailScreen(
                                 onClick = { showOverflowMenu = false; onForwardClick() },
                                 leadingIcon = { Icon(AppIcons.Forward, null) }
                             )
+                                // В «Отправленных» и черновиках отправитель — сам пользователь, у RSS — лента
+                                if (!isInSent && !isInDrafts && !isRss) {
+                                    DropdownMenuItem(
+                                        text = { Text(Strings.addSenderToContacts) },
+                                        onClick = { showOverflowMenu = false; saveSenders(listOf(target)) },
+                                        leadingIcon = { Icon(AppIcons.PersonAdd, null) }
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text(Strings.printOrPdf) },
                                     onClick = { showOverflowMenu = false; printEmail(target) },
