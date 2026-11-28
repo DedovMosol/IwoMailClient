@@ -18,23 +18,6 @@ import java.util.Locale
 class WidgetButtonsTest {
 
     @Test
-    fun `wide widget gets the 48 dp minimum touch target`() {
-        // 320 dp: строка 288 dp, 4 аватара по 37 + 4 dp
-        val visual = (32 * 0.93f).dp
-        assertThat(widgetButtonTouchSize(288.dp, (40 * 0.93f).dp * 4 + 4.dp * 4, visual)).isEqualTo(48.dp)
-    }
-
-    @Test
-    fun `narrow widget shares what is left but never shrinks below the circle`() {
-        val visual = (32 * 0.8f).dp
-        // 180 dp: строка 148 dp, 2 аватара по 32 + 4 dp — (148 − 72 − 8) / 2 = 34 dp
-        assertThat(widgetButtonTouchSize(148.dp, 72.dp, visual)).isEqualTo(34.dp)
-        assertThat(widgetButtonTouchSize(148.dp, 72.dp, visual)).isGreaterThan(visual)
-        // Места нет совсем — размер круга, а не меньше
-        assertThat(widgetButtonTouchSize(60.dp, 72.dp, visual)).isEqualTo(visual)
-    }
-
-    @Test
     fun `private inbox clicks distinguish accounts without a message payload`() {
         val ctx = ApplicationProvider.getApplicationContext<Context>()
         val first = privateInboxIntent(ctx, 1)

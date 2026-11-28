@@ -70,7 +70,7 @@ class RepositoryDraftStore(
     )
 
     override suspend fun delete(accountId: Long, serverId: String, excludeServerId: String?): EasResult<Boolean> =
-        mailRepository.deleteDraft(accountId, serverId, excludeEwsItemId = excludeServerId, requireServerDeletion = true)
+        mailRepository.deleteDraft(accountId, serverId, excludeEwsItemId = excludeServerId)
 
     override suspend fun removeLocally(emailId: String) = mailRepository.removeDraftLocally(emailId)
 

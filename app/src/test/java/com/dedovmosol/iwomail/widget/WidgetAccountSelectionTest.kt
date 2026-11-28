@@ -143,6 +143,44 @@ class WidgetAccountSelectionTest {
     }
 
     @Test
+    fun `every widget element opens its own target`() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(530.dp, 600.dp))
+        setContext(context)
+        provideComposable { MailWidgetContent(WidgetSamples.full, context) }
+        fun open(uri: String) = android.content.Intent(context, com.dedovmosol.iwomail.MainActivity::class.java).setData(android.net.Uri.parse(uri))
+        for (uri in listOf(
+            "iwomail://widget/search", "iwomail://widget/calendar", "iwomail://widget/tasks", "iwomail://widget/notes",
+            "iwomail://widget/compose", "iwomail://email/1", "iwomail://email/2", "iwomail://email/3", "iwomail://account/1"
+        )) {
+            onAllNodes(hasStartActivityClickAction(open(uri))).assertCountEquals(1)
+        }
+        onAllNodes(
+            androidx.glance.appwidget.testing.unit.hasSendBroadcastAction(
+                android.content.Intent(com.dedovmosol.iwomail.sync.SyncAlarmReceiver.ACTION_SYNC_NOW)
+                    .setClass(context, com.dedovmosol.iwomail.sync.SyncAlarmReceiver::class.java)
+            )
+        ).assertCountEquals(1)
+        for (id in 2L..4L) {
+            onAllNodes(hasRunCallbackClickAction<SelectWidgetAccountAction>(actionParametersOf(SelectWidgetAccountAction.ACCOUNT_ID to id)))
+                .assertCountEquals(1)
+        }
+    }
+
+    @Test
+    fun `account colours - duplicates become distinct, new account gets an unused colour`() {
+        val blue = com.dedovmosol.iwomail.domain.AccountColors.PALETTE[0]
+        val green = com.dedovmosol.iwomail.domain.AccountColors.PALETTE[1]
+        val shown = com.dedovmosol.iwomail.domain.AccountColors.distinct(listOf(blue, blue, green, blue))
+        assertThat(shown.toSet()).hasSize(4)
+        assertThat(shown[0]).isEqualTo(blue)
+        assertThat(shown[2]).isEqualTo(green)
+        assertThat(com.dedovmosol.iwomail.domain.AccountColors.forNewAccount(listOf(blue, green)))
+            .isEqualTo(com.dedovmosol.iwomail.domain.AccountColors.PALETTE[2])
+        val all = com.dedovmosol.iwomail.domain.AccountColors.PALETTE
+        assertThat(com.dedovmosol.iwomail.domain.AccountColors.forNewAccount(all)).isIn(all)
+    }
+
+    @Test
     fun `without an active account the widget shows the first account`() {
         assertThat(widgetActiveAccountId(listOf(acc(3), acc(4)))).isEqualTo(3L)
         assertThat(widgetActiveAccountId(listOf(acc(3), acc(4, active = true)))).isEqualTo(4L)

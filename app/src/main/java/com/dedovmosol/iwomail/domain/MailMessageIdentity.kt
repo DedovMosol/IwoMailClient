@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.domain
 
 import com.dedovmosol.iwomail.data.database.EmailEntity
+import com.dedovmosol.iwomail.data.database.EmailServerRef
 
 /** Guard a UI selection when EAS 12.x reuses a ServerId. Flags, read state and body are not identity. */
 internal data class MailMessageIdentity(
@@ -14,6 +15,10 @@ internal data class MailMessageIdentity(
 ) {
     companion object {
         fun of(email: EmailEntity) = with(email) {
+            MailMessageIdentity(accountId, folderId, internetMessageId, from, to, subject, dateReceived)
+        }
+
+        fun of(email: EmailServerRef) = with(email) {
             MailMessageIdentity(accountId, folderId, internetMessageId, from, to, subject, dateReceived)
         }
     }

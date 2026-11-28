@@ -4,34 +4,39 @@ import android.content.Context
 import android.content.Intent
 import android.text.format.DateFormat
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import com.dedovmosol.iwomail.ui.theme.AppColorTheme
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.*
 import androidx.glance.action.ActionParameters
-import androidx.glance.action.actionParametersOf
 import androidx.glance.action.clickable
-import androidx.glance.appwidget.action.ActionCallback
-import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.*
+import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.action.actionStartActivity
-import androidx.glance.appwidget.action.actionSendBroadcast
-import androidx.glance.appwidget.provideContent
 import androidx.glance.layout.*
-import androidx.glance.semantics.contentDescription
-import androidx.glance.semantics.semantics
 import androidx.glance.text.*
 import androidx.glance.unit.ColorProvider
 import com.dedovmosol.iwomail.MainActivity
 import com.dedovmosol.iwomail.R
 import com.dedovmosol.iwomail.data.database.MailDatabase
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
-import com.dedovmosol.iwomail.sync.SyncAlarmReceiver
+import com.dedovmosol.iwomail.data.security.LockPrivacy
+import com.dedovmosol.iwomail.ui.theme.AppColorTheme
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -42,51 +47,72 @@ import java.util.*
  */
 class MailWidget : GlanceAppWidget() {
 
-    // Responsive — 3 фиксированных размера вместо SizeMode.Exact.
-    // SizeMode.Exact использует RemoteViews(Map<SizeF,RemoteViews>) на API 31+,
-    // что вызывает краш лаунчера на HyperOS 2.0 (баг в обработке size-map).
-    override val sizeMode = SizeMode.Responsive(
-        setOf(
-            DpSize(180.dp, 140.dp),
-            DpSize(180.dp, 210.dp),
-            DpSize(320.dp, 280.dp),
-        )
-    )
+    private companion object {
+        /**
+         * `updateAll()` only sends an event to an existing Glance session. This flow is the session's data invalidation
+         * signal, so a lock/account/sync change also reloads the Room snapshot while the launcher keeps the session alive.
+         */
+        val refreshRequests = MutableStateFlow(0L)
+    }
 
-    override suspend fun provideGlance(context: Context, id: GlanceId) {
+    // Responsive — фиксированный набор размеров вместо SizeMode.Exact (Exact пересобирает виджет на каждое изменение
+    // размера и ронял лаунчер HyperOS 2.0). Лаунчер берёт наибольший размер, что помещается; раскладка по каждому —
+    // widgetSpec, поэтому на любом размере ничего не обрезается. Размеров не больше 16 — предел RemoteViews(Map).
+    override val sizeMode = SizeMode.Responsive(WIDGET_SIZES)
+
+    override suspend fun provideGlance(context: Context, id: GlanceId): Nothing = coroutineScope {
         val appContext = context.applicationContext
-        try {
-            val data = withContext(Dispatchers.IO) { loadWidgetData(appContext) }
-            provideContent { MailWidgetContent(data, appContext) }
+        val settings = try {
+            SettingsRepository.getInstance(appContext)
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            provideContent {
-                MailWidgetContent(
-                    WidgetData(
-                        accounts = emptyList(),
-                        nextEvent = null,
-                        hasAccount = false
-                    ),
-                    appContext
-                )
-            }
+            if (e is CancellationException) throw e
+            android.util.Log.w("MailWidget", "Cannot open widget settings", e)
+            provideContent { MailWidgetContent(EMPTY_PRIVATE_SNAPSHOT, appContext) }
+        }
+        // One state and one loader for the entire session, not a separate effect for each responsive size.
+        val snapshot = mutableStateOf(EMPTY_PRIVATE_SNAPSHOT)
+        val initialSnapshotReady = CompletableDeferred<Unit>()
+        launch {
+            observeWidgetSnapshots(
+                appLockEnabled = settings.appLockEnabled,
+                lockEnabledNow = { settings.getAppLockEnabledOrNull() == true },
+                refreshRequests = refreshRequests,
+                load = { hidden -> withContext(Dispatchers.IO) { loadWidgetData(appContext, hidden) } },
+                publish = { data ->
+                    snapshot.value = data
+                    initialSnapshotReady.complete(Unit)
+                }
+            )
+        }
+        initialSnapshotReady.await()
+        provideContent {
+            val data = snapshot.value
+            // The setter updates the in-process cache before DataStore notifies observers.
+            MailWidgetContent(if (settings.getAppLockEnabledOrNull() == true) data.redact() else data, appContext)
         }
     }
 
+    internal fun requestRefresh() {
+        refreshRequests.update { it + 1L }
+    }
+
     internal suspend fun loadWidgetData(context: Context): WidgetData {
+        val hidden = try {
+            val settings = SettingsRepository.getInstance(context)
+            LockPrivacy.contentHidden(settings) || settings.getAppLockEnabledOrNull() == true
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            true
+        }
+        return loadWidgetData(context, hidden)
+    }
+
+    private suspend fun loadWidgetData(context: Context, contentHidden: Boolean): WidgetData {
         val db = try {
             MailDatabase.getInstance(context)
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            return WidgetData(
-                accounts = emptyList(),
-                nextEvent = null,
-                hasAccount = false,
-                todayDate = "",
-                todayTasksCount = 0,
-                activeTasksCount = 0,
-                recentEmails = emptyList()
-            )
+            if (e is CancellationException) throw e
+            return EMPTY_PRIVATE_SNAPSHOT
         }
 
         val accounts = try { db.accountDao().getAllAccountsList() } catch (e: Exception) {
@@ -96,11 +122,13 @@ class MailWidget : GlanceAppWidget() {
             if (e is kotlinx.coroutines.CancellationException) throw e; emptyList()
         }
         val unreadByAccountId = unreadCounts.associate { it.accountId to it.unreadCount }
-        val accountsWithUnread = accounts.map { account ->
+        // Одинаковые цвета (раньше новый аккаунт всегда получал синий) — различимые для показа, как в боковом меню
+        val colors = com.dedovmosol.iwomail.domain.AccountColors.distinct(accounts.map { it.color })
+        val accountsWithUnread = accounts.mapIndexed { i, account ->
             val unread = unreadByAccountId[account.id] ?: 0
-            AccountUnread(account.id, account.displayName, account.color, unread, account.isActive)
+            AccountUnread(account.id, account.displayName, colors[i], unread, account.isActive)
         }
-        // исьма, события, задачи и заметки — активного аккаунта: виджет меняется вместе с выбором аккаунта. ет
+        // Письма, события, задачи и заметки — активного аккаунта: виджет меняется вместе с выбором аккаунта. ет
         // активного (сбой при удалении) — первый, как и в приложении
         val activeId = widgetActiveAccountId(accountsWithUnread)
 
@@ -111,12 +139,7 @@ class MailWidget : GlanceAppWidget() {
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; null
         }
-        // SET-01: при включённой блокировке виджет показывает только счётчики — без отправителей, тем и названий
-        val contentHidden = try {
-            com.dedovmosol.iwomail.data.security.LockPrivacy.contentHidden(SettingsRepository.getInstance(context))
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e; true
-        }
+        // SET-01: при включённой блокировке виджет не показывает отправителей, темы и названия.
         val eventInfo = nextEvent?.let {
             val startStr = DateFormat.getTimeFormat(context).format(Date(it.startTime))
             EventInfo(if (contentHidden) "" else it.subject, startStr)
@@ -146,7 +169,7 @@ class MailWidget : GlanceAppWidget() {
 
         val noSubjectText = context.getString(R.string.widget_no_subject)
         val recentEmails = if (contentHidden) emptyList() else try {
-            db.emailDao().getWidgetRecentUnreadInbox(activeId, 3).map { email ->
+            db.emailDao().getWidgetRecentUnreadInbox(activeId, WIDGET_MAX_MAIL_ROWS).map { email ->
                 RecentEmail(
                     id = email.id,
                     sender = email.fromName.ifBlank { email.from },
@@ -159,7 +182,7 @@ class MailWidget : GlanceAppWidget() {
             if (e is kotlinx.coroutines.CancellationException) throw e; emptyList()
         }
 
-        // епрочитанные активного аккаунта; у каждого аватара — свои
+        // Непрочитанные активного аккаунта; у каждого аватара — свои
 
         val notesCount = try { db.noteDao().getNotesCountSync(activeId) } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; 0
@@ -240,7 +263,7 @@ data class AccountUnread(val id: Long, val name: String, val color: Int, val unr
  * аккаунт не виден): если он дальше [max], он встаёт на место последнего. Порядок остальных не меняется, поэтому
  * аватары не прыгают при выборе другого аккаунта.
  */
-/** ккаунт, чьё содержимое показывает виджет: активный, а если активного нет — первый; нет аккаунтов — -1. */
+/** Аккаунт, чьё содержимое показывает виджет: активный, а если активного нет — первый; нет аккаунтов — -1. */
 internal fun widgetActiveAccountId(accounts: List<AccountUnread>): Long =
     (accounts.firstOrNull { it.isActive } ?: accounts.firstOrNull())?.id ?: -1L
 
@@ -306,16 +329,60 @@ internal fun formatSyncLabel(
     return if (isRussian) "в $timeText" else "at $timeText"
 }
 
-private val searchBg = Color.White
-private val searchHint = Color(0xFF757575)
-private val textWhite = Color.White
-private val darkBg = Color(0xE6181828)
-private val textLight = Color(0xFFEEEEEE)
-private val textLightAlpha = Color(0xB3EEEEEE)
-// SET-08: текст прямо на цвете темы — сплошной белый. олупрозрачный давал 1,8-2,8:1 (норма 4,5:1, шрифт 9-13 sp);
-// иерархия — размером и начертанием, не прозрачностью
-private val textOnTheme = Color.White
-private val accentBlue = Color(0xFF448AFF)
+private val EMPTY_PRIVATE_SNAPSHOT = WidgetData(emptyList(), null, hasAccount = false, contentHidden = true)
+
+private fun WidgetData.redact(): WidgetData = copy(
+    nextEvent = nextEvent?.copy(title = ""),
+    recentEmails = emptyList(),
+    nextTaskTitle = "",
+    contentHidden = true
+)
+
+/** Session-owned loader. Privacy changes mask the current view before any Room call can finish. */
+internal suspend fun observeWidgetSnapshots(
+    appLockEnabled: Flow<Boolean>,
+    lockEnabledNow: () -> Boolean,
+    refreshRequests: Flow<Long>,
+    load: suspend (contentHidden: Boolean) -> WidgetData,
+    publish: (WidgetData) -> Unit
+): Unit = coroutineScope {
+    val lockChanges = appLockEnabled.catch { failure ->
+        android.util.Log.w("MailWidget", "Cannot read App Lock; hiding widget content", failure)
+        emit(true)
+    }.distinctUntilChanged()
+    val commit = Mutex()
+    var snapshot = EMPTY_PRIVATE_SNAPSHOT
+    var generation = 0L
+    var pending: Job? = null
+
+    combine(lockChanges, refreshRequests) { locked, _ -> locked }.collect { locked ->
+        val hidden = locked || lockEnabledNow()
+        val version = commit.withLock {
+            if (hidden && !snapshot.contentHidden) {
+                snapshot = snapshot.redact()
+                publish(snapshot)
+            }
+            ++generation
+        }
+        pending?.cancel()
+        pending = launch {
+            val loaded = try {
+                load(hidden)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                android.util.Log.w("MailWidget", "Refresh snapshot failed", e)
+                null
+            }
+            commit.withLock {
+                if (generation != version) return@withLock
+                val candidate = loaded ?: snapshot
+                snapshot = if (hidden || lockEnabledNow() || loaded == null) candidate.redact() else candidate
+                publish(snapshot)
+            }
+        }
+    }
+}
+
 private val widgetUpdateMutex = Mutex()
 
 @Composable
@@ -323,12 +390,25 @@ internal fun MailWidgetContent(data: WidgetData, context: Context) {
     // Внешний Box — скруглённые углы, сплошной фон темы.
     // ImageProvider как background создаёт FrameLayout+ImageView в RemoteViews,
     // что крашит лаунчер HyperOS 2.0. ColorProvider = простой setBackgroundColor().
+    // До Android 12 cornerRadius не работает — там скругление даёт форма-рисунок под содержимым (ImageView-ребёнок,
+    // не фон-рисунок, который ронял HyperOS; HyperOS 2.0 — Android 14, у неё ветка с cornerRadius)
+    val rounded = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
     Box(
-        modifier = GlanceModifier
-            .fillMaxSize()
-            .cornerRadius(24.dp)
-            .background(ColorProvider(Color(data.themeColor)))
+        modifier = if (rounded) {
+            GlanceModifier.fillMaxSize().cornerRadius(24.dp).background(ColorProvider(Color(data.themeColor)))
+        } else {
+            GlanceModifier.fillMaxSize()
+        }
     ) {
+        if (!rounded) {
+            Image(
+                provider = ImageProvider(R.drawable.widget_shape_root),
+                contentDescription = null,
+                modifier = GlanceModifier.fillMaxSize(),
+                contentScale = androidx.glance.layout.ContentScale.FillBounds,
+                colorFilter = ColorFilter.tint(ColorProvider(Color(data.themeColor)))
+            )
+        }
         if (!data.hasAccount) {
             NoAccountView(context)
         } else {
@@ -353,564 +433,9 @@ private fun NoAccountView(context: Context) {
     ) {
         Text(
             text = context.getString(R.string.widget_add_account),
-            style = TextStyle(color = ColorProvider(textWhite), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            style = TextStyle(color = ColorProvider(widgetTextWhite), fontSize = 14.sp, fontWeight = FontWeight.Medium),
+            maxLines = 2
         )
-    }
-}
-
-@Composable
-private fun FullWidgetView(data: WidgetData, context: Context) {
-    val size = LocalSize.current
-    val isLarge = size.height >= 200.dp
-    // Масштабирование текста: адаптивное — маленький по умолчанию, растёт при растягивании
-    val baseHeight = 300f
-    val scale = (size.height.value / baseHeight).coerceIn(0.8f, 1.35f)
-    val dateFontSize = (12 * scale).sp
-    val primaryFontSize = (11 * scale).sp
-    val secondaryFontSize = (10 * scale).sp
-    val iconSize = (16 * scale).dp
-    val iconGap = (4 * scale).dp
-    val btnColor = Color(data.themeColor)
-    
-    Column(modifier = GlanceModifier.fillMaxSize()) {
-        // ═══════════════════════════════════════════════
-        // ВЕРХНЯЯ ЧАСТЬ — градиентный фон (растягивается при ресайзе)
-        // ═══════════════════════════════════════════════
-        Column(
-            modifier = GlanceModifier
-                .fillMaxWidth()
-                .defaultWeight()
-                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp)
-        ) {
-            // Строка поиска (белая pill)
-            Box(
-                modifier = GlanceModifier
-                    .fillMaxWidth()
-                    .height(44.dp)
-                    .cornerRadius(22.dp)
-                    .background(ColorProvider(searchBg))
-                    .clickable(actionStartActivity(
-                        Intent(context, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                            setData(android.net.Uri.parse("iwomail://widget/search"))
-                            putExtra("search", true)
-                        }
-                    ))
-                    .padding(horizontal = 14.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Image(
-                        provider = ImageProvider(R.drawable.ic_search),
-                        contentDescription = null,
-                        modifier = GlanceModifier.size(18.dp),
-                        colorFilter = ColorFilter.tint(ColorProvider(searchHint))
-                    )
-                    Spacer(modifier = GlanceModifier.width(10.dp))
-                    Text(
-                        text = context.getString(R.string.widget_search_mail),
-                        style = TextStyle(color = ColorProvider(searchHint), fontSize = 14.sp)
-                    )
-                }
-            }
-            
-            Spacer(modifier = GlanceModifier.defaultWeight())
-            
-            // Дата + непрочитанные
-            if (data.todayDate.isNotBlank()) {
-                Row(
-                    modifier = GlanceModifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = data.todayDate,
-                        style = TextStyle(
-                            color = ColorProvider(textWhite),
-                            fontSize = dateFontSize,
-                            fontWeight = FontWeight.Bold
-                        )
-                    )
-                    if (data.totalUnread > 0) {
-                        Spacer(modifier = GlanceModifier.defaultWeight())
-                        Text(
-                            text = "${data.totalUnread} ${context.getString(R.string.widget_unread)}",
-                            style = TextStyle(
-                                color = ColorProvider(textOnTheme),
-                                fontSize = primaryFontSize,
-                                fontWeight = FontWeight.Medium
-                            )
-                        )
-                    }
-                }
-            }
-            
-            Spacer(modifier = GlanceModifier.defaultWeight())
-            
-            // Календарь
-            // Box (FrameLayout) — clickable-цель. В Glance клик по Row/Column с детьми Image/Text
-            // ловится только на «пустом» месте вокруг контента (сами иконка и текст не кликабельны).
-            // Box ловит клик по всей области — как строка поиска и кнопки ниже (рабочий паттерн).
-            Box(
-                modifier = GlanceModifier
-                    .fillMaxWidth()
-                    .clickable(actionStartActivity(
-                        Intent(context, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                            setData(android.net.Uri.parse("iwomail://widget/calendar"))
-                            putExtra("calendar", true)
-                        }
-                    ))
-            ) {
-            Row(
-                modifier = GlanceModifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Image(
-                    provider = ImageProvider(R.drawable.ic_calendar_month),
-                    contentDescription = null,
-                    modifier = GlanceModifier.size(iconSize),
-                    colorFilter = ColorFilter.tint(ColorProvider(textOnTheme))
-                )
-                Spacer(modifier = GlanceModifier.width(iconGap))
-                if (data.nextEvent != null) {
-                    Text(
-                        text = "${context.getString(R.string.widget_calendar)}: ${data.calendarEventsCount}",
-                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = primaryFontSize)
-                    )
-                    Spacer(modifier = GlanceModifier.width(8.dp))
-                    Text(
-                        text = "• ${data.nextEvent.time} ${data.nextEvent.title}".trimEnd(),
-                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = secondaryFontSize),
-                        maxLines = 1
-                    )
-                } else {
-                    Text(
-                        text = context.getString(R.string.widget_no_events_today),
-                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = primaryFontSize)
-                    )
-                }
-            }
-            }
-            
-            Spacer(modifier = GlanceModifier.defaultWeight())
-            
-            // Задачи
-            val taskCount = if (data.todayTasksCount > 0) data.todayTasksCount else data.activeTasksCount
-            // Box (FrameLayout) — clickable-цель (см. комментарий у «Календарь»): клик по всей
-            // области, а не только по «пустому» месту вокруг иконки/текста.
-            Box(
-                modifier = GlanceModifier
-                    .fillMaxWidth()
-                    .clickable(actionStartActivity(
-                        Intent(context, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                            setData(android.net.Uri.parse("iwomail://widget/tasks"))
-                            putExtra("tasks", true)
-                        }
-                    ))
-            ) {
-            Row(
-                modifier = GlanceModifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Image(
-                    provider = ImageProvider(R.drawable.ic_task),
-                    contentDescription = null,
-                    modifier = GlanceModifier.size(iconSize),
-                    colorFilter = ColorFilter.tint(ColorProvider(textOnTheme))
-                )
-                Spacer(modifier = GlanceModifier.width(iconGap))
-                if (taskCount > 0) {
-                    Text(
-                        text = "${context.getString(R.string.widget_tasks)}: $taskCount",
-                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = primaryFontSize)
-                    )
-                    if (data.nextTaskTitle.isNotBlank()) {
-                        Spacer(modifier = GlanceModifier.width(8.dp))
-                        Text(
-                            text = "• ${data.nextTaskTitle}",
-                            style = TextStyle(color = ColorProvider(textOnTheme), fontSize = secondaryFontSize),
-                            maxLines = 1
-                        )
-                    }
-                } else {
-                    Text(
-                        text = context.getString(R.string.widget_no_tasks),
-                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = primaryFontSize)
-                    )
-                }
-            }
-            }
-            
-            Spacer(modifier = GlanceModifier.defaultWeight())
-            
-            // Заметки
-            // Box (FrameLayout) — clickable-цель (см. комментарий у «Календарь»): клик по всей
-            // области, а не только по «пустому» месту вокруг иконки/текста.
-            Box(
-                modifier = GlanceModifier
-                    .fillMaxWidth()
-                    .clickable(actionStartActivity(
-                        Intent(context, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                            setData(android.net.Uri.parse("iwomail://widget/notes"))
-                            putExtra("notes", true)
-                        }
-                    ))
-            ) {
-            Row(
-                modifier = GlanceModifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Image(
-                    provider = ImageProvider(R.drawable.ic_sticky_note),
-                    contentDescription = null,
-                    modifier = GlanceModifier.size(iconSize),
-                    colorFilter = ColorFilter.tint(ColorProvider(textOnTheme))
-                )
-                Spacer(modifier = GlanceModifier.width(iconGap))
-                if (data.notesCount > 0) {
-                    Text(
-                        text = "${context.getString(R.string.widget_notes)}: ${data.notesCount}",
-                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = primaryFontSize)
-                    )
-                } else {
-                    Text(
-                        text = context.getString(R.string.widget_no_notes),
-                        style = TextStyle(color = ColorProvider(textOnTheme), fontSize = primaryFontSize)
-                    )
-                }
-            }
-            }
-        }
-        
-        // ═══════════════════════════════════════════════
-        // НИЖНЯЯ ЧАСТЬ — тёмный полупрозрачный блок (компактный, внизу)
-        // ═══════════════════════════════════════════════
-        Column(
-            modifier = GlanceModifier
-                .fillMaxWidth()
-                .background(ColorProvider(darkBg))
-                .cornerRadius(24.dp)
-                .padding(horizontal = 16.dp, vertical = 10.dp)
-        ) {
-            // Последние письма (при большом виджете)
-            val emailPreviewSize = (11 * scale).sp
-            if (isLarge && data.recentEmails.isNotEmpty()) {
-                Column(
-                    modifier = GlanceModifier
-                        .fillMaxWidth()
-                        .background(ColorProvider(Color(0x0AFFFFFF)))
-                        .cornerRadius(12.dp)
-                ) {
-                    val evenRowBg = Color(0x30FFFFFF)
-                    val oddRowBg = Color(0x1AFFFFFF)
-                    // Форматтеры создаём один раз вне цикла (было — до 3× на рендер).
-                    val nowMillis = System.currentTimeMillis()
-                    val emailTimeFmt = DateFormat.getTimeFormat(context)
-                    val emailDayFmt = java.text.SimpleDateFormat("dd.MM", Locale.getDefault())
-                    data.recentEmails.forEachIndexed { index, email ->
-                        val rowBg = if (index % 2 == 0) evenRowBg else oddRowBg
-                        // Сегодняшнее письмо → время (полезнее для свежей почты), старое → дата.
-                        val emailDateStr = when {
-                            email.dateReceived <= 0 -> ""
-                            isSameLocalDay(email.dateReceived, nowMillis) -> emailTimeFmt.format(Date(email.dateReceived))
-                            else -> emailDayFmt.format(Date(email.dateReceived))
-                        }
-                        // Box (FrameLayout) — clickable-цель (см. комментарий у «Календарь»):
-                        // открытие письма по клику в любом месте строки, а не только по отступам.
-                        Box(
-                            modifier = GlanceModifier
-                                .fillMaxWidth()
-                                .background(ColorProvider(rowBg))
-                                .clickable(actionStartActivity(
-                                    Intent(context, MainActivity::class.java).apply {
-                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                                        this.data = android.net.Uri.parse("iwomail://email/${email.id}")
-                                        putExtra(MainActivity.EXTRA_OPEN_EMAIL_ID, email.id)
-                                    }
-                                ))
-                        ) {
-                        Row(
-                            modifier = GlanceModifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = if (emailDateStr.isNotBlank()) "${email.sender} ($emailDateStr)" else email.sender,
-                                style = TextStyle(
-                                    color = ColorProvider(textLight),
-                                    fontSize = (10 * scale).sp,
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                maxLines = 1
-                            )
-                            Spacer(modifier = GlanceModifier.width(6.dp))
-                            Text(
-                                text = email.preview,
-                                style = TextStyle(color = ColorProvider(textLightAlpha), fontSize = emailPreviewSize),
-                                maxLines = 1
-                            )
-                        }
-                        }
-                    }
-                }
-                Spacer(modifier = GlanceModifier.height(6.dp))
-            } else if (isLarge && data.contentHidden && data.totalUnread > 0) {
-                // Only counts leave the app. Each row goes to its own mailbox, never to a guessed message.
-                // Только активный аккаунт, как и остальное содержимое виджета; остальные видны на аватарах
-                data.accounts.filter { it.isActive && it.unreadCount > 0 }.forEach { account ->
-                    Box(
-                        modifier = GlanceModifier.fillMaxWidth().cornerRadius(12.dp)
-                            .background(ColorProvider(Color(0x1AFFFFFF)))
-                            .clickable(actionStartActivity(privateInboxIntent(context, account.id)))
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            text = context.getString(R.string.widget_account_unread, account.name, account.unreadCount),
-                            style = TextStyle(color = ColorProvider(textLight), fontSize = secondaryFontSize),
-                            maxLines = 1
-                        )
-                    }
-                }
-                Spacer(modifier = GlanceModifier.height(6.dp))
-            } else if (isLarge) {
-                Text(
-                    text = context.getString(R.string.widget_no_new_mail),
-                    style = TextStyle(color = ColorProvider(textLightAlpha), fontSize = secondaryFontSize)
-                )
-                Spacer(modifier = GlanceModifier.height(6.dp))
-            }
-            
-            // Аккаунты + время синхронизации + кнопки-иконки
-            Row(
-                modifier = GlanceModifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Аватары аккаунтов (слева). Glance Row → горизонтальный LinearLayout без переноса:
-                // на узком виджете 4 аватара + текст синка + 2 кнопки не влезают по ширине и обрезаются
-                // (кнопка синка уходит за край). Поэтому на узких размерах — меньше аватаров и без метки
-                // синхронизации; сами аватары масштабируем вместе с остальным UI (было — фикс. 48dp).
-                val isWide = size.width >= 300.dp
-                val maxAvatars = if (isWide) 4 else 2
-                widgetAvatars(data.accounts, maxAvatars).forEach { acc ->
-                    AccountAvatar(acc, context, scale)
-                    Spacer(modifier = GlanceModifier.width(4.dp))
-                }
-
-                // Время синка (только на широком) — ГИБКИЙ элемент: забирает свободное место между
-                // аватарами и кнопками и усекается по ширине (maxLines=1), а НЕ выталкивает кнопки за
-                // край при любой локали/длине метки (Row → LinearLayout без переноса). Иначе — распорка.
-                if (isWide && data.lastSyncStr.isNotBlank()) {
-                    Spacer(modifier = GlanceModifier.width(4.dp))
-                    Text(
-                        text = data.lastSyncStr,
-                        modifier = GlanceModifier.defaultWeight(),
-                        maxLines = 1,
-                        style = TextStyle(
-                            color = ColorProvider(textOnTheme),
-                            fontSize = secondaryFontSize
-                        )
-                    )
-                } else {
-                    Spacer(modifier = GlanceModifier.defaultWeight())
-                }
-
-                // Кнопки-иконки: круг прежнего размера, область нажатия — до 48 dp, сколько оставляют аватары
-                // (SET-12); у кнопки — название для TalkBack
-                val iconBtnSize = (32 * scale).dp
-                val shownAvatars = data.accounts.size.coerceAtMost(maxAvatars)
-                val touchSize = widgetButtonTouchSize(
-                    rowWidth = size.width - 32.dp,
-                    avatarsWidth = (40 * scale).dp * shownAvatars + 4.dp * shownAvatars,
-                    visualSize = iconBtnSize
-                )
-                WidgetIconButton(
-                    touchSize = touchSize,
-                    circleSize = iconBtnSize,
-                    iconSize = iconSize,
-                    color = btnColor,
-                    icon = R.drawable.ic_edit,
-                    description = context.getString(R.string.widget_compose),
-                    onClick = actionStartActivity(
-                        Intent(context, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                            setData(android.net.Uri.parse("iwomail://widget/compose"))
-                            putExtra("compose", true)
-                        }
-                    )
-                )
-
-                Spacer(modifier = GlanceModifier.width(WIDGET_BUTTON_GAP))
-
-                WidgetIconButton(
-                    touchSize = touchSize,
-                    circleSize = iconBtnSize,
-                    iconSize = iconSize,
-                    color = btnColor,
-                    icon = R.drawable.ic_sync,
-                    description = context.getString(R.string.widget_sync_now),
-                    onClick = actionSendBroadcast(
-                        Intent(SyncAlarmReceiver.ACTION_SYNC_NOW).apply {
-                            setClass(context, SyncAlarmReceiver::class.java)
-                        }
-                    )
-                )
-            }
-        }
-    }
-}
-
-private val WIDGET_BUTTON_GAP = 8.dp
-private val WIDGET_MIN_TOUCH = 48.dp
-
-/**
- * Область нажатия кнопки виджета (SET-12): 48 dp (минимум Android для касания), если в строке есть место; иначе —
- * поровну всё, что остаётся после аватаров и промежутка, но не меньше видимого круга [visualSize]. Узкий виджет
- * (180 dp) с двумя аватарами даёт около 34 dp вместо прежних 26 dp.
- */
-internal fun widgetButtonTouchSize(rowWidth: Dp, avatarsWidth: Dp, visualSize: Dp): Dp {
-    val perButton = (rowWidth - avatarsWidth - WIDGET_BUTTON_GAP) / 2
-    return perButton.coerceIn(visualSize, maxOf(visualSize, WIDGET_MIN_TOUCH))
-}
-
-/** Круглая кнопка-иконка: прозрачная область нажатия [touchSize] вокруг круга [circleSize], с названием для TalkBack. */
-@Composable
-private fun WidgetIconButton(
-    touchSize: Dp,
-    circleSize: Dp,
-    iconSize: Dp,
-    color: Color,
-    @androidx.annotation.DrawableRes icon: Int,
-    description: String,
-    onClick: androidx.glance.action.Action
-) {
-    Box(
-        modifier = GlanceModifier
-            .size(touchSize)
-            .cornerRadius(touchSize / 2)
-            .clickable(onClick)
-            .semantics { contentDescription = description },
-        contentAlignment = Alignment.Center
-    ) {
-        Box(
-            modifier = GlanceModifier
-                .size(circleSize)
-                .background(ColorProvider(color))
-                .cornerRadius(circleSize / 2),
-            contentAlignment = Alignment.Center
-        ) {
-            // Название — у области нажатия: TalkBack читает его один раз
-            Image(
-                provider = ImageProvider(icon),
-                contentDescription = null,
-                modifier = GlanceModifier.size(iconSize),
-                colorFilter = ColorFilter.tint(ColorProvider(Color.White))
-            )
-        }
-    }
-}
-
-@Composable
-private fun AccountAvatar(account: AccountUnread, context: Context, scale: Float) {
-    val accountColor = try {
-        Color(account.color)
-    } catch (_: Exception) {
-        Color(0xFF6200EE)
-    }
-    // Масштабируем вместе с остальным UI (было — фикс. 48/40dp): на узком виджете аватары
-    // ужимаются, чтобы 2 аватара + 2 кнопки гарантированно влезали в ширину без обрезки.
-    val boxSize = (40 * scale).dp
-    val circleSize = (34 * scale).dp
-    val letterSize = (15 * scale).sp
-
-    // Для TalkBack: на круге видна только первая буква (SET-12), активный аккаунт отмечен словами
-    val base = if (account.unreadCount > 0) {
-        context.getString(R.string.widget_account_unread, account.name, account.unreadCount)
-    } else {
-        context.getString(R.string.widget_account, account.name)
-    }
-    val description = if (account.isActive) context.getString(R.string.widget_account_active, base)
-        else context.getString(R.string.widget_account_select, base)
-
-    // Активный — открыть его почту (как раньше); другой — сделать активным, не уходя с рабочего стола: писать
-    // и искать с виджета будут уже от него, кольцо переходит на выбранный аватар
-    val onClick = if (account.isActive) {
-        actionStartActivity(
-            Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                this.data = android.net.Uri.parse("iwomail://account/${account.id}")
-                putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, account.id)
-                // Если есть непрочитанные → фильтр непрочитанных, иначе → просто входящие
-                if (account.unreadCount > 0) {
-                    putExtra(MainActivity.EXTRA_OPEN_INBOX_UNREAD, true)
-                }
-            }
-        )
-    } else {
-        actionRunCallback<SelectWidgetAccountAction>(actionParametersOf(SelectWidgetAccountAction.ACCOUNT_ID to account.id))
-    }
-
-    Box(
-        modifier = GlanceModifier
-            .size(boxSize)
-            .clickable(onClick)
-            .semantics { contentDescription = description },
-        contentAlignment = Alignment.TopStart
-    ) {
-        // Аватар (круг) — размер масштабируется вместе с виджетом. Активный — в белом кольце: у Glance нет рамки,
-        // кольцо — белый круг под аватаром на 2 dp шире с каждой стороны
-        val ring = 2.dp
-        Box(
-            modifier = GlanceModifier
-                .size(circleSize)
-                .cornerRadius(circleSize / 2)
-                .background(ColorProvider(if (account.isActive) Color.White else accountColor)),
-            contentAlignment = Alignment.Center
-        ) {
-            val inner = if (account.isActive) circleSize - ring * 2 else circleSize
-            Box(
-                modifier = GlanceModifier
-                    .size(inner)
-                    .cornerRadius(inner / 2)
-                    .background(ColorProvider(accountColor)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = account.name.firstOrNull()?.uppercase() ?: "?",
-                    style = TextStyle(
-                        color = ColorProvider(Color.White),
-                        fontSize = letterSize,
-                        fontWeight = FontWeight.Bold
-                    )
-                )
-            }
-        }
-        
-        // Бейдж непрочитанных (справа внизу)
-        if (account.unreadCount > 0) {
-            Box(
-                modifier = GlanceModifier.fillMaxSize(),
-                contentAlignment = Alignment.BottomEnd
-            ) {
-                Box(
-                    modifier = GlanceModifier
-                        .background(ColorProvider(accentBlue))
-                        .cornerRadius(8.dp)
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                ) {
-                    Text(
-                        text = if (account.unreadCount > 99) "99+" else account.unreadCount.toString(),
-                        style = TextStyle(
-                            color = ColorProvider(Color.White),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    )
-                }
-            }
-        }
     }
 }
 
@@ -946,8 +471,13 @@ class MailWidgetReceiver : GlanceAppWidgetReceiver() {
 suspend fun updateMailWidget(context: Context) {
     val appContext = context.applicationContext
     widgetUpdateMutex.withLock {
-        try { MailWidget().updateAll(appContext) } catch (e: Exception) {
+        try {
+            val widget = MailWidget()
+            widget.requestRefresh()
+            widget.updateAll(appContext)
+        } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.w("MailWidget", "Widget update failed", e)
         }
     }
 }

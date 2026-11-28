@@ -54,20 +54,11 @@ import com.dedovmosol.iwomail.ui.utils.findActivity
 import com.dedovmosol.iwomail.ui.utils.animatedScale
 import com.dedovmosol.iwomail.ui.utils.rememberPulseScale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-private val ACCOUNT_COLORS = listOf(
-    0xFF1976D2.toInt(), // Blue
-    0xFF388E3C.toInt(), // Green
-    0xFFD32F2F.toInt(), // Red
-    0xFF7B1FA2.toInt(), // Purple
-    0xFFF57C00.toInt(), // Orange
-    0xFF0097A7.toInt(), // Cyan
-    0xFF5D4037.toInt(), // Brown
-    0xFF455A64.toInt(), // Blue Grey
-)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -100,7 +91,8 @@ fun SetupScreen(
     var password by remember { mutableStateOf("") }
     var domain by rememberSaveable { mutableStateOf("") }
     var acceptAllCerts by rememberSaveable { mutableStateOf(false) }
-    var selectedColor by rememberSaveable { mutableIntStateOf(ACCOUNT_COLORS[0]) }
+    var selectedColor by rememberSaveable { mutableIntStateOf(com.dedovmosol.iwomail.domain.AccountColors.PALETTE[0]) }
+    var colorPicked by rememberSaveable { mutableStateOf(false) }
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
@@ -309,7 +301,7 @@ fun SetupScreen(
                 displayName = parts[1]
                 serverUrl = parts[2]
                 acceptAllCerts = parts[3].toBoolean()
-                selectedColor = parts[4].toIntOrNull() ?: ACCOUNT_COLORS[0]
+                selectedColor = parts[4].toIntOrNull() ?: com.dedovmosol.iwomail.domain.AccountColors.PALETTE[0]; colorPicked = true
                 incomingPort = parts[5]
                 outgoingServer = parts[6]
                 outgoingPort = parts[7]
@@ -362,7 +354,7 @@ fun SetupScreen(
                 displayName = parts[1]
                 serverUrl = parts[2]
                 acceptAllCerts = parts[3].toBoolean()
-                selectedColor = parts[4].toIntOrNull() ?: ACCOUNT_COLORS[0]
+                selectedColor = parts[4].toIntOrNull() ?: com.dedovmosol.iwomail.domain.AccountColors.PALETTE[0]; colorPicked = true
                 incomingPort = parts[5]
                 outgoingServer = parts[6]
                 outgoingPort = parts[7]
@@ -438,7 +430,14 @@ fun SetupScreen(
     }
 
     // Загружаем данные аккаунта при редактировании
+    // Новый аккаунт — свободный цвет палитры, а не всегда синий: аватары аккаунтов различимы. Только если цвет ещё
+    // не задан (восстановлен из сохранённой формы) — признак colorPicked
     LaunchedEffect(editAccountId) {
+        if (editAccountId == null && !colorPicked) {
+            val used = accountRepo.accounts.first().map { it.color }
+            if (!colorPicked) selectedColor = com.dedovmosol.iwomail.domain.AccountColors.forNewAccount(used)
+            colorPicked = true
+        }
         editAccountId?.let { id ->
             accountRepo.getAccount(id)?.let { account ->
                 displayName = account.displayName

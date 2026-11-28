@@ -1584,15 +1584,6 @@ $foldersXml
     ): EasResult<String> = emailService.deleteEmail(collectionId, serverId, syncKey)
 
     /**
-     * Окончательно удалить письмо через EWS (без перемещения в корзину)
-     * @see EasEmailService.deleteEmailPermanentlyViaEWS
-     */
-    suspend fun deleteEmailPermanentlyViaEWS(
-        serverId: String,
-        subject: String = ""
-    ): EasResult<Unit> = emailService.deleteEmailPermanentlyViaEWS(serverId, subject)
-
-    /**
      * Окончательно удалить письмо через EAS Sync Delete
      * @see EasEmailService.deleteEmailPermanently
      */
@@ -1606,11 +1597,11 @@ $foldersXml
      * Batch удаление писем
      * @see EasEmailService.deleteEmailsPermanentlyBatch
      */
-    suspend fun deleteEmailsPermanentlyBatch(
+    internal suspend fun deleteEmailsPermanentlyBatch(
         collectionId: String,
         serverIds: List<String>,
         syncKey: String
-    ): EasResult<String> = emailService.deleteEmailsPermanentlyBatch(collectionId, serverIds, syncKey)
+    ): EasResult<EasDeleteResponse> = emailService.deleteEmailsPermanentlyBatch(collectionId, serverIds, syncKey)
 
     private suspend fun <T> executeEasCommand(
         command: String,

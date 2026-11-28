@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.dedovmosol.iwomail.data.database.AttachmentEntity
 import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.repository.AccountRepository
+import com.dedovmosol.iwomail.data.repository.MailDeleteSelection
 import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.data.repository.RepositoryErrors
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
@@ -538,7 +539,7 @@ class EmailDetailViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isDeleting = true) }
             try {
-                val result = localOp { actions.deleteEmails(listOf(emailId), isInTrash = false) }
+                val result = localOp { actions.moveToTrash(listOf(emailId)) }
                 when (result) {
                     is EasResult.Success -> {
                         val count = (result.data as? Int) ?: 0
@@ -765,13 +766,13 @@ class EmailDetailViewModel(
         return failure
     }
 
-    suspend fun deleteEmailPermanently(
-        emailIds: List<String>,
+    internal suspend fun deleteEmailPermanently(
+        selection: MailDeleteSelection,
         onProgress: (deleted: Int, total: Int) -> Unit
     ): EasResult<Int> {
         // Запись исчезает посреди операции — это её результат: экран закроется после неё, без «удалено на сервере»
         try {
-            return localOp { withContext(ioDispatcher) { mailRepo.deleteEmailsPermanentlyWithProgress(emailIds, onProgress) } }
+            return localOp { withContext(ioDispatcher) { mailRepo.deleteEmailsPermanentlyWithProgress(selection, onProgress) } }
         } finally {
             closeIfGone()
         }

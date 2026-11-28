@@ -77,15 +77,8 @@ class EmailDetailActions(
         return result.toUnit()
     }
 
-    suspend fun deleteEmails(emailIds: List<String>, isInTrash: Boolean): EasResult<Any> {
-        return withContext(Dispatchers.IO) {
-            if (isInTrash) {
-                mailRepo.deleteEmailsPermanentlyWithProgress(emailIds) { _, _ -> }
-            } else {
-                mailRepo.moveToTrash(emailIds)
-            }
-        }
-    }
+    suspend fun moveToTrash(emailIds: List<String>): EasResult<Int> =
+        withContext(Dispatchers.IO) { mailRepo.moveToTrash(emailIds) }
 
     suspend fun moveEmails(emailIds: List<String>, targetFolderId: String): EasResult<Any> =
         withContext(Dispatchers.IO) { mailRepo.moveEmails(emailIds, targetFolderId) }

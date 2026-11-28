@@ -5,6 +5,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import com.dedovmosol.iwomail.data.database.EmailEntity
+import com.dedovmosol.iwomail.data.repository.MailDeleteSelection
 import com.dedovmosol.iwomail.domain.EmailThread
 import com.dedovmosol.iwomail.domain.EmailThreads
 import com.dedovmosol.iwomail.domain.MailMessageIdentity
@@ -46,6 +47,7 @@ internal class MailListScope private constructor(
 /** A destructive confirmation may be cancelled, but must never silently acquire different targets. */
 internal class MailConfirmation(ids: Set<String>, emails: List<EmailEntity>) {
     private val targets = snapshot(ids, emails)
+    val deletion = MailDeleteSelection(targets)
     val count: Int get() = targets.size
 
     fun matches(selected: Set<String>, emails: List<EmailEntity>): Boolean =

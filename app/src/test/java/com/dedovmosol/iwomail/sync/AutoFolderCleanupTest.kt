@@ -64,6 +64,52 @@ class AutoFolderCleanupTest {
         assertThat(ops.deleted).containsExactly("1_old", "1_new")
     }
 
+    @Test fun `same id after a completed reset must age again`() = runTest {
+        val account = listOf(settings(trash = 7))
+        ops.trash += "1_a"
+        ops.resetEpochs["1_trash"] = "old-epoch"
+        cleanup().run(account)
+        advance(7 * day)
+        ops.resetEpochs["1_trash"] = "new-epoch" // The new message reused the old row ID.
+
+        assertThat(cleanup().run(account)).isTrue()
+        assertThat(ops.deleted).isEmpty()
+        assertThat(store.read(1, CleanupKind.TRASH)?.resetEpochs).isEqualTo(mapOf("1_trash" to "new-epoch"))
+
+        advance(7 * day)
+        assertThat(cleanup().run(account)).isTrue()
+        assertThat(ops.deleted).containsExactly("1_a")
+    }
+
+    @Test fun `reset between snapshot and delete rejects old epoch and preserves baseline`() = runTest {
+        val account = listOf(settings(spam = 7))
+        ops.spam += "1_a"
+        cleanup().run(account)
+        val oldState = store.read(1, CleanupKind.SPAM)
+        advance(7 * day)
+        ops.beforeDelete = { ops.resetEpochs["1_spam"] = "new-epoch" }
+
+        assertThat(cleanup().run(account)).isFalse()
+        assertThat(ops.deleted).isEmpty()
+        assertThat(store.read(1, CleanupKind.SPAM)).isEqualTo(oldState)
+
+        assertThat(cleanup().run(account)).isTrue()
+        assertThat(ops.deleted).isEmpty()
+    }
+
+    @Test fun `legacy mail state is rebaselined but local drafts keep their age`() = runTest {
+        ops.trash += "1_a"
+        ops.drafts["1_d"] = t0 - 30 * day
+        store.write(1, CleanupKind.TRASH, CleanupState(7, now, setOf("1_a")))
+        store.write(1, CleanupKind.DRAFTS, CleanupState(7, now, setOf("1_d")))
+        advance(7 * day)
+
+        assertThat(cleanup().run(listOf(settings(trash = 7, drafts = 7)))).isTrue()
+        assertThat(ops.deleted).isEmpty()
+        assertThat(ops.deletedDrafts).containsExactly("1_d")
+        assertThat(store.read(1, CleanupKind.TRASH)?.resetEpochs).isEqualTo(mapOf("1_trash" to null))
+    }
+
     @Test fun `just before interval nothing is deleted`() = runTest {
         ops.trash += "1_a"
         cleanup().run(listOf(settings(trash = 3)))
@@ -236,7 +282,7 @@ class AutoFolderCleanupTest {
 
     @Test fun `store round trip keeps all ids`() {
         val ids = (1..20_000).map { "42_5:$it" }.toSet()
-        val state = CleanupState(14, CleanupClock(t0, 123L, 9), ids)
+        val state = CleanupState(14, CleanupClock(t0, 123L, 9), ids, mapOf("42_spam|папка" to "epoch", "42_junk" to null))
         store.write(42, CleanupKind.SPAM, state)
 
         assertThat(store.read(42, CleanupKind.SPAM)).isEqualTo(state)
@@ -261,18 +307,27 @@ class AutoFolderCleanupTest {
         val deleted = mutableListOf<String>()
         val deletedDrafts = mutableListOf<String>()
         val batches = mutableListOf<List<String>>()
+        val resetEpochs = mutableMapOf<String, String>()
+        var beforeDelete: (() -> Unit)? = null
         var failDeletes = false
 
-        override suspend fun folderEmailIds(accountId: Long, kind: CleanupKind): Set<String> {
+        override suspend fun folderSnapshots(accountId: Long, kind: CleanupKind): List<AutoFolderCleanup.FolderSnapshot> {
             val src = if (kind == CleanupKind.SPAM) spam else trash
-            return src.filterTo(HashSet()) { it.startsWith("${accountId}_") }
+            val folderId = "${accountId}_${kind.key}"
+            return listOf(AutoFolderCleanup.FolderSnapshot(folderId, resetEpochs[folderId], src.filter { it.startsWith("${accountId}_") }))
         }
 
         override suspend fun localDrafts(accountId: Long): Map<String, Long> =
             drafts.filterKeys { it.startsWith("${accountId}_") }
 
-        override suspend fun deletePermanently(ids: List<String>): Boolean {
+        override suspend fun deletePermanently(ids: List<String>, expectedResetEpochs: Map<String, String?>): Boolean {
+            beforeDelete?.also { beforeDelete = null }?.invoke()
             if (failDeletes) return false
+            for (id in ids) {
+                val kind = if (id in spam) CleanupKind.SPAM else CleanupKind.TRASH
+                val folderId = "${id.substringBefore('_')}_${kind.key}"
+                if (folderId !in expectedResetEpochs || expectedResetEpochs[folderId] != resetEpochs[folderId]) return false
+            }
             batches += ids
             deleted += ids
             trash.removeAll(ids.toSet())

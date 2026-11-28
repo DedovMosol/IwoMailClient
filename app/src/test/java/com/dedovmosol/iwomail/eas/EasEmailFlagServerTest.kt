@@ -16,8 +16,8 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class EasEmailFlagServerTest {
 
-    private fun FakeExchange.emailService(): EasEmailService {
-        val transport = transport("12.1")
+    private fun FakeExchange.emailService(version: String = "12.1"): EasEmailService {
+        val transport = transport(version)
         return EasEmailService(EasEmailService.EmailServiceDependencies(
             executeEasCommand = object : EasEmailService.EasCommandExecutor {
                 override suspend fun <T> invoke(command: String, xml: String, parser: (String) -> T): EasResult<T> =
@@ -106,6 +106,34 @@ class EasEmailFlagServerTest {
         val result = exchange.emailService().setFlag("5", "5:1", "K1", MailFlag.NONE)
 
         assertThat(result).isInstanceOf(EasResult.Error::class.java)
+    }
+
+    @Test
+    fun `delete confirms only acknowledged or absent items and keeps the new collection key`() = runBlocking<Unit> {
+        val received = "$root<Collections><Collection><SyncKey>K2</SyncKey><CollectionId>5</CollectionId><Status>1</Status>" +
+            "<Responses><Delete><ServerId>5:2</ServerId><Status>8</Status></Delete>" +
+            "<Delete><ServerId>5:3</ServerId><Status>5</Status></Delete></Responses></Collection></Collections></Sync>"
+        for (version in listOf("12.1", "14.0", "14.1")) {
+            val exchange = FakeExchange { Reply.Wbxml(received) }
+            val result = exchange.emailService(version).deleteEmailsPermanentlyBatch("5", listOf("5:1", "5:2", "5:3"), "K1")
+            assertThat(result).isEqualTo(EasResult.Success(EasDeleteResponse("K2", setOf("5:1", "5:2"))))
+            assertThat(exchange.calls.single().xml).contains("<GetChanges>0</GetChanges>")
+        }
+    }
+
+    @Test
+    fun `wrong collection malformed response and collection failure never confirm delete`() = runBlocking<Unit> {
+        val valid = EasSyncXml.initial("K2", "5")
+        for (reply in listOf(
+            Reply.Wbxml(EasSyncXml.status(8, "5")),
+            Reply.Wbxml(EasSyncXml.initial("K2", "12")),
+            Reply.RawBytes(FakeExchange.truncatedWbxml(valid, WbxmlParser().generate(valid).size - 2))
+        )) {
+            val exchange = FakeExchange { reply }
+            assertThat(exchange.emailService().deleteEmailsPermanentlyBatch("5", listOf("5:1"), "K1"))
+                .isInstanceOf(EasResult.Error::class.java)
+            assertThat(exchange.calls).hasSize(1)
+        }
     }
 
     @Test

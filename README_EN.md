@@ -18,7 +18,7 @@
 
 Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through **Exchange ActiveSync (EAS)** and **Exchange Web Services (EWS)**. IMAP/POP3 are present as a beta direction with limited functionality.
 
-> **Important:** 🚧 The project is under active development. The next release is **1.7.0**, coming right after 1.6.1. See the [changelog](docs/CHANGELOG_EN.md) for what changes. Manual testing of the pre-release has been completed, and a list of improvements has been identified. I will try to implement them in the near future.
+> **Important:** 🚧 The next release is **1.7.0**, following 1.6.1. Pre-release verification is in progress. See the [changelog](docs/CHANGELOG_EN.md) for what changes.
 
 **Version:** 1.7.0 in the [source tree](app/build.gradle.kts) (`versionCode` 27), the [update channel](update.json) lists 1.6.1 (`versionCode` 24) · **Package:** `com.dedovmosol.iwomail` · **Developer:** DedovMosol · **Telegram:** [@i_wantout](https://t.me/i_wantout) · **Email:** andreyid@outlook.com
 
@@ -43,7 +43,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **✅ Tasks:** active/completed/important/overdue tasks, due dates, priorities, assignment, reminders, trash and restore, reset and resync, edits and moves to trash made offline are kept on the device and sent when the connection is back (`pending_pim_changes`).
 - **🗒 Notes:** Exchange Notes sync, create/edit, trash and restore, reset and resync, offline edits and trash work as for tasks.
 - **🔔 Notifications:** Direct Push via EAS Ping, WorkManager sync, AlarmManager fallback, notifications for mail, calendar, tasks, flags, updates and outbox, a calendar/task/flag reminder tap switches to that account and opens the item, separate notification channels per account (sound and importance in system settings), quiet hours (notifications without sound or vibration), haptic feedback that can be turned off, server connection-loss notification.
-- **🔐 App lock:** password (only a PBKDF2-HMAC-SHA256 hash is stored, 600,000 iterations) and fingerprint, locks on cold start and when the app goes to the background. Growing pauses after 5 wrong passwords. While the lock is on, messages are hidden in Recents, the widget and lock-screen notifications.
+- **🔐 App lock:** password (only a PBKDF2-HMAC-SHA256 hash is stored, 600,000 iterations) and fingerprint, locks on cold start and when the app goes to the background. Growing pauses after 5 wrong passwords. The lock hides messages from Recents and notifications. Enabling the lock hides messages and event and task titles in the widget, including when its Glance session is already running.
 - **🎨 Interface:** Jetpack Compose, Material 3, RU/EN localization, light/dark/system theme, color schemes, daily themes, custom file icons, drag selection with haptics, HyperOS-style settings (one-line title with the back arrow, cards with colored icons in filled tiles, choices in a bottom sheet) split into Accounts, Mail, Notifications, Personalization, Security, About.
 - **📊 Widget & shortcuts:** Glance home-screen widget with active account selection (tap an avatar), quick access to mail, search, calendar, tasks and compose, widget data is read via lightweight Room projections without loading heavy mail/event bodies.
 - **⬆️ Updates:** `update.json` check on GitHub, APK selection by ABI, download, install and rollback preparation.
@@ -55,7 +55,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **Exchange 2007 SP1:** calendar attachment upload/fetch goes through EWS `CreateAttachment`/`GetItem`, recurring series use the master ItemId.
 - **Permanent delete:** local DB deletion happens only after successful server-side deletion, operations are serialized with calendar sync via a per-account mutex.
 - **CRA resurrection prevention:** attendee meetings are declined through `MeetingResponse`/EWS `DeclineItem` before deletion, if the original meeting request cannot be found, local deletion is not performed.
-- **Meeting invitations:** on Exchange 2010/2013 (EAS 14.x) meetings with attendees are created and edited through EWS `CreateItem`/`UpdateItem` so the server sends invitations/updates, a plain appointment without attendees stays on EAS.
+- **Meeting invitations:** on Exchange 2010/2013 (EAS 14.x) meetings with attendees are created and edited through EWS `CreateItem`/`UpdateItem` so the server sends invitations and updates. Creating an appointment without attendees or attachments uses EAS.
 - **Preview cache:** attachment previews use a temporary `cacheDir/calendar_preview` directory, stable names derived from `fileReference`, and delayed cleanup without races with external viewers.
 
 </details>
@@ -65,8 +65,8 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 
 - **Lightweight DAO projections:** the widget reads only displayed fields for recent unread emails, the next task and the next calendar event.
 - **Correct unread logic:** the widget's new-mail list is filtered by Inbox and `read = 0`.
-- **Race protection:** `updateMailWidget()` serializes `GlanceAppWidget.updateAll()` through a shared mutex and uses `applicationContext`.
-- **Width-adaptive layout:** the bottom action row adapts to widget width (a Glance `Row` never wraps its content) — narrow sizes show fewer avatars and hide the last-sync label so the buttons aren't clipped, avatars scale with the widget.
+- **Widget updates:** `updateMailWidget()` signals running sessions and serializes `GlanceAppWidget.updateAll()` calls. Each session uses one data loader for all sizes.
+- **Adaptive layout:** rows and text size depend on width, height and font scale. Two avatars fit at `180×140 dp`, and sizing the text within the layout does not displace search. The narrowest sizes may omit avatars.
 - **Room indexes (migration 41→42):** indexes for hot widget queries: unread Inbox, folder type, active tasks, current and upcoming calendar events. The current schema version is v55.
 
 </details>
@@ -96,7 +96,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 3. Allow installation from this source and install the APK.
 4. On first launch, choose Exchange for mail and groupware, or IMAP/POP3 to receive mail. IMAP/POP3 use implicit TLS or require a TLS upgrade before sign-in, there is no SMTP sending.
 
-> The built-in updater checks `update.json` in the repository, picks an APK by ABI and prepares a rollback.
+> The built-in updater checks the repository’s `update.json` and selects an APK by ABI. Rollback removes the current app and its local data before installing the older version.
 
 ## 🖥 Requirements
 

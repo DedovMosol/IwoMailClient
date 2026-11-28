@@ -40,8 +40,21 @@ class MailApplication : Application() {
     lateinit var settingsRepository: SettingsRepository
         private set
     
+    /** Масштаб шрифта, под который нарисован виджет: его раскладка (widgetSpec) зависит от масштаба. */
+    @Volatile private var widgetFontScale = 0f
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Пользователь поменял размер шрифта: перерисовать виджет, иначе раскладка под старый масштаб обрезала бы текст
+        if (newConfig.fontScale != widgetFontScale) {
+            widgetFontScale = newConfig.fontScale
+            applicationScope.launch(Dispatchers.IO) { com.dedovmosol.iwomail.widget.updateMailWidget(this@MailApplication) }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
+        widgetFontScale = resources.configuration.fontScale
         // Compose-состояние объекта на весь процесс — здесь, на главном потоке до первой композиции: созданное внутри
         // кадра или из фона после снимка композиции роняет её ("Reading a state that was created after the snapshot…")
         com.dedovmosol.iwomail.ui.components.SendController.shared

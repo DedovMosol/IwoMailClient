@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Круг для виджета: аватары, кольцо активного аккаунта, кнопки. Цвет — тинтом в коде. cornerRadius в Glance
+     работает только с Android 12, а форма-рисунок — на всех версиях (minSdk 26) -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="#FFFFFFFF" />
+</shape>

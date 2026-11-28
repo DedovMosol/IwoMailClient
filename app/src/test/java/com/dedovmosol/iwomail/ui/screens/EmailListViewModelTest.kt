@@ -4,7 +4,9 @@ import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.database.FolderEntity
 import com.dedovmosol.iwomail.data.repository.AccountRepository
+import com.dedovmosol.iwomail.data.repository.MailDeleteSelection
 import com.dedovmosol.iwomail.data.repository.MailRepository
+import com.dedovmosol.iwomail.domain.MailMessageIdentity
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.google.common.truth.Truth.assertThat
@@ -386,7 +388,7 @@ class EmailListViewModelTest {
         val events = collectEvents(vm)
         vm.setSelection(setOf("a"))
 
-        vm.deleteSelectedDrafts()
+        vm.deleteSelectedDrafts(MailDeleteSelection.of(email("a")))
         advanceUntilIdle()
 
         assertThat(events).contains(EmailListEvent.DeletedPermanently(1))
@@ -530,7 +532,7 @@ class EmailListViewModelTest {
         val events = collectEvents(vm)
         vm.setSelection(setOf("a"))
 
-        vm.deleteSelectedDrafts()
+        vm.deleteSelectedDrafts(MailDeleteSelection.of(email("a")))
         advanceUntilIdle()
 
         assertThat(events.any { it is EmailListEvent.Error }).isTrue()
@@ -674,15 +676,15 @@ class EmailListViewModelTest {
 
     @Test
     fun `deleteEmailsPermanently delegates to repository with progress`() = runTest(dispatcher) {
-        val ids = listOf("a", "b")
-        coEvery { mailRepo.deleteEmailsPermanentlyWithProgress(ids, any()) } returns EasResult.Success(2)
+        val selection = MailDeleteSelection(listOf("a", "b").associateWith { MailMessageIdentity.of(email(it)) })
+        coEvery { mailRepo.deleteEmailsPermanentlyWithProgress(selection, any()) } returns EasResult.Success(2)
         val vm = createViewModel()
         advanceUntilIdle()
 
-        val result = vm.deleteEmailsPermanently(ids) { _, _ -> }
+        val result = vm.deleteEmailsPermanently(selection) { _, _ -> }
 
         assertThat(result).isEqualTo(EasResult.Success(2))
-        coVerify { mailRepo.deleteEmailsPermanentlyWithProgress(ids, any()) }
+        coVerify { mailRepo.deleteEmailsPermanentlyWithProgress(selection, any()) }
     }
 
     // ===================== helpers =====================

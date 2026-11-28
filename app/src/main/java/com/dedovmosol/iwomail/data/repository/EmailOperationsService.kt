@@ -1257,76 +1257,23 @@ class EmailOperationsService(
         return moveEmails(emailIds, spamFolder.id)
     }
 
-    /**
-     * Перемещение письма в корзину или окончательное удаление
-     */
-    suspend fun moveToTrash(
-        emailIds: List<String>,
-        deleteDraft: suspend (Long, String) -> EasResult<Boolean>
-    ): EasResult<Int> {
+    /** Move to Trash must not perform an irreversible deletion (e.g. when Search includes Trash or Drafts). */
+    suspend fun moveToTrash(emailIds: List<String>): EasResult<Int> {
         if (emailIds.isEmpty()) return EasResult.Success(0)
-
         return try {
-            val firstEmail = emailDao.getEmail(emailIds.first())
-                ?: return EasResult.Error("Email not found")
-
-            val draftsFolder = folderDao.getFolderByType(firstEmail.accountId, FolderType.DRAFTS)
-            val trashFolder = folderDao.getFolderByType(firstEmail.accountId, FolderType.DELETED_ITEMS)
+            val emails = serverRefs(emailIds.distinct())
+            val accountId = emails.firstOrNull()?.accountId ?: return EasResult.Error("Email not found")
+            if (emails.any { it.accountId != accountId }) return EasResult.Error("DELETE_FAILED")
+            val drafts = folderDao.getFolderByType(accountId, FolderType.DRAFTS)
+            val trash = folderDao.getFolderByType(accountId, FolderType.DELETED_ITEMS)
                 ?: return EasResult.Error("Trash folder not found")
-
-            val drafts = mutableListOf<String>()
-            val inTrash = mutableListOf<String>()
-            val regularEmails = mutableListOf<String>()
-
-            for (emailId in emailIds) {
-                val email = emailDao.getEmail(emailId) ?: continue
-                when {
-                    draftsFolder != null && email.folderId == draftsFolder.id -> drafts.add(emailId)
-                    email.folderId == trashFolder.id -> inTrash.add(emailId)
-                    else -> regularEmails.add(emailId)
-                }
+            if (emails.any { it.folderId == trash.id || it.folderId == drafts?.id }) {
+                return EasResult.Error("OPEN_FOLDER_TO_DELETE")
             }
-
-            var totalDeleted = 0
-
-            for (emailId in drafts) {
-                val email = emailDao.getEmail(emailId) ?: continue
-                val result = deleteDraft(email.accountId, email.serverId)
-                if (result is EasResult.Success) {
-                    totalDeleted++
-                } else {
-                    regularEmails.add(emailId)
-                    android.util.Log.w("EmailOps", "Draft server delete failed, moving to trash instead: ${email.serverId}")
-                }
-            }
-
-            if (inTrash.isNotEmpty()) {
-                val result = deleteEmailsPermanently(inTrash)
-                if (result is EasResult.Success) {
-                    totalDeleted += result.data
-                }
-            }
-
-            if (regularEmails.isEmpty()) {
-                return EasResult.Success(totalDeleted)
-            }
-
-            for (emailId in regularEmails) {
-                val email = emailDao.getEmail(emailId) ?: continue
-                emailDao.updateOriginalFolderId(emailId, email.folderId)
-            }
-
-            val moveResult = moveEmails(regularEmails, trashFolder.id, updateOriginalFolder = false)
-            when (moveResult) {
-                is EasResult.Success -> EasResult.Success(totalDeleted + moveResult.data)
-                is EasResult.Error -> {
-                    // Частичный успех: черновики/корзина удалены, но move не удался
-                    if (totalDeleted > 0) EasResult.Success(totalDeleted)
-                    else moveResult
-                }
-            }
+            for (email in emails) emailDao.updateOriginalFolderId(email.id, email.folderId)
+            moveEmails(emails.map { it.id }, trash.id, updateOriginalFolder = false)
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is CancellationException) throw e
             EasResult.Error("Delete error: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
@@ -1353,168 +1300,117 @@ class EmailOperationsService(
         return ids.mapNotNull { byId[it] }
     }
 
-    /**
-     * Синхронизация папки перед Delete (изменения сервера обрабатываются, ключ — актуальный) и письма [refs] — заново:
-     * на EAS 12.1 после SyncKey=0 ServerId могут смениться (запись переезжает, [resolveEmailIds] находит её по
-     * содержимому). Письма, которых больше нет (удалены на сервере), в результат не входят.
-     */
-    private suspend fun syncAndResolve(accountId: Long, folderId: String, refs: List<EmailServerRef>): List<EmailServerRef> {
-        try {
-            emailSyncService.syncEmails(accountId, folderId, forceFullSync = false)
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            android.util.Log.w("EmailOps", "Sync before delete failed, deleting with the current key: ${e.message}")
-        }
-        return serverRefs(resolveEmailIds(refs, folderId))
-    }
+    /** A matching subject (even with a unique hit) or a reused EAS ID cannot authorize an irreversible delete. */
+    private fun isSameDeleteTarget(before: EmailServerRef, now: EmailServerRef): Boolean =
+        before.id == now.id && before.accountId == now.accountId && before.folderId == now.folderId &&
+            before.serverId == now.serverId && !before.pendingMove && !now.pendingMove &&
+            before.subject == now.subject && before.from == now.from && before.to == now.to &&
+            before.dateReceived == now.dateReceived &&
+            (before.internetMessageId.isNullOrBlank() || EwsMailMatch.sameMessageId(before.internetMessageId, now.internetMessageId))
 
-    /**
-     * Пакетный EAS Delete под шлюзом папки ([FolderSyncGate]) с ключом из БД; новый ключ сохраняется (Delete идёт с
-     * GetChanges=0 — изменения сервера не забираются). null — ключа нет (папка не синхронизирована).
-     */
-    private suspend fun deleteBatchUnderGate(
-        client: com.dedovmosol.iwomail.eas.EasClient,
+    /** Verifies the selection, sends Delete and applies the per-item acknowledgement under the folder gate. */
+    private suspend fun deleteExchangeFolder(
+        client: EasClient,
         folderId: String,
-        folderServerId: String,
-        emails: List<EmailServerRef>
-    ): EasResult<String>? = FolderSyncGate.withFolder(folderId) {
-        val syncKey = folderDao.getFolder(folderId)?.syncKey?.takeIf { it != "0" }
-        syncKey?.let { key ->
-            client.deleteEmailsPermanentlyBatch(folderServerId, emails.map { it.serverId }, key).also { result ->
-                if (result is EasResult.Success) folderDao.updateSyncKey(folderId, result.data)
+        snapshots: List<EmailServerRef>,
+        resetCheckpoint: Long,
+        expectedResetEpochs: Map<String, String?>?
+    ): Int {
+        val accountId = snapshots.first().accountId
+        // Consume real server changes before Delete. A partial sync cannot confirm that a row is still current.
+        val sync = emailSyncService.syncEmailsEas(accountId, folderId, requireComplete = true)
+        if (sync is EasResult.Error) return 0
+        return FolderSyncGate.withFolder(folderId) {
+            // EAS 12.x can reuse IDs after Sync(0), including IDs of messages with indistinguishable headers.
+            // Refresh the folder, but make the user select the message again after a reset, never guess.
+            if (FolderSyncGate.wasResetSince(folderId, resetCheckpoint) || emailSyncService.isFolderSyncing(folderId)) {
+                return@withFolder 0
             }
+            val folder = folderDao.getFolder(folderId)?.takeIf { it.accountId == accountId } ?: return@withFolder 0
+            if (expectedResetEpochs != null && (!expectedResetEpochs.containsKey(folderId) ||
+                    database.inboxSyncSnapshotDao().getResetEpoch(folderId) != expectedResetEpochs[folderId])
+            ) return@withFolder 0
+            val key = usableSyncKey(folder.syncKey) ?: return@withFolder 0
+            val before = snapshots.associateBy { it.id }
+            val targets = serverRefs(snapshots.map { it.id }).filter { current ->
+                isSameDeleteTarget(before.getValue(current.id), current) &&
+                    current.serverId.isNotBlank() && !DraftIds.isLocal(current.serverId) &&
+                    (!current.serverId.contains(':') || current.serverId.substringBefore(':') == folder.serverId)
+            }
+            if (targets.isEmpty()) return@withFolder 0
+
+            val response = client.deleteEmailsPermanentlyBatch(folder.serverId, targets.map { it.serverId }, key)
+            if (response !is EasResult.Success) return@withFolder 0
+            val confirmed = targets.filter { it.serverId in response.data.confirmedIds }
+            // Finish the atomic local commit after server acknowledgement, even if the caller leaves the screen.
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                database.withTransaction {
+                    folderDao.updateSyncKey(folderId, response.data.syncKey)
+                    deleteConfirmedRows(confirmed)
+                    if (confirmed.isNotEmpty()) refreshFolderCounts(folderId)
+                }
+            }
+            confirmed.size
         }
     }
 
-    suspend fun deleteEmailsPermanently(emailIds: List<String>): EasResult<Int> {
-        return deleteEmailsPermanentlyWithProgress(emailIds) { _, _ -> }
+    /** Called in a transaction: a row changed by a local action while Delete was in flight must not be removed. */
+    private suspend fun deleteConfirmedRows(confirmed: List<EmailServerRef>): Int {
+        val byId = confirmed.associateBy { it.id }
+        val ids = serverRefs(confirmed.map { it.id })
+            .filter { isSameDeleteTarget(byId.getValue(it.id), it) }.map { it.id }
+        for (chunk in ids.chunked(SQL_IN_CHUNK)) {
+            pendingChanges.deleteByIds(chunk)
+            emailDao.deleteByIds(chunk) // Room also deletes attachment rows via the foreign key.
+        }
+        return ids.size
     }
+
+    internal suspend fun deleteEmailsPermanently(
+        emailIds: List<String>, expectedResetEpochs: Map<String, String?>? = null
+    ): EasResult<Int> = deleteEmailsPermanentlyWithProgress(emailIds, { _, _ -> }, expectedResetEpochs = expectedResetEpochs)
 
     /**
      * Окончательное удаление писем с callback прогресса
      */
-    suspend fun deleteEmailsPermanentlyWithProgress(
+    internal suspend fun deleteEmailsPermanentlyWithProgress(
         emailIds: List<String>,
-        onProgress: (deleted: Int, total: Int) -> Unit
+        onProgress: (deleted: Int, total: Int) -> Unit,
+        selection: MailDeleteSelection? = null,
+        expectedResetEpochs: Map<String, String?>? = null
     ): EasResult<Int> {
         if (emailIds.isEmpty()) return EasResult.Success(0)
 
         return try {
-            val affectedFolderIds = mutableSetOf<String>()
-            val total = emailIds.size
+            val resetCheckpoint = selection?.resetCheckpoint ?: FolderSyncGate.resetCheckpoint()
+            val snapshots = serverRefs(emailIds.distinct())
+            if (selection != null && (snapshots.size != selection.targets.size || snapshots.any { !selection.matches(it) })) {
+                return EasResult.Error("DELETE_FAILED")
+            }
+            val first = snapshots.firstOrNull() ?: return EasResult.Success(0)
+            if (snapshots.any { it.accountId != first.accountId }) return EasResult.Error("DELETE_FAILED")
+            val account = accountRepo.getAccount(first.accountId) ?: return EasResult.Error("DELETE_FAILED")
+            val groups = snapshots.groupBy { it.folderId }
+            val total = snapshots.size
             var deletedCount = 0
+            onProgress(0, total)
 
-            // Письма без тел (очистка корзины — сотни писем, тела с картинками не нужны)
-            val emailInfos = serverRefs(emailIds)
-            if (emailInfos.isEmpty()) {
-                // Все письма уже удалены из БД (устаревшие ID)
-                emailIds.forEach { attachmentDao.deleteByEmail(it) }
-                onProgress(total, total)
-                return EasResult.Success(total)
-            }
-            val accountId = emailInfos.first().accountId
-
-            val account = accountRepo.getAccount(accountId)
-                ?: return EasResult.Error("Account not found")
-
-            if (AccountType.fromStored(account.accountType) != AccountType.EXCHANGE) {
-                val existing = emailInfos.map { it.id }.toSet()
-                emailIds.forEach { emailId ->
-                    attachmentDao.deleteByEmail(emailId)
-                    if (emailId in existing) emailDao.delete(emailId)
-                    deletedCount++
+            if (AccountType.fromStored(account.accountType) == AccountType.EXCHANGE) {
+                val client = accountRepo.createEasClient(first.accountId) ?: return EasResult.Error("DELETE_FAILED")
+                for ((folderId, items) in groups) {
+                    deletedCount += deleteExchangeFolder(client, folderId, items, resetCheckpoint, expectedResetEpochs)
                     onProgress(deletedCount, total)
                 }
-                emailInfos.forEach { affectedFolderIds.add(it.folderId) }
-                for (folderId in affectedFolderIds) {
-                    updateFolderCounts(folderId)
-                }
-                return EasResult.Success(deletedCount)
-            }
-
-            val client = accountRepo.createEasClient(accountId)
-                ?: return EasResult.Error("Failed to create client")
-
-            // === BATCH DELETE: группируем письма по папкам и удаляем пачкой ===
-
-            emailInfos.forEach { affectedFolderIds.add(it.folderId) }
-            // Письма, которых уже нет в БД, считаются удалёнными
-            deletedCount += emailIds.size - emailInfos.size
-            emailIds.minus(emailInfos.map { it.id }.toSet()).forEach { attachmentDao.deleteByEmail(it) }
-            onProgress(deletedCount, total)
-
-            // Группируем по folderServerId для batch-операций
-            val groupedByFolder = emailInfos.groupBy { info ->
-                if (info.serverId.contains(":")) {
-                    info.serverId.substringBefore(":")
-                } else {
-                    info.folderId.substringAfter("_")
-                }
-            }
-
-            for ((folderServerId, groupEmails) in groupedByFolder) {
-                val folderId = groupEmails.first().folderId
-
-                // MS-ASCMD 2.2.3.186.4: перед Delete клиент получает изменения папки — обычной синхронизацией, которая
-                // их обрабатывает. Прежние холостые Sync продвигали ключ мимо необработанных изменений: письма,
-                // попавшие в папку из Outlook, и удаления там терялись до полной пересинхронизации.
-                var emails = syncAndResolve(accountId, folderId, groupEmails)
-                deletedCount += groupEmails.size - emails.size // удалены на сервере — синхронизация их уже убрала
-                onProgress(deletedCount, total)
-                if (emails.isEmpty()) continue
-
-                var batchResult = deleteBatchUnderGate(client, folderId, folderServerId, emails)
-
-                // Ключ устарел или пакет не применён — синхронизация восстановит ключ (Status 3 → новая цепочка, с
-                // обработкой изменений), затем один повтор
-                if (batchResult is EasResult.Error &&
-                    (batchResult.message.contains("INVALID_SYNCKEY") || batchResult.message.contains("DELETE_NOT_APPLIED"))
-                ) {
-                    val before = emails.size
-                    emails = syncAndResolve(accountId, folderId, emails)
-                    deletedCount += before - emails.size
-                    onProgress(deletedCount, total)
-                    if (emails.isEmpty()) continue
-                    batchResult = deleteBatchUnderGate(client, folderId, folderServerId, emails)
-                }
-
-                // Нет связи с сервером: поэлементный EWS-запрос на каждое письмо — это N таймаутов подряд (минуты
-                // и батарея) без шанса на успех; ошибку покажет итог (DELETE_FAILED)
-                val offline = (batchResult as? EasResult.Error)?.message
-                    ?.let { com.dedovmosol.iwomail.network.ConnectionFailure.fromMessage(it)?.connectionLevel } == true
-
-                if (batchResult is EasResult.Success) {
-                    for (info in emails) {
-                        EmailSyncService.registerDeletedEmail(info.id, context)
-                        attachmentDao.deleteByEmail(info.id)
-                        emailDao.delete(info.id)
-                        deletedCount++
-                        onProgress(deletedCount, total)
-                    }
-                } else if (!offline && (batchResult != null || client.isExchange2007())) {
-                    // EAS не удалил (или ключа нет вовсе — только Exchange 2007): поэлементно через EWS
-                    for (info in emails) {
-                        val ewsResult = client.deleteEmailPermanentlyViaEWS(info.serverId, info.subject)
-                        if (ewsResult is EasResult.Success) {
-                            EmailSyncService.registerDeletedEmail(info.id, context)
-                            attachmentDao.deleteByEmail(info.id)
-                            emailDao.delete(info.id)
-                            deletedCount++
-                        }
-                        onProgress(deletedCount, total)
-                    }
-                }
-            }
-
-            for (folderId in affectedFolderIds) {
-                updateFolderCounts(folderId)
-            }
-
-            if (deletedCount == 0 && emailIds.isNotEmpty()) {
-                EasResult.Error("DELETE_FAILED")
             } else {
-                EasResult.Success(deletedCount)
+                for ((folderId, items) in groups) {
+                    deletedCount += database.withTransaction {
+                        deleteConfirmedRows(items).also { if (it > 0) refreshFolderCounts(folderId) }
+                    }
+                    onProgress(deletedCount, total)
+                }
             }
+            // Do not let callers (including auto-cleanup) advance as if the entire selection was deleted.
+            if (deletedCount == total) EasResult.Success(deletedCount) else EasResult.Error("DELETE_FAILED")
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("Delete error: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
@@ -1618,12 +1514,14 @@ class EmailOperationsService(
     /**
      * Обновляет счётчики папки с транзакцией для консистентности
      */
-    private suspend fun updateFolderCounts(folderId: String) {
-        database.withTransaction {
-            val totalCount = emailDao.getCountByFolder(folderId)
-            val unreadCount = emailDao.getUnreadCount(folderId)
-            folderDao.updateCounts(folderId, unreadCount, totalCount)
-        }
+    private suspend fun updateFolderCounts(folderId: String) = database.withTransaction {
+        refreshFolderCounts(folderId)
+    }
+
+    private suspend fun refreshFolderCounts(folderId: String) {
+        val totalCount = emailDao.getCountByFolder(folderId)
+        val unreadCount = emailDao.getUnreadCount(folderId)
+        folderDao.updateCounts(folderId, unreadCount, totalCount)
     }
 }
 

@@ -290,9 +290,10 @@ fun EmailListScreen(
     }
 
     val deletingSelectedMessage = Strings.deletingEmails(selectedIds.size)
-    fun deleteSelectedPermanently() {
+    fun deleteSelectedPermanently(confirmation: MailConfirmation) {
         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-        val emailIds = selectedIds.toList()
+        val selection = confirmation.deletion
+        val emailIds = selection.ids
         if (emailIds.isEmpty()) {
             viewModel.clearSelection()
             return
@@ -300,7 +301,7 @@ fun EmailListScreen(
 
         // Для черновиков — окончательное удаление с сервера без прогресс-бара (через EWS deleteDraft).
         if (isDraftsFolder) {
-            viewModel.deleteSelectedDrafts()
+            viewModel.deleteSelectedDrafts(selection)
             return
         }
 
@@ -310,8 +311,8 @@ fun EmailListScreen(
         deletionController.startDeletion(
             emailIds = emailIds,
             message = deletingSelectedMessage,
-        ) { ids, onProgress ->
-            when (val result = viewModel.deleteEmailsPermanently(ids) { deleted, total -> onProgress(deleted, total) }) {
+        ) { _, onProgress ->
+            when (val result = viewModel.deleteEmailsPermanently(selection, onProgress)) {
                 is EasResult.Success -> com.dedovmosol.iwomail.util.SafeToast.short(
                     context,
                     if (result.data > 0) NotificationStrings.getDeletedPermanently(isRussian) else nothingDeletedMsg
@@ -371,7 +372,7 @@ fun EmailListScreen(
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         permanentConfirmation = null
-                        withSelection(confirmation) { deleteSelectedPermanently() }
+                        withSelection(confirmation) { deleteSelectedPermanently(confirmation) }
                     },
                     text = Strings.yes
                 )
@@ -408,9 +409,8 @@ fun EmailListScreen(
                             deletionController.startDeletion(
                                 emailIds = allEmailIds,
                                 message = deletingMessage,
-                            ) { ids, onProgress ->
-                                // Удаление с реальным прогрессом (репозиторий инкапсулирован в VM)
-                                when (val result = viewModel.deleteEmailsPermanently(ids) { deleted, total -> onProgress(deleted, total) }) {
+                            ) { _, onProgress ->
+                                when (val result = viewModel.deleteEmailsPermanently(confirmation.deletion, onProgress)) {
                                     is EasResult.Success -> com.dedovmosol.iwomail.util.SafeToast.short(context, trashEmptiedMsg)
                                     is EasResult.Error -> com.dedovmosol.iwomail.util.SafeToast.long(
                                         context, NotificationStrings.localizeError(result.message, isRussian)

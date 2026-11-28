@@ -982,152 +982,28 @@ $itemChanges
         }
     }
 
-    /**
-     * Окончательное удаление письма через EWS HardDelete
-     * Используется как fallback для Exchange 2007
-     * @param serverId ItemId письма (формат: "FolderId:ItemId" или просто "ItemId")
-     */
-    suspend fun deleteEmailPermanentlyViaEWS(
-        serverId: String,
-        subject: String = ""
-    ): EasResult<Unit> = withContext(Dispatchers.IO) {
-        try {
 
-            val ewsItemId = if (serverId.length < 50 || serverId.contains(":")) {
-                findEwsEmailItemId(subject)
-            } else {
-                serverId
-            }
-
-            if (ewsItemId == null) {
-                android.util.Log.w("EasEmailService", "EWS delete: could not find ItemId for serverId=$serverId")
-                return@withContext EasResult.Error("Could not find EWS ItemId for serverId=$serverId")
-            }
-
-            val escapedItemId = deps.escapeXml(ewsItemId)
-
-            val deleteBody = """<m:DeleteItem DeleteType="HardDelete">
-  <m:ItemIds>
-    <t:ItemId Id="$escapedItemId"/>
-  </m:ItemIds>
-</m:DeleteItem>""".trimIndent()
-
-            val soapEnvelope = deps.buildEwsSoapRequest(deleteBody)
-
-            val responseXml = executeEwsWithAuth(soapEnvelope, "DeleteItem")
-                ?: return@withContext EasResult.Error("Не удалось выполнить EWS DeleteItem")
-
-            if (EwsClient.isEwsSuccessOrNotFound(responseXml)) {
-                EasResult.Success(Unit)
-            } else {
-                val errorMessage = deps.extractEwsError(responseXml)
-                EasResult.Error(errorMessage)
-            }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("EWS delete error: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
-        }
-    }
-
-    /**
-     * Находит EWS ItemId письма по Subject (EWS FindItem с Restriction).
-     * Безопасная замена позиционного индекса, предотвращающая DATA LOSS.
-     */
-    private suspend fun findEwsEmailItemId(subject: String): String? {
-        if (subject.isBlank()) {
-            android.util.Log.w("EasEmailService", "findEwsEmailItemId: empty subject — cannot safely identify email")
-            return null
-        }
-        val escapedSubject = deps.escapeXml(subject)
-        val findBody = """<m:FindItem Traversal="Shallow">
-    <m:ItemShape>
-        <t:BaseShape>IdOnly</t:BaseShape>
-    </m:ItemShape>
-    <m:Restriction>
-        <t:IsEqualTo>
-            <t:FieldURI FieldURI="item:Subject"/>
-            <t:FieldURIOrConstant>
-                <t:Constant Value="$escapedSubject"/>
-            </t:FieldURIOrConstant>
-        </t:IsEqualTo>
-    </m:Restriction>
-    <m:ParentFolderIds>
-        <t:DistinguishedFolderId Id="deleteditems"/>
-    </m:ParentFolderIds>
-</m:FindItem>""".trimIndent()
-        val findRequest = deps.buildEwsSoapRequest(findBody)
-
-        val responseXml = executeEwsWithAuth(findRequest, "FindItem") ?: return null
-
-        val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
-        return itemIdPattern.find(responseXml)?.groupValues?.get(1)
-    }
-
-    /**
-     * Окончательное удаление письма через EAS Sync Delete
-     * Использует DeletesAsMoves=0 + GetChanges (как в AOSP)
-     * РАБОТАЕТ на всех версиях Exchange включая 2007
-     */
+    /** Deletes by EAS ID, never by EWS subject search. GetChanges=0 keeps unprocessed server changes pending. */
     suspend fun deleteEmailPermanently(
         collectionId: String,
         serverId: String,
         syncKey: String
-    ): EasResult<String> {
-
-        // КРИТИЧНО: GetChanges=0 — НЕ запрашиваем серверные изменения в ответе Delete.
-        // С <GetChanges/> (=TRUE) сервер возвращает pending Adds в ответе,
-        // а SyncKey продвигается мимо них. Если эти Adds не обработать —
-        // они теряются навсегда (сервер считает их доставленными).
-        // С GetChanges=0 сервер обрабатывает Delete, возвращает новый SyncKey,
-        // но НЕ включает pending changes. Следующий полноценный sync
-        // (в syncEmailsEas) корректно обработает все ожидающие изменения.
-        // Совместимо с Exchange 2007 SP1+ (MS-ASCMD 2.2.3.84).
-        val xml = """<?xml version="1.0" encoding="UTF-8"?>
-<Sync xmlns="AirSync">
-    <Collections>
-        <Collection>
-            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
-            <CollectionId>${deps.escapeXml(collectionId)}</CollectionId>
-            <DeletesAsMoves>0</DeletesAsMoves>
-            <GetChanges>0</GetChanges>
-            <WindowSize>10</WindowSize>
-            <Commands>
-                <Delete>
-                    <ServerId>${deps.escapeXml(serverId)}</ServerId>
-                </Delete>
-            </Commands>
-        </Collection>
-    </Collections>
-</Sync>""".trimIndent()
-
-        return deps.executeEasCommand("Sync", xml) { responseXml ->
-            val status = deps.extractValue(responseXml, "Status")?.toIntOrNull() ?: 1
-            val newSyncKey = deps.extractValue(responseXml, "SyncKey") ?: syncKey
-
-            when (status) {
-                1 -> newSyncKey
-                8 -> newSyncKey // Object not found - уже удалено
-                3 -> throw Exception("INVALID_SYNCKEY")
-                else -> throw Exception("Delete failed: Status=$status")
-            }
-        }
+    ): EasResult<String> = when (val result = deleteEmailsPermanentlyBatch(collectionId, listOf(serverId), syncKey)) {
+        is EasResult.Error -> result
+        is EasResult.Success -> if (serverId in result.data.confirmedIds) {
+            EasResult.Success(result.data.syncKey)
+        } else EasResult.Error("DELETE_FAILED")
     }
 
-    /**
-     * Batch удаление писем (несколько писем одним запросом)
-     * Решает проблему syncKey race condition при последовательном удалении
-     */
-    suspend fun deleteEmailsPermanentlyBatch(
+    internal suspend fun deleteEmailsPermanentlyBatch(
         collectionId: String,
         serverIds: List<String>,
         syncKey: String
-    ): EasResult<String> {
-        if (serverIds.isEmpty()) return EasResult.Success(syncKey)
-
-        // КРИТИЧНО: Для ВСЕХ версий Exchange сначала пробуем EAS batch delete.
-        // Для элементов в Deleted Items (Корзине) DeletesAsMoves неважен —
-        // серверу некуда перемещать, он обязан удалить безвозвратно.
-        // Exchange 2007 тоже обрабатывает Delete в Deleted Items корректно.
+    ): EasResult<EasDeleteResponse> {
+        if (serverIds.isEmpty()) return EasResult.Success(EasDeleteResponse(syncKey, emptySet()))
+        if (collectionId.isBlank() || syncKey.isBlank() || syncKey == "0" || serverIds.any { it.isBlank() }) {
+            return EasResult.Error("DELETE_FAILED")
+        }
         val esc = deps.escapeXml
         val deleteCommands = serverIds.joinToString("\n") { sid ->
             """                            <Delete>
@@ -1164,36 +1040,9 @@ $deleteCommands
     </Collections>
 </Sync>""".trimIndent()
 
-        val easResult = deps.executeEasCommand("Sync", xml) { responseXml ->
-            val status = deps.extractValue(responseXml, "Status")?.toIntOrNull() ?: 1
-            val newSyncKey = deps.extractValue(responseXml, "SyncKey") ?: syncKey
-
-            when (status) {
-                1 -> newSyncKey
-                8 -> newSyncKey // Object not found - некоторые уже удалены
-                3 -> throw Exception("INVALID_SYNCKEY")
-                else -> throw Exception("Batch delete failed: Status=$status")
-            }
+        return deps.executeEasCommand("Sync", xml) { responseXml ->
+            EasDeleteResponse.parse(responseXml, collectionId, serverIds)
         }
-
-        // Если EAS batch delete удался — возвращаем результат
-        if (easResult is EasResult.Success) {
-            return easResult
-        }
-
-        // EAS batch delete не удался — ошибка пробрасывается к caller'у.
-        // Caller (EmailOperationsService) выполнит individual EWS deletes
-        // с Subject-based поиском, что безопаснее batch позиционного подхода.
-        if (deps.isExchange2007()) {
-            android.util.Log.w("EasEmailService", "EAS batch delete failed (${(easResult as? EasResult.Error)?.message}), caller will handle EWS fallback per-item")
-            // Сообщаем вызывающему, что пакетное удаление не применено — он синхронизирует папку и повторит, затем
-            // выполнит поэлементный EWS fallback. Состояние синхронизации здесь НЕ сбрасывается (Sync с ключом "0"):
-            // ключ в БД остался бы прежним, и следующая синхронизация получила бы Status 3 — полную пересинхронизацию.
-            return EasResult.Error("DELETE_NOT_APPLIED")
-        }
-
-        // Для Exchange 2010+ возвращаем оригинальную ошибку
-        return easResult
     }
 
     /**

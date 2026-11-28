@@ -43,7 +43,9 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.AttachmentEntity
 import com.dedovmosol.iwomail.data.database.EmailEntity
+import com.dedovmosol.iwomail.data.repository.MailDeleteSelection
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
+import com.dedovmosol.iwomail.domain.MailMessageIdentity
 import com.dedovmosol.iwomail.data.database.flag
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
@@ -298,7 +300,7 @@ fun EmailDetailScreen(
     val activeAccount by accountRepo.activeAccount.collectAsStateWithLifecycle(initialValue = null)
 
     // Диалог подтверждения удаления (isDeleting живёт в VM); запрос отчёта о прочтении — состояние VM.
-    var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
+    var deleteConfirmation by remember { mutableStateOf<MailDeleteSelection?>(null) }
     val deletingSingleEmailMessage = Strings.deletingEmails(1)
 
     // Одноразовые события VM → локализованные тосты + навигация назад.
@@ -399,27 +401,25 @@ fun EmailDetailScreen(
     }
 
     // Диалог подтверждения удаления
-    if (showDeleteDialog) {
+    deleteConfirmation?.let { selection ->
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
+            onDismissRequest = { deleteConfirmation = null },
             icon = { Icon(AppIcons.Delete, null) },
             title = { Text(Strings.deleteEmail) },
             text = { Text(if (isInTrash) Strings.emailWillBeDeletedPermanently else Strings.emailWillBeMovedToTrash) },
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
-                    onClick = {
-                        showDeleteDialog = false
+                    onClick = confirm@{
+                        deleteConfirmation = null
+                        val visible = email ?: return@confirm
+                        if (selection.targets[visible.id] != MailMessageIdentity.of(visible)) return@confirm
                         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                         if (isInTrash) {
-                            // Окончательное удаление с прогресс-баром: контроллер вызывает
-                            // suspend-обёртку VM (её scope переживает выход с экрана — 1:1 с исходником).
                             deletionController.startDeletion(
-                                emailIds = listOf(emailId),
+                                emailIds = selection.ids,
                                 message = deletingSingleEmailMessage,
-                            ) { ids, onProgress ->
-                                val result = viewModel.deleteEmailPermanently(ids) { deleted, total ->
-                                    onProgress(deleted, total)
-                                }
+                            ) { _, onProgress ->
+                                val result = viewModel.deleteEmailPermanently(selection, onProgress)
                                 when (result) {
                                     is EasResult.Success -> SafeToast.short(context, NotificationStrings.getDeletedPermanently(isRussian))
                                     is EasResult.Error -> SafeToast.long(context, NotificationStrings.localizeError(result.message, isRussian))
@@ -436,7 +436,7 @@ fun EmailDetailScreen(
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { showDeleteDialog = false },
+                    onClick = { deleteConfirmation = null },
                     text = Strings.no
                 )
             }
@@ -596,7 +596,10 @@ fun EmailDetailScreen(
                             // Удалить
                             DropdownMenuItem(
                                 text = { Text(Strings.delete) },
-                                onClick = { showOverflowMenu = false; showDeleteDialog = true },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    deleteConfirmation = email?.let(MailDeleteSelection::of)
+                                },
                                 leadingIcon = { Icon(AppIcons.Delete, null) }
                             )
                         }

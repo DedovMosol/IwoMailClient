@@ -225,7 +225,7 @@ interface FolderDao {
     suspend fun updateDisplayName(id: String, displayName: String)
 }
 
-/** Baseline rows from the start of an Inbox enumeration, not rows newly added/moved in while it runs. */
+/** Full-sync checkpoint per folder. Inbox also keeps the baseline rows present when enumeration started. */
 @Entity(
     tableName = "inbox_sync_snapshot",
     primaryKeys = ["folderId", "emailId"],
@@ -267,8 +267,15 @@ internal interface InboxSyncSnapshotDao {
     """)
     suspend fun getUnseenWithoutPendingChanges(folderId: String, accountId: Long): List<String>
 
-    @Query("DELETE FROM inbox_sync_snapshot WHERE folderId = :folderId")
+    @Query("DELETE FROM inbox_sync_snapshot WHERE folderId = :folderId AND emailId NOT LIKE 'epoch:%'")
     suspend fun clear(folderId: String)
+
+    // Reserved metadata row. Actual message IDs begin with the account ID; this token survives pagination and restart.
+    @Query("SELECT substr(emailId, 7) FROM inbox_sync_snapshot WHERE folderId = :folderId AND emailId LIKE 'epoch:%' LIMIT 1")
+    suspend fun getResetEpoch(folderId: String): String?
+
+    @Query("DELETE FROM inbox_sync_snapshot WHERE folderId = :folderId AND emailId LIKE 'epoch:%'")
+    suspend fun clearResetEpoch(folderId: String)
 }
 
 @Dao
@@ -297,8 +304,9 @@ interface EmailDao {
 
     /** Адрес писем на сервере без тел: SQLite ограничивает число параметров IN (999) — вызывать пачками ≤ 500. */
     @Query("""
-        SELECT id, accountId, folderId, serverId, subject, `from`, `to`, dateReceived
-        FROM emails WHERE id IN (:ids)
+        SELECT e.id, e.accountId, e.folderId, e.serverId, e.subject, e.`from`, e.`to`, e.dateReceived, e.internetMessageId,
+            EXISTS (SELECT 1 FROM pending_email_changes p WHERE p.emailId = e.id AND p.move = 1) AS pendingMove
+        FROM emails e WHERE e.id IN (:ids)
     """)
     suspend fun getServerRefs(ids: List<String>): List<EmailServerRef>
 

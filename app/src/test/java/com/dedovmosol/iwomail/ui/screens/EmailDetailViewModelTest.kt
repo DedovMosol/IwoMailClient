@@ -4,6 +4,7 @@ import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.database.FolderEntity
 import com.dedovmosol.iwomail.data.repository.AccountRepository
+import com.dedovmosol.iwomail.data.repository.MailDeleteSelection
 import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
@@ -277,7 +278,8 @@ class EmailDetailViewModelTest {
     fun `permanent deletion closes the screen once without deleted-on-server toast`() = runTest(dispatcher) {
         val flow = kotlinx.coroutines.flow.MutableStateFlow<EmailEntity?>(email())
         every { mailRepo.getEmail(EMAIL_ID) } returns flow
-        coEvery { mailRepo.deleteEmailsPermanentlyWithProgress(listOf(EMAIL_ID), any()) } coAnswers {
+        val selection = MailDeleteSelection.of(email())
+        coEvery { mailRepo.deleteEmailsPermanentlyWithProgress(selection, any()) } coAnswers {
             flow.value = null // запись удаляется посреди операции
             kotlinx.coroutines.yield()
             EasResult.Success(1)
@@ -286,7 +288,7 @@ class EmailDetailViewModelTest {
         val events = collectEvents(vm)
         advanceUntilIdle()
 
-        val result = vm.deleteEmailPermanently(listOf(EMAIL_ID)) { _, _ -> }
+        val result = vm.deleteEmailPermanently(selection) { _, _ -> }
         advanceUntilIdle()
 
         assertThat(result).isEqualTo(EasResult.Success(1))
@@ -298,7 +300,7 @@ class EmailDetailViewModelTest {
     fun `move to trash that replaces the record navigates back once after the toast`() = runTest(dispatcher) {
         val flow = kotlinx.coroutines.flow.MutableStateFlow<EmailEntity?>(email())
         every { mailRepo.getEmail(EMAIL_ID) } returns flow
-        coEvery { actions.deleteEmails(listOf(EMAIL_ID), isInTrash = false) } coAnswers {
+        coEvery { actions.moveToTrash(listOf(EMAIL_ID)) } coAnswers {
             flow.value = null
             kotlinx.coroutines.yield()
             EasResult.Success(1)
@@ -322,7 +324,7 @@ class EmailDetailViewModelTest {
         val events = collectEvents(vm)
         advanceUntilIdle()
 
-        vm.deleteEmailPermanently(listOf(EMAIL_ID)) { _, _ -> }
+        vm.deleteEmailPermanently(MailDeleteSelection.of(email())) { _, _ -> }
         advanceUntilIdle()
 
         assertThat(events).doesNotContain(EmailDetailEvent.NavigateBack)
@@ -392,7 +394,7 @@ class EmailDetailViewModelTest {
 
     @Test
     fun `deleteToTrash moved emits MovedToTrash and NavigateBack`() = runTest(dispatcher) {
-        coEvery { actions.deleteEmails(listOf(EMAIL_ID), false) } returns EasResult.Success(1)
+        coEvery { actions.moveToTrash(listOf(EMAIL_ID)) } returns EasResult.Success(1)
         val vm = createViewModel()
         advanceUntilIdle()
         val events = collectEvents(vm)
@@ -407,7 +409,7 @@ class EmailDetailViewModelTest {
 
     @Test
     fun `deleteToTrash with zero count emits DeletedPermanently`() = runTest(dispatcher) {
-        coEvery { actions.deleteEmails(listOf(EMAIL_ID), false) } returns EasResult.Success(0)
+        coEvery { actions.moveToTrash(listOf(EMAIL_ID)) } returns EasResult.Success(0)
         val vm = createViewModel()
         advanceUntilIdle()
         val events = collectEvents(vm)
@@ -420,7 +422,7 @@ class EmailDetailViewModelTest {
 
     @Test
     fun `deleteToTrash error emits Error`() = runTest(dispatcher) {
-        coEvery { actions.deleteEmails(listOf(EMAIL_ID), false) } returns EasResult.Error("del-fail")
+        coEvery { actions.moveToTrash(listOf(EMAIL_ID)) } returns EasResult.Error("del-fail")
         val vm = createViewModel()
         advanceUntilIdle()
         val events = collectEvents(vm)
@@ -664,7 +666,7 @@ class EmailDetailViewModelTest {
 
     @Test
     fun `deleteToTrash does not crash when actions throws exception`() = runTest(dispatcher) {
-        coEvery { actions.deleteEmails(listOf(EMAIL_ID), false) } throws RuntimeException("network failure")
+        coEvery { actions.moveToTrash(listOf(EMAIL_ID)) } throws RuntimeException("network failure")
         val vm = createViewModel()
         advanceUntilIdle()
         val events = collectEvents(vm)
@@ -735,15 +737,15 @@ class EmailDetailViewModelTest {
 
     @Test
     fun `deleteEmailPermanently delegates to repository with progress`() = runTest(dispatcher) {
-        val ids = listOf(EMAIL_ID)
-        coEvery { mailRepo.deleteEmailsPermanentlyWithProgress(ids, any()) } returns EasResult.Success(1)
+        val selection = MailDeleteSelection.of(email())
+        coEvery { mailRepo.deleteEmailsPermanentlyWithProgress(selection, any()) } returns EasResult.Success(1)
         val vm = createViewModel()
         advanceUntilIdle()
 
-        val result = vm.deleteEmailPermanently(ids) { _, _ -> }
+        val result = vm.deleteEmailPermanently(selection) { _, _ -> }
 
         assertThat(result).isEqualTo(EasResult.Success(1))
-        coVerify { mailRepo.deleteEmailsPermanentlyWithProgress(ids, any()) }
+        coVerify { mailRepo.deleteEmailsPermanentlyWithProgress(selection, any()) }
     }
 
     // ===================== helpers =====================

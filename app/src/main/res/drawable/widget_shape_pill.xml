@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Капсула: строка поиска, бейдж непрочитанных. Радиус больше половины высоты — края полукруглые при любой высоте -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <corners android:radius="999dp" />
+    <solid android:color="#FFFFFFFF" />
+</shape>

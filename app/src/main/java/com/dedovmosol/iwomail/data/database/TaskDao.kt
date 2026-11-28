@@ -112,7 +112,7 @@ interface TaskDao {
     """)
     suspend fun getTodayTasksCount(accountId: Long, endOfDay: Long): Int
 
-    // иджет показывает активный аккаунт: запросы виджета — по accountId (индекс accountId, isDeleted, complete, dueDate, subject)
+    // Виджет показывает активный аккаунт: запросы виджета — по accountId (индекс accountId, isDeleted, complete, dueDate, subject)
     @Query("SELECT COUNT(*) FROM tasks WHERE accountId = :accountId AND complete = 0 AND isDeleted = 0")
     suspend fun getWidgetActiveTasksCount(accountId: Long): Int
 

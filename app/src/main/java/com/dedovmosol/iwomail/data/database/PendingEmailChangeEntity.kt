@@ -96,6 +96,9 @@ abstract class PendingEmailChangeDao {
     @Query("DELETE FROM pending_email_changes WHERE emailId = :emailId")
     abstract suspend fun delete(emailId: String)
 
+    @Query("DELETE FROM pending_email_changes WHERE emailId IN (:emailIds)")
+    abstract suspend fun deleteByIds(emailIds: List<String>)
+
     /** Письмо получило новый id (ServerId сменился после SyncKey=0 на EAS 12.1): правка переезжает с ним. */
     @Query("UPDATE OR REPLACE pending_email_changes SET emailId = :newId WHERE emailId = :oldId")
     abstract suspend fun rename(oldId: String, newId: String)

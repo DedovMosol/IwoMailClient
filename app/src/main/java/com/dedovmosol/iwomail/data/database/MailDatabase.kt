@@ -642,7 +642,9 @@ data class EmailServerRef(
     val subject: String,
     val from: String,
     val to: String,
-    val dateReceived: Long
+    val dateReceived: Long,
+    val internetMessageId: String? = null,
+    val pendingMove: Boolean = false
 )
 
 /** Server identity for inline attachments, without re-reading the cached MIME body. */

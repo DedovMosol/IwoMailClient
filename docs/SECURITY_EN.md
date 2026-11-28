@@ -63,7 +63,7 @@ Mailbox credentials are stored on the device and used to authenticate to the con
 
 `MainActivity` selects the recovery screen if the session is locked, the lock setting is enabled and `AppLockManager` has no usable verifier. This is **not** a reset for a forgotten password whose verifier still exists. Recovery asks for the active mailbox password (the first mailbox if none is active). `AccountRepository.verifyAccountPassword` checks the stored password locally, or, if none is stored, requires a mailbox access request to succeed at the Exchange endpoint in use. An OPTIONS response alone is not sufficient. Online password recovery is not used for accounts with a client certificate, IMAP or POP3. If verification is unavailable, the mailbox stays locked. Success disables both the app lock and biometric unlock; set the app password again in Settings. If there are no accounts, recovery turns the lock off without asking for a mailbox password.
 
-App lock restricts the UI, not the Room database or background synchronization. With the lock enabled, the widget and notifications hide mail details even when the verifier is missing. Android 13+ disables Recents snapshots; Android 8–12 uses `FLAG_SECURE` while the lock feature is enabled.
+App lock restricts the UI, not the Room database or background synchronization. With the lock enabled, widget snapshots and notifications omit mail details even when the verifier is missing. A running Glance session masks details before re-reading Room, and the launcher replaces the earlier view when it receives the new `RemoteViews`. Android 13+ disables Recents snapshots; Android 8–12 uses `FLAG_SECURE` while the lock feature is enabled.
 
 ## Transport security
 

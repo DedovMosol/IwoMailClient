@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.database.FolderEntity
 import com.dedovmosol.iwomail.data.repository.AccountRepository
+import com.dedovmosol.iwomail.data.repository.MailDeleteSelection
 import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.data.repository.RepositoryErrors
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
@@ -363,15 +364,14 @@ class EmailListViewModel(
     }
 
     /** Окончательное удаление выбранных черновиков с сервера (через EWS deleteDraft, без прогресса). */
-    fun deleteSelectedDrafts() {
-        val ids = _uiState.value.selectedIds.toList()
-        if (ids.isEmpty()) {
+    internal fun deleteSelectedDrafts(selection: MailDeleteSelection) {
+        if (selection.targets.isEmpty()) {
             clearSelection()
             return
         }
         viewModelScope.launch {
             try {
-                val result = withContext(ioDispatcher) { mailRepo.deleteDrafts(ids) }
+                val result = withContext(ioDispatcher) { mailRepo.deleteDrafts(selection) }
                 when (result) {
                     is EasResult.Success -> sendEvent(EmailListEvent.DeletedPermanently(result.data))
                     is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
@@ -571,12 +571,12 @@ class EmailListViewModel(
     // === Окончательное удаление с прогресс-баром (вызывается из DeletionController в UI) ===
     // Тонкая suspend-обёртка: инкапсулирует репозиторий и IO-диспетчер. Выполняется на scope
     // контроллера удаления (не в viewModelScope), поэтому переживает выход с экрана — 1:1 с исходником.
-    // Используется и для выбранных (корзина/спам), и для очистки корзины (UI передаёт нужные id).
-    suspend fun deleteEmailsPermanently(
-        emailIds: List<String>,
+    // Для выбранных писем и очистки корзины передаётся тот же снимок, который видел пользователь.
+    internal suspend fun deleteEmailsPermanently(
+        selection: MailDeleteSelection,
         onProgress: (deleted: Int, total: Int) -> Unit
     ): EasResult<Int> =
-        withContext(ioDispatcher) { mailRepo.deleteEmailsPermanentlyWithProgress(emailIds, onProgress) }
+        withContext(ioDispatcher) { mailRepo.deleteEmailsPermanentlyWithProgress(selection, onProgress) }
 
     private fun peerMailboxId(folder: FolderEntity?, folders: List<FolderEntity>): String? {
         val type = folder?.type ?: return null

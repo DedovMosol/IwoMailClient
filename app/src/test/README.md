@@ -29,7 +29,7 @@ HTML-отчёт: `app/build/reports/tests/testDebugUnitTest/index.html`, рез�
 | Сеть и защита | [`network/`](java/com/dedovmosol/iwomail/network), [`data/security/`](java/com/dedovmosol/iwomail/data/security), [`shared/`](java/com/dedovmosol/iwomail/shared): проверка сертификатов и имени хоста, параметры JavaMail, хранение паролей, блокировка и восстановление доступа. Для TLS есть [тестовые сертификаты](resources/certs). |
 | Письма и вложения | [`domain/`](java/com/dedovmosol/iwomail/domain) и [`util/`](java/com/dedovmosol/iwomail/util): группировка в цепочки, лимиты вложений, сохранение черновиков, обработка HTML/MIME, внешних изображений и `mailto:`. |
 | Экран и навигация | [`ui/`](java/com/dedovmosol/iwomail/ui): ViewModel с тестовым диспетчером и MockK, реальные Compose-компоненты под Robolectric. Примеры: [`ComposeScreenOpenTest`](java/com/dedovmosol/iwomail/ui/screens/ComposeScreenOpenTest.kt) открывает редактор из `MainActivity`, [`WebViewUnavailableTest`](java/com/dedovmosol/iwomail/ui/components/WebViewUnavailableTest.kt) проверяет поведение без системного WebView. |
-| Фоновая работа и виджет | [`sync/`](java/com/dedovmosol/iwomail/sync) и [`widget/`](java/com/dedovmosol/iwomail/widget): уведомления и их приватность, push, будильники, отложенная отправка, действия виджета. |
+| Фоновая работа и виджет | [`sync/`](java/com/dedovmosol/iwomail/sync) и [`widget/`](java/com/dedovmosol/iwomail/widget): уведомления и их приватность, push, будильники, отложенная отправка, действия виджета. `WidgetPrivacySessionTest` проверяет приватность в открытых сессиях Glance, `WidgetLayoutRenderTest` проверяет `RemoteViews` на API 30/34. Это не прогон на OEM-лаунчере. |
 
 ## Проверки, выключенные по умолчанию
 

@@ -279,7 +279,7 @@ Migration 41→42 (DB version 42) added indexes for the home-screen widget paths
 
 ### EWS
 
-EWS requests use SOAP and `RequestServerVersion="Exchange2007_SP1"` by default (`EwsClient.VERSION_2007`). EWS is used where EAS 12.x is incomplete or unreliable: notes, many task paths, server drafts, calendar details/meetings/exceptions/attachments and selected fallback deletes.
+EWS requests use SOAP and `RequestServerVersion="Exchange2007_SP1"` by default (`EwsClient.VERSION_2007`). EWS is used where EAS 12.x is incomplete or unreliable: notes, many task paths, server drafts, calendar details, meetings, exceptions and attachments.
 
 The NTLM handshake (Type1 → Type2 → Type3) runs on a dedicated OkHttp client with `ConnectionPool(1)` and is serialized by a lock (`ntlmLock`): Type1 and Type3 share one TCP connection and cannot be interleaved with parallel EAS/EWS traffic, because NTLM authenticates the connection, not the request.
 
@@ -327,8 +327,8 @@ The SyncKey ([MS-ASCMD] Sync) is a chain: every response issues the next key. Tw
 `FolderSyncGate.withFolder(folderId)` is a process-wide per-folder `Mutex` (`SyncWorker` and `PushService` create separate service instances, so the gate is an `object`). It is used by:
 
 - `EmailSyncService.syncEmailsEas`: each loop iteration (request, batch processing by the local function `processSyncBatch`, SyncKey save) and the initial `SyncKey=0` request;
-- `EmailOperationsService`: flag writes (`setFlag`/`toggleFlag`/`retryPendingFlag`), `markAsRead` and `markAsReadBatch` (through `sendReadToServer`), and the batch permanent delete (`deleteBatchUnderGate`);
-- `MailRepository.deleteDraftViaEas` and the key re-initialization path when deleting a draft from Drafts.
+- `EmailOperationsService`: flag writes (`setFlag`/`toggleFlag`/`retryPendingFlag`), `markAsRead` and `markAsReadBatch` (through `sendReadToServer`), and batch permanent deletion (`deleteExchangeFolder`);
+- `MailRepository.deleteDraft`: selection verification and deletion using the current EAS key or a known EWS ItemId.
 
 Inside the gate the SyncKey is re-read from the DB, so the loop continues from a key advanced by a local change. The mutex is not reentrant: the same folder's gate must not be taken inside the block.
 
@@ -369,13 +369,11 @@ Exchange 2007 (EAS 12.1) gives ServerIds in the order the sync state sends the m
 
 #### Permanent delete
 
-1. Before EAS Sync Delete, the folder is synced by the regular `syncEmails` (`syncAndResolve`), which processes server changes, and the messages are re-resolved by content (`resolveEmailIds`): on EAS 12.1 ServerIds can change after `SyncKey=0`.
-2. Messages are read through the light projection `EmailServerRef` (`EmailDao.getServerRefs`, no bodies; queries in chunks of 500 because of SQLite's limit of 999 variables).
-3. The batch Delete runs under `FolderSyncGate` with the key from the DB (`deleteBatchUnderGate`); Delete is sent with `GetChanges=0` and the new key is saved.
-4. On `INVALID_SYNCKEY` or `DELETE_NOT_APPLIED` one more sync and a single retry follow.
-5. The per-message EWS fallback runs if EAS did not delete the messages (or there is no key at all, only on Exchange 2007). Connection-level failures (`ConnectionFailure.connectionLevel`) skip it: otherwise there would be N timeouts in a row with no chance of success, and the result reports `DELETE_FAILED`.
-6. On Exchange 2007 `EasEmailService.deleteEmailsPermanentlyBatch` returns `DELETE_NOT_APPLIED` on failure and does not reset the sync state with a `Sync(SyncKey=0)` request.
-7. Draft deletion (`MailRepository.deleteDraftViaEas`) also runs under the gate and saves the returned key. No sync loop is started to refresh the key here: it would consume the Add of a new draft without processing it.
+1. Manual deletion carries the `MailDeleteSelection` captured in the confirmation dialog. The repository checks it against lightweight `EmailServerRef` rows without bodies, in chunks of up to 500 IDs, and processes changes through the last EAS Sync page. A full enumeration invalidates the old selection because Exchange can renumber ServerIds. A database checkpoint marks an unfinished enumeration, so resuming it after a restart does not authorize deletion of the earlier selection.
+2. Under `FolderSyncGate` the app rechecks the account, folder, ServerId and message fields, skipping pending moves. Delete uses the current key and `GetChanges=0`. It neither looks up another ID by subject nor replays Delete after a key reset.
+3. `EasDeleteResponse` scopes acknowledgement to each item. The new key is saved atomically with removal of acknowledged local rows. Rejected items and their queued changes remain. Item-level status 8 means that particular item is already absent, not that the entire batch succeeded.
+4. Permanent deletion never falls back to an EWS subject lookup. A draft with a known EWS ItemId still uses exact-ID EWS deletion. A draft with an EAS ServerId can be deleted from Drafts with a confirmed selection and the current key. Deleting one draft does not follow historical IDs to delete earlier versions. Exchange 2007 can move an EAS-deleted draft into Deleted Items instead of purging it.
+5. Auto-cleanup stores each folder's sync epoch with its candidates and checks it under the same gate. An epoch change or a legacy baseline starts a fresh waiting period instead of reusing saved numeric IDs. Move to Trash does not permanently delete items, including Search results from Deleted Items or Drafts.
 
 #### Orphan detection after a full resync
 
@@ -425,13 +423,12 @@ An edit of a task (done, subject, dates) or note and a move to trash made withou
 
 ### Home-screen widget
 
-1. `MailWidget` is a Glance `GlanceAppWidget` with `SizeMode.Responsive` (three fixed sizes) to avoid launcher crashes: `SizeMode.Exact` builds `RemoteViews` with a size map that crashes the HyperOS 2.0 launcher.
-2. Widget data is loaded on `Dispatchers.IO` from Room and DataStore using `applicationContext`.
-3. Recent mail, next task and calendar event queries (for the active account) use the widget-specific projections and indexes (see section 4).
-4. `updateMailWidget(context)` serializes `MailWidget().updateAll()` through a process-level mutex (`widgetUpdateMutex`), so the sync, notification, account and personalization paths cannot update the widget concurrently.
-5. Clicks go through deep links/extras to `MainActivity`; manual sync uses `SyncAlarmReceiver.ACTION_SYNC_NOW` and is delegated to `SyncWorker`. Each clickable has its own **`data` URI** (`iwomail://widget/…`, `iwomail://email/{id}`), because `PendingIntent.filterEquals` ignores extras and intents of the same shape would otherwise share a single click target.
-6. **Width-adaptive content.** A Glance `Row` is a non-wrapping horizontal `LinearLayout`, so anything wider than the widget is clipped. The bottom action row therefore renders fewer children on narrow sizes (gate `size.width >= 300.dp`: 4 account avatars versus 2, the last-sync label only on a wide widget), and the label uses `defaultWeight()` with `maxLines = 1` so it truncates instead of pushing the buttons out. Times in the message list are formatted with `isSameLocalDay`: today shows the time, otherwise the date.
-7. **Active account.** The active avatar has a white ring and opens its mail; tapping another avatar runs `actionRunCallback<SelectWidgetAccountAction>`, which makes it active without opening the app (an account deleted since the snapshot is ignored, so the app never ends up with no active account). Content (mail, unread count, events, tasks, notes) comes from widget queries by the active account's `accountId` (`widgetActiveAccountId`: the active account, else the first one), served by indexes that lead with `accountId`. `widgetAvatars` keeps the active account among the shown avatars without reordering the others. `MailApplication.observeWidgetAccounts` redraws the widget when the active account, name, color or set of accounts changes in the app, and the action calls `updateMailWidget` itself because the process may have started just for the tap.
+1. `MailWidget` uses `SizeMode.Responsive` with 12 fixed sizes from `WidgetLayout.kt`. Unlike `SizeMode.Exact`, this set bounds the number of `RemoteViews` variants sent to the launcher.
+2. Each `provideGlance` session uses one snapshot loader for all its sizes. It reads Room and settings on `Dispatchers.IO` with `applicationContext`, using lightweight projections (see section 4).
+3. Under `widgetUpdateMutex`, `updateMailWidget(context)` signals running sessions to refresh and calls `updateAll()` to start sessions as needed. A session also observes App Lock. It masks details in its current state before reloading from Room and ignores late snapshots. The launcher displays the result once it receives the new `RemoteViews`.
+4. Actions that open `MainActivity` use distinct `data` URIs and pass parameters in extras. `Intent.filterEquals` ignores extras. Manual sync goes through a separate broadcast, `SyncAlarmReceiver.ACTION_SYNC_NOW`, which delegates to `SyncWorker`.
+5. `widgetSpec` uses width, height and the system font scale. Avatar slots and the sync label depend on available width, and the number of rows depends on height. Message times use `isSameLocalDay`: today shows the time, otherwise the date.
+6. **Active account.** Mail, the unread count, events, tasks and notes are loaded by `accountId` for the active account, or the first if none is marked active. When there is room for avatars, the active one has a white ring and opens its mail. Tapping another avatar runs `SelectWidgetAccountAction`, which switches accounts without opening the app and ignores an account that has already been removed. Both the observer in `MailApplication` and the action itself request a widget update.
 
 ### Updates and rollback
 
@@ -439,7 +436,7 @@ An edit of a task (done, subject, dates) or note and a move to trash made withou
 2. The APK URL is selected by device ABI with a universal fallback.
 3. Downloads use shared OkHttp clients with long timeouts (the update channel uses system CAs and `MODERN_TLS`).
 4. Install intents use `FileProvider`.
-5. Rollback preparation copies the APK to `Downloads/iwomail rollback` (file name `iwomail-rollback-v<version>.apk`) through MediaStore, after which the user uninstalls the current version and installs the saved one.
+5. On Android 10+ rollback preparation copies the APK to `Downloads/iwomail rollback` through MediaStore. On Android 8–9 the code attempts a direct write, but the app does not request permission to write to shared Downloads. Rollback is not an in-place update: the user uninstalls the app and its local data, then installs the saved APK.
 
 ---
 
@@ -536,7 +533,7 @@ If the lock is enabled but its verifier is missing, `AppLockManager.gate` select
 Privacy while the lock is on:
 
 - `LockWindowPolicy`: on API 33+ `setRecentsScreenshotEnabled(false)` (no snapshot in Recents, screenshots inside the app still work), FLAG_SECURE only on the lock screen; on API 26–32 FLAG_SECURE for as long as the lock is on.
-- `LockPrivacy`: the widget hides messages, event and task titles; toggling the lock refreshes the widget.
+- `LockPrivacy`: when App Lock is enabled, a running Glance session masks message details and event and task titles before re-reading Room. The home-screen view is replaced after the launcher receives the new `RemoteViews`.
 - `NotificationPrivacy.apply`: every notification with content is VISIBILITY_PRIVATE with a contentless publicVersion (the lock screen shows content only if the phone settings allow it). With the lock on the full notification is neutral too, and `hideActiveContent` re-posts notifications already shown.
 
 ### Settings UI
@@ -553,7 +550,7 @@ Exchange 2007 SP1 exposes EAS 12.1. The app treats Exchange 2007 behavior as a f
 
 | Feature | Main path | Fallback / detail |
 |---------|-----------|-------------------|
-| Mail sync, send, move and flags | EAS | EWS fallback for selected permanent-delete and error paths |
+| Mail sync, send, move, permanent delete and flags | EAS | No EWS subject lookup for deletion. Drafts with known EWS ItemIds still use EWS directly |
 | Folder sync and CRUD | EAS FolderSync | Serialized per account to protect the SyncKey state |
 | Folder content sync and local changes | EAS Sync | One Sync request per folder at a time (`FolderSyncGate`), SyncKey re-read from the DB under the gate |
 | Follow-up flags | EAS Sync Change `<Flag>` ([MS-ASEMAIL], EAS 12.0+) | A cleared flag is an empty `<Flag/>`; a dateless flag rejected with Status 6 is retried once with today's dates |
@@ -620,7 +617,7 @@ Server mode stores drafts through EWS (with attachments, in a single MIME `Creat
 - `EasTransport` runs Provision under `provisionMutex`; the NTLM handshake of `EwsClient` runs under `ntlmLock`.
 - Notification display uses a shared mutex across the push and worker paths (`NotificationHelper.notificationMutex`).
 - Scheduled send is guarded by a lock on the message directory (`ScheduledSend.lock`): the alarm, the backup and cancel cannot send a message twice.
-- Glance widget updates are serialized through `widgetUpdateMutex`.
+- Calls from the app to `updateAll()` are serialized through `widgetUpdateMutex`, and Glance manages the session and rendering.
 
 ### Haptics
 

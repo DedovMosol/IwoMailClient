@@ -4,6 +4,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.room.withTransaction
 import androidx.work.*
 import com.dedovmosol.iwomail.MailApplication
 import com.dedovmosol.iwomail.data.database.AccountType
@@ -339,20 +340,23 @@ class SyncWorker(
             )
         },
         ops = object : AutoFolderCleanup.Ops {
-            override suspend fun folderEmailIds(accountId: Long, kind: CleanupKind): Set<String> {
-                val type = if (kind == CleanupKind.SPAM) FolderType.JUNK_EMAIL else FolderType.DELETED_ITEMS
-                val ids = HashSet<String>()
-                for (folder in database.folderDao().getFoldersByAccountList(accountId)) {
-                    if (folder.type == type) ids += database.emailDao().getEmailIdsByFolder(folder.id)
+            override suspend fun folderSnapshots(accountId: Long, kind: CleanupKind): List<AutoFolderCleanup.FolderSnapshot>? =
+                database.withTransaction {
+                    val type = if (kind == CleanupKind.SPAM) FolderType.JUNK_EMAIL else FolderType.DELETED_ITEMS
+                    val folders = database.folderDao().getFoldersByAccountList(accountId).filter { it.type == type }
+                    val sync = database.inboxSyncSnapshotDao()
+                    // Не запоминаем прежние строки с новой эпохой до завершения полной синхронизации.
+                    if (folders.any { sync.getMarker(it.id) != null }) return@withTransaction null
+                    folders.map {
+                        AutoFolderCleanup.FolderSnapshot(it.id, sync.getResetEpoch(it.id), database.emailDao().getEmailIdsByFolder(it.id))
+                    }
                 }
-                return ids
-            }
 
             override suspend fun localDrafts(accountId: Long): Map<String, Long> =
                 database.emailDao().getLocalDraftRefs(accountId).associate { it.id to it.dateReceived }
 
-            override suspend fun deletePermanently(ids: List<String>): Boolean {
-                val result = mailRepo.deleteEmailsPermanently(ids)
+            override suspend fun deletePermanently(ids: List<String>, expectedResetEpochs: Map<String, String?>): Boolean {
+                val result = mailRepo.deleteEmailsPermanently(ids, expectedResetEpochs)
                 if (result is EasResult.Error) android.util.Log.w("SyncWorker", "Auto cleanup delete failed: ${result.message}")
                 return result is EasResult.Success
             }
@@ -360,7 +364,7 @@ class SyncWorker(
             override suspend fun deleteLocalDraft(accountId: Long, emailId: String): Boolean {
                 val serverId = database.emailDao().getLocalDraftRefs(accountId).firstOrNull { it.id == emailId }?.serverId
                     ?: return true // уже удалён
-                // Через репозиторий: файлы вложений и черновик на сервере, который этот заменял, удаляются тоже
+                // Удаляется только локальный черновик. Прежние серверные версии нельзя удалять по старым EAS ID.
                 return mailRepo.deleteDraft(accountId, serverId) is EasResult.Success
             }
         }

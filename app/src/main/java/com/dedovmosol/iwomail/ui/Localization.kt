@@ -2019,7 +2019,8 @@ object NotificationStrings {
             errorCode == "ITEM_MISMATCH" -> if (isRussian)
                 "Сервер изменил нумерацию писем. Папка синхронизируется заново — откройте письмо ещё раз."
                 else "The server renumbered the messages. The folder is syncing again; open the email once more."
-            errorCode == "DELETE_FAILED" -> if (isRussian) "Не удалось удалить. Попробуйте синхронизировать и повторить." else "Deletion failed. Try syncing and retry."
+            errorCode == "DELETE_FAILED" -> if (isRussian) "Не удалось удалить. Обновите папку и выберите письма заново." else "Deletion failed. Refresh the folder and select the messages again."
+            errorCode == "OPEN_FOLDER_TO_DELETE" -> if (isRussian) "Для окончательного удаления откройте нужную папку: «Удалённые» или «Черновики»." else "For permanent deletion, open Deleted Items or Drafts."
             errorCode.startsWith("Delete error:") -> if (isRussian) "Ошибка удаления: ${errorCode.removePrefix("Delete error: ")}" else errorCode
             errorCode.contains("MOVEITEMS_ALL_FAILED") -> if (isRussian) "Не удалось переместить. Обновите папку и повторите." else "Move failed. Refresh folder and retry."
             // Ошибки удаления

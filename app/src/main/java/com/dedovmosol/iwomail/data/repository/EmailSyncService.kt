@@ -646,7 +646,14 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
     /**
      * Синхронизация писем через EAS
      */
-    suspend fun syncEmailsEas(accountId: Long, folderId: String, skipRecentEditCheck: Boolean = false, retryCount: Int = 0, forceFullSync: Boolean = false): EasResult<Int> {
+    suspend fun syncEmailsEas(
+        accountId: Long,
+        folderId: String,
+        skipRecentEditCheck: Boolean = false,
+        retryCount: Int = 0,
+        forceFullSync: Boolean = false,
+        requireComplete: Boolean = false
+    ): EasResult<Int> {
         if (retryCount > 1) {
             return EasResult.Error("Ошибка синхронизации: слишком много попыток")
         }
@@ -665,6 +672,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             }
         }
 
+        var resetStarted = false
         try {
             val folder = folderDao.getFolder(folderId)
                 ?: return EasResult.Error("Папка не найдена")
@@ -678,13 +686,14 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             // (Exchange 2007 SP2: ServerId могут меняться после SyncKey=0). Только на первичном
             // вызове (retryCount==0); рекурсивный ресинк по Status 3/12 управляет ключом сам.
             if (retryCount == 0 && (forceFullSync || takeStaleResync(folderId))) {
-                folderDao.updateSyncKey(folderId, "0")
+                FolderSyncGate.withFolder(folderId) { folderDao.updateSyncKey(folderId, "0") }
             }
 
             var syncKey = folderDao.getFolder(folderId)?.syncKey
                 ?: return EasResult.Error("Папка не найдена")
             val isFullResync = syncKey == "0"
-            val inboxSnapshot = database.inboxSyncSnapshotDao().takeIf { folder.type == FolderType.INBOX }
+            val syncSnapshot = database.inboxSyncSnapshotDao()
+            val inboxSnapshot = syncSnapshot.takeIf { folder.type == FolderType.INBOX }
 
             // Сохраняем тела черновиков перед полной ресинхронизацией.
             // EAS Sync НЕ включает body в ответ — только заголовки.
@@ -743,14 +752,16 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 // сохранением ключа. Сервер знает только уже выданные id, и каждый батч обработан под шлюзом до
                 // следующего Change: запись к этому моменту названа своим письмом, невыданный id получит Status 8.
                 val initResult = FolderSyncGate.withFolder(folderId) {
+                    resetStarted = true
+                    FolderSyncGate.noteReset(folderId)
                     client.sync(folder.serverId, "0", windowSize, false).also { response ->
                         if (response is EasResult.Success && isProcessableSyncStatus(response.data.status)) {
                             database.withTransaction {
-                                if (inboxSnapshot != null) {
-                                    inboxSnapshot.clear(folderId)
-                                    inboxSnapshot.insertMarker(InboxSyncSnapshotEntry(folderId, "", seen = false))
-                                    inboxSnapshot.captureBaseline(folderId, accountId)
-                                }
+                                syncSnapshot.clear(folderId)
+                                syncSnapshot.insertMarker(InboxSyncSnapshotEntry(folderId, "", seen = false))
+                                syncSnapshot.clearResetEpoch(folderId)
+                                syncSnapshot.insertMarker(InboxSyncSnapshotEntry(folderId, "epoch:${java.util.UUID.randomUUID()}", seen = false))
+                                inboxSnapshot?.captureBaseline(folderId, accountId)
                                 folderDao.updateSyncKey(folderId, response.data.syncKey)
                             }
                         }
@@ -759,9 +770,9 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 when (val result = initResult) {
                     is EasResult.Success -> {
                         if (result.data.status == 12 || result.data.status == 3) {
-                            folderDao.updateSyncKey(folderId, "0")
+                            FolderSyncGate.withFolder(folderId) { folderDao.updateSyncKey(folderId, "0") }
                             if (retryCount < 1) {
-                                return syncEmailsEas(accountId, folderId, skipRecentEditCheck, retryCount + 1)
+                                return syncEmailsEas(accountId, folderId, skipRecentEditCheck, retryCount + 1, requireComplete = requireComplete)
                             } else {
                                 return EasResult.Error("Ошибка синхронизации: неверный SyncKey после retry")
                             }
@@ -776,8 +787,12 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 }
             }
 
-            // A nonzero key may be a checkpoint from an unfinished Inbox enumeration, not an ordinary delta.
-            val inboxSnapshotActive = inboxSnapshot?.getMarker(folderId) != null
+            // A nonzero key can be a checkpoint from an unfinished full sync (even after process death).
+            val fullSyncInProgress = syncSnapshot.getMarker(folderId) != null
+            if (fullSyncInProgress && !resetStarted) {
+                resetStarted = true
+                FolderSyncGate.noteReset(folderId)
+            }
             var moreAvailable = true
             var receivedTerminalPage = false
             var iterations = 0
@@ -852,14 +867,14 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 // Record exact server membership alongside the SyncKey, after all page writes. Do not hold
                 // a Room write transaction while applying changes: FlagWriteTracker takes a lock before DB writes.
                 database.withTransaction {
-                    if (inboxSnapshotActive && inboxSnapshot != null) {
-                        val seen = (data.emails.map { it.serverId } + data.changedEmails.map { it.serverId })
-                            .filter { it.isNotBlank() }.map { "${accountId}_$it" }
-                        for (ids in seen.chunked(500)) inboxSnapshot.markPageSeen(folderId, ids)
-                        if (receivedTerminalPage) {
-                            reconcileInboxSnapshot(inboxSnapshot, folderId, accountId)
-                            inboxSnapshot.clear(folderId)
+                    if (fullSyncInProgress) {
+                        if (inboxSnapshot != null) {
+                            val seen = (data.emails.map { it.serverId } + data.changedEmails.map { it.serverId })
+                                .filter { it.isNotBlank() }.map { "${accountId}_$it" }
+                            for (ids in seen.chunked(500)) inboxSnapshot.markPageSeen(folderId, ids)
+                            if (receivedTerminalPage) reconcileInboxSnapshot(inboxSnapshot, folderId, accountId)
                         }
+                        if (receivedTerminalPage) syncSnapshot.clear(folderId)
                     }
                     folderDao.updateSyncKey(folderId, newSyncKey)
                     val totalCount = emailDao.getCountByFolder(folderId)
@@ -900,8 +915,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         consecutiveErrors = 0
 
                         if (result.data.status == 3 || result.data.status == 12) {
-                            folderDao.updateSyncKey(folderId, "0")
-                            return syncEmailsEas(accountId, folderId, skipRecentEditCheck, retryCount + 1)
+                            FolderSyncGate.withFolder(folderId) { folderDao.updateSyncKey(folderId, "0") }
+                            return syncEmailsEas(accountId, folderId, skipRecentEditCheck, retryCount + 1, requireComplete = requireComplete)
                         }
 
                         if (!isProcessableSyncStatus(result.data.status)) {
@@ -923,8 +938,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             result.message.contains("Status=12") ||
                             result.message.contains("Status 3") ||
                             result.message.contains("Status 12")) {
-                            folderDao.updateSyncKey(folderId, "0")
-                            return syncEmailsEas(accountId, folderId, skipRecentEditCheck, retryCount + 1)
+                            FolderSyncGate.withFolder(folderId) { folderDao.updateSyncKey(folderId, "0") }
+                            return syncEmailsEas(accountId, folderId, skipRecentEditCheck, retryCount + 1, requireComplete = requireComplete)
                         }
 
                         consecutiveErrors++
@@ -933,7 +948,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             val unreadCount = emailDao.getUnreadCount(folderId)
                             folderDao.updateCounts(folderId, unreadCount, totalCount)
 
-                            return if (newEmailsCount > 0) {
+                            return if (!requireComplete && newEmailsCount > 0) {
                                 EasResult.Success(newEmailsCount)
                             } else {
                                 EasResult.Error(result.message)
@@ -968,9 +983,12 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             val totalCount = emailDao.getCountByFolder(folderId)
             val unreadCount = emailDao.getUnreadCount(folderId)
             folderDao.updateCounts(folderId, unreadCount, totalCount)
-            return EasResult.Success(newEmailsCount)
+            return if (requireComplete && !receivedTerminalPage) {
+                EasResult.Error("Folder sync did not reach its last page")
+            } else EasResult.Success(newEmailsCount)
         } finally {
-            activeSyncs.remove(folderId)?.complete(Unit)
+            if (resetStarted) FolderSyncGate.noteReset(folderId)
+            if (retryCount == 0) activeSyncs.remove(folderId)?.complete(Unit)
         }
     }
 
@@ -1050,7 +1068,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
 
         // Серверные черновики, заменённые правкой без связи, не возвращаем: их удалит загрузка замены.
         val replacedServerIds = if (isDrafts) {
-            emailDao.getReplacedServerIds(folderId).flatMap { com.dedovmosol.iwomail.eas.DraftIds.replacedIds(it) }.toSet()
+            emailDao.getReplacedServerIds(folderId).flatMap { com.dedovmosol.iwomail.eas.DraftIds.replacedIds(it) }
+                .filter(com.dedovmosol.iwomail.eas.DraftIds::isEwsItemId).toSet()
         } else {
             emptySet()
         }
